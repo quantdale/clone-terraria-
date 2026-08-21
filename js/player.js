@@ -89,6 +89,7 @@
       this.swing = null;              // {item,timer,dur,swung,loop,bow,id}
       this.mineTarget = null;         // {tx,ty,progress}
       this.coyote = 0;
+      this.dropT = 0;                 // >0: platform decks stay pass-through (S to drop)
       // internal / cosmetic state
       this.sx = this.x;               // spawn pixel pos, used by respawn()
       this.sy = this.y;
@@ -125,15 +126,119 @@
     }
 
     // Any solid tile overlapping the hitbox if its top-left were at (px, py).
-    hitsAt(px, py) {
+    // fromAbove/prevFeet feed the platform one-way rule (see solidProbe).
+    hitsAt(px, py, fromAbove, prevFeet) {
       const e = 0.01, w = this.w, h = this.h, TS = CONST.TS;
-      if (this.solidAt(px + e, py + e) || this.solidAt(px + w - e, py + e) ||
-          this.solidAt(px + e, py + h - e) || this.solidAt(px + w - e, py + h - e)) return true;
+      const P = (x, y) => this.solidProbe(x, y, fromAbove, prevFeet);
+      if (P(px + e, py + e) || P(px + w - e, py + e) ||
+          P(px + e, py + h - e) || P(px + w - e, py + h - e)) return true;
       for (let s = TS; s < h - e; s += TS) {       // mid samples: hitbox taller than a tile
-        if (this.solidAt(px + e, py + s) || this.solidAt(px + w - e, py + s)) return true;
+        if (P(px + e, py + s) || P(px + w - e, py + s)) return true;
       }
       for (let s = TS; s < w - e; s += TS) {       // hitbox slightly wider than a tile
-        if (this.solidAt(px + s, py + e) || this.solidAt(px + s, py + h - e)) return true;
+        if (P(px + s, py + e) || P(px + s, py + h - e)) return true;
+      }
+      return false;
+    }
+
+    // Shape-aware solidity at a world pixel, built on World.shapeSolidQuery.
+    // FULL tiles take the shim's answer verbatim (byte-compatible with the
+    // old isSolid path); slopes are refined to the exact local-x surface via
+    // TC.Shapes.solidAt because the shim only knows the mid-tile top.
+    // PLATFORM decks stop a fall only when approaching from above with the
+    // previous-frame feet at/above the deck top, and never while dropT runs.
+    solidProbe(px, py, fromAbove, prevFeet) {
+      const w = TC.world;
+      if (!w || typeof w.isSolid !== 'function') return false;
+      const TS = CONST.TS;
+      const tx = Math.floor(px / TS), ty = Math.floor(py / TS);
+      let q = null;
+      if (typeof w.shapeSolidQuery === 'function') {
+        try { q = w.shapeSolidQuery(tx, ty, !!fromAbove, py - ty * TS); } catch (e) { q = null; }
+      }
+      if (!q) return !!w.isSolid(tx, ty);          // pre-shape worlds: legacy answer
+      if (q.platform) {
+        const top = ty * TS + TS * 5 / 16;         // deck band top (see renderPath)
+        if (this.dropT > 0 || !fromAbove) return false;
+        if (prevFeet != null && prevFeet > top + 0.5) return false;
+        return py >= top;
+      }
+      if (!q.solid) return false;
+      const SHP = TC.Shapes, s = (SHP && typeof w.shapeAt === 'function') ? (w.shapeAt(tx, ty) | 0) : 0;
+      if (s >= 3 && s <= 6) {                      // SLOPE_NE..SW: exact local geometry
+        const lx = (px - tx * TS) / TS, ly = (py - ty * TS) / TS;
+        return !!SHP.solidAt(s, lx, ly);
+      }
+      return true;                                 // FULL / HALF depth rule stands
+    }
+
+    // Ramp step-up target: when moving horizontally into a ground slope
+    // column whose walkable top sits within a ~10px step of the feet, return
+    // that surface Y (null otherwise).
+    slopeStepY(nx) {
+      const w = TC.world, SHP = TC.Shapes;
+      if (!w || !SHP || typeof w.shapeAt !== 'function') return null;
+      const TS = CONST.TS, e = 0.01;
+      const leadX = this.vx > 0 ? nx + this.w - e : nx + e;
+      const tx = Math.floor(leadX / TS);
+      const feet = this.y + this.h - e;
+      const ty = Math.floor(feet / TS);
+      const s = w.shapeAt(tx, ty) | 0;
+      if (s !== SHP.SLOPE_SE && s !== SHP.SLOPE_SW) return null;
+      const lx = Math.min(1, Math.max(0, leadX / TS - tx));
+      const surf = ty * TS + SHP.topSurfaceY(s, lx) * TS;
+      const rise = feet + e - surf;                // how far the surface tops the feet
+      if (rise <= 0 || rise > TS * 0.625) return null;
+      return surf;
+    }
+
+    // Landing snap for a fall that entered row floor((ny+h)/TS). Shaped feet-row
+    // cells snap their own surface (ramp top under the sample x, HALF mid,
+    // platform deck); FULL-only landings reproduce the legacy tile-top formula.
+    landSnapY(ny, feetBefore) {
+      const TS = CONST.TS, e = 0.01;
+      const legacy = Math.floor((ny + this.h) / TS) * TS - this.h - e;
+      const w = TC.world, SHP = TC.Shapes;
+      if (!w || !SHP || typeof w.shapeAt !== 'function') return legacy;
+      const rowTy = Math.floor((ny + this.h - e) / TS);
+      const py = ny + this.h - e;                  // post-move feet depth
+      let best = Infinity;
+      const xs = [this.x + e, this.x + this.w / 2, this.x + this.w - e];
+      for (let k = 0; k < 3; k++) {
+        const sx = xs[k], tx = Math.floor(sx / TS);
+        const s = w.shapeAt(tx, rowTy) | 0;
+        if (!s || s === SHP.FULL) continue;        // FULL keeps the legacy snap
+        const lx = Math.min(1, Math.max(0, sx / TS - tx));
+        let top = null;
+        if (s === SHP.PLATFORM) {
+          if (this.dropT > 0) continue;
+          top = rowTy * TS + TS * 5 / 16;
+          if (py < top) continue;
+          if (feetBefore != null && feetBefore > top + 0.5) continue;
+        } else if (s === SHP.HALF) {
+          top = rowTy * TS + TS / 2;
+          if (py < top) continue;
+        } else if (s >= SHP.SLOPE_NE && s <= SHP.SLOPE_SW) {
+          top = rowTy * TS + SHP.topSurfaceY(s, lx) * TS;
+          if (!SHP.solidAt(s, lx, (py - rowTy * TS) / TS)) continue;
+        } else continue;
+        const cand = top - this.h;
+        if (cand < best) best = cand;              // highest surface among blockers wins
+      }
+      if (best === Infinity) return legacy;
+      if (best < this.y) best = this.y;            // never snap upward past the body
+      return best;
+    }
+
+    // True while any cell just under the feet is platform-shaped (drop-through gate).
+    standingOnPlatform() {
+      const w = TC.world, SHP = TC.Shapes;
+      if (!w || !SHP || typeof w.shapeAt !== 'function') return false;
+      const TS = CONST.TS, e = 0.01;
+      const ty = Math.floor((this.y + this.h + 2) / TS);
+      const xs = [this.x + e, this.x + this.w / 2, this.x + this.w - e];
+      for (let k = 0; k < 3; k++) {
+        if ((w.shapeAt(Math.floor(xs[k] / TS), ty) | 0) === SHP.PLATFORM) return true;
       }
       return false;
     }
@@ -230,6 +335,15 @@
 
       this.inWater = this.checkWater();
 
+      // S/Down on a platform deck: suspend platform collision briefly and
+      // drop through (HALF blocks and slopes stay solid regardless).
+      if (this.dropT > 0) this.dropT -= dt;
+      if (inp && typeof inp.down === 'function' && !jump && this.onGround &&
+          (inp.down('KeyS') || inp.down('ArrowDown')) && this.standingOnPlatform()) {
+        this.dropT = 0.25;
+        this.onGround = false;
+      }
+
       // lava burns on a fixed cadence while any hitbox tile is lava
       if (this.checkLava()) {
         this.lavaTimer -= dt;
@@ -300,7 +414,7 @@
           if (this.vy > CONST.SWIM_STROKE) this.vy = CONST.SWIM_STROKE;
           this.fallTiles = 0;
         } else if (this.onGround || this.coyote > 0) {
-          this.vy = -CONST.JUMP_VEL;
+          this.vy = -CONST.JUMP_VEL * ((st && st.jumpPower) || 1);
           this.coyote = 0;
           this.onGround = false;
         }
@@ -363,13 +477,18 @@
     moveAndCollide(dt) {
       const TS = CONST.TS;
       const wasGround = this.onGround;
+      const feetBefore = this.y + this.h;          // previous-frame feet (one-way rule)
 
       // X
       const nx = this.x + this.vx * dt;
       if (this.vx !== 0 && this.hitsAt(nx, this.y)) {
-        if (wasGround && !this.hitsAt(nx, this.y - TS)) {
+        const stepTo = wasGround ? this.slopeStepY(nx) : null;
+        if (stepTo != null && !this.hitsAt(nx, stepTo - this.h)) {
           this.x = nx;
-          this.y -= TS;                              // 1-tile auto step-up
+          this.y = stepTo - this.h;                // smooth ramp climb
+        } else if (wasGround && !this.hitsAt(nx, this.y - TS)) {
+          this.x = nx;
+          this.y -= TS;                            // 1-tile auto step-up
         } else {
           this.x = this.vx > 0
             ? Math.floor((nx + this.w) / TS) * TS - this.w - 0.01
@@ -382,8 +501,8 @@
 
       // Y
       const ny = this.y + this.vy * dt;
-      if (this.vy > 0 && this.hitsAt(this.x, ny)) {
-        this.y = Math.floor((ny + this.h) / TS) * TS - this.h - 0.01;
+      if (this.vy > 0 && this.hitsAt(this.x, ny, true, feetBefore)) {
+        this.y = this.landSnapY(ny, feetBefore);
         this.vy = 0;
       } else if (this.vy < 0 && this.hitsAt(this.x, ny)) {
         this.y = (Math.floor(ny / TS) + 1) * TS + 0.01;
@@ -392,7 +511,8 @@
         this.y = ny;
       }
 
-      this.onGround = this.vy >= 0 && this.hitsAt(this.x, this.y + 0.08);
+      this.onGround = this.vy >= 0 &&
+        this.hitsAt(this.x, this.y + 0.08, true, this.y + this.h);
       if (this.onGround) this.coyote = CONST.COYOTE;
       else this.coyote -= dt;
 
@@ -471,6 +591,14 @@
       const TS = CONST.TS;
       const tx = Math.floor(m.worldX / TS), ty = Math.floor(m.worldY / TS);
       if (!this.inReach(tx, ty)) { this.mineTarget = null; return; }
+
+      // hammers reshape shapeable tiles instead of mining them
+      if (def.tool === 'hammer' && typeof world.canShape === 'function' &&
+          typeof world.hammer === 'function' && world.canShape(tx, ty)) {
+        this.doHammer(def, world, tx, ty, dt);
+        return;
+      }
+
       const id = world.get(tx, ty);
       const td = tDef(id);
       if (!td || id === TILE.AIR || !(td.hardness > 0) || td.hardness >= 9999 ||
@@ -529,6 +657,24 @@
           }
         } catch (e) {}
       }
+    }
+
+    // Hammer shaping on the normal mining cadence: cycles FULL -> PLATFORM ->
+    // HALF -> slopes (platform decks flip deck/full). Never mines.
+    doHammer(def, world, tx, ty, dt) {
+      const TS = CONST.TS;
+      const tcx = tx * TS + TS / 2, tcy = ty * TS + TS / 2;
+      this.mineTarget = null;
+      this.mining = true;
+      this.startSwing(def, true);
+      this.mineTick -= dt;
+      if (this.mineTick > 0) return;
+      this.mineTick = 0.2;
+      let changed = false;
+      try { changed = !!world.hammer(tx, ty); } catch (e) {}
+      sfx('dig');
+      pBurst(tcx, tcy, 3, ['#c8c8cf', '#8f8f98'], 70);
+      if (changed) pBurst(tcx, tcy, 2, ['#ffffff'], 40);
     }
 
     // Background-wall mining: picks only, and only where no minable tile sits.
@@ -946,6 +1092,7 @@
     draw(ctx, cam) {
       if (!ctx || this.dead) return;
       if (TC.applyCam) TC.applyCam(ctx);      // idempotent; main.js also applies it
+      this.drawHammerGhost(ctx);
 
       const cx = this.x + this.w / 2;
       const footY = this.y + this.h;
@@ -1030,6 +1177,24 @@
       this.drawFrontArm(ctx, bx, by, bob);
 
       ctx.restore();
+    }
+
+    // Ghost outline of the hovered tile's hammer shape while a hammer is the
+    // held tool (world space; caller applied the camera transform).
+    drawHammerGhost(ctx) {
+      if (!TC.Tiles || typeof TC.Tiles.drawShapePreview !== 'function') return;
+      const inp = TC.Input;
+      if (!inp || !inp.mouse || !isFinite(inp.mouse.worldX)) return;
+      const sel = this.selectedSlot();
+      const def = sel ? iDef(sel.id) : null;
+      if (!def || def.tool !== 'hammer') return;
+      const world = TC.world;
+      if (!world || typeof world.canShape !== 'function' ||
+          typeof world.shapeAt !== 'function') return;
+      const TS = CONST.TS;
+      const tx = Math.floor(inp.mouse.worldX / TS), ty = Math.floor(inp.mouse.worldY / TS);
+      if (!this.inReach(tx, ty) || !world.canShape(tx, ty)) return;
+      try { TC.Tiles.drawShapePreview(ctx, tx * TS, ty * TS, TS, world.shapeAt(tx, ty)); } catch (e) {}
     }
 
     drawFrontArm(ctx, bx, by, bob) {
