@@ -258,12 +258,21 @@
 
   // Fire one weapon projectile. Returns the pooled projectile (or a local
   // fallback bolt when TC.Projectiles is absent), or null.
+  // Base damage scales by the resolver's magicDamage multiplier (melee/ranged
+  // scale at their strike sites; magic scales here at fire time).
   function fire(def, x, y, ang) {
+    let mul = 1;
+    if (TC.Stats && typeof TC.Stats.resolve === 'function' && TC.player) {
+      try {
+        const st = TC.Stats.resolve(TC.player);
+        if (st && typeof st.magicDamage === 'number' && st.magicDamage > 0) mul = st.magicDamage;
+      } catch (e) {}
+    }
     if (TC.Projectiles && typeof TC.Projectiles.spawn === 'function') {
       const colors = def.colors || ['#ffffff'];
       const p = TC.Projectiles.spawn('magic_bolt', x, y, ang, {
         speed: def.speed || 400,
-        dmg: def.damage || 5,
+        dmg: Math.round((def.damage || 5) * mul),
         kb: def.knockback != null ? def.knockback : 3,
         pierce: def.pierce || 0,          // extra enemies after the first hit
         bounce: def.bounce || 0,          // wall bounces before shattering
@@ -436,8 +445,8 @@
   // ====================================================================
   // Item use — kind 'magic' fires while LMB is held; potions and mana
   // crystals trigger on the click edge. player.js's useHeld() ignores
-  // unknown kinds, so these never double-fire. Damage stays FLAT
-  // (def.damage) — see the header note before adding Stats scaling.
+  // unknown kinds, so these never double-fire. Base damage scales by
+  // TC.Stats magicDamage at fire() time (see header).
   // ====================================================================
   function handleUse(dt, p) {
     const inp = TC.Input;
