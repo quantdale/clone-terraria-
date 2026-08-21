@@ -1,9 +1,17 @@
-/* lighting.js — flood-fill light propagation + darkness overlay. */
+/* lighting.js — flood-fill light propagation + darkness overlay.
+
+   Extras:
+   - TC.CONST.LIGHT_QUALITY: 'high' (default, current look) | 'low'
+     (half-res overlay sampled from the same field; cheaper fill).
+   - Lighting.addDynamic(x, y, r, intensity, ttl): transient light sources
+     in WORLD PIXELS merged into the next recompute (pool-capped 64,
+     zero per-call allocation). Feed from projectiles/gear/explosions. */
 'use strict';
 (function () {
   const TC = window.TC;
 
   const EPS = 0.002; // min improvement before re-propagating a cell
+  const DYN_MAX = 64; // hard cap on transient (dynamic) light sources
 
   const Lighting = {
     world: null,
@@ -12,10 +20,19 @@
     queue: [],
     timer: 0,
     dirty: true,
-    cvs: null, cctx: null, img: null
+    cvs: null, cctx: null, img: null,
+    // half-res overlay used by CONST.LIGHT_QUALITY === 'low'
+    lowCvs: null, lowCtx: null, lowImg: null,
+    // fixed pool of DYN_MAX transient lights; slots are reused, never grown
+    dyn: [], dynCursor: 0
   };
 
   TC.Lighting = Lighting;
+
+  // Fixed-slot pool: allocated once, reused forever — addDynamic never grows.
+  for (let i = 0; i < DYN_MAX; i++) {
+    Lighting.dyn.push({ x: 0, y: 0, r: 0, intensity: 0, ttl: 0 });
+  }
 
   Lighting.init = function (world) {
     this.world = world;
@@ -25,11 +42,62 @@
     this.timer = 0;
     this.dirty = true;
     this.cvs = null; this.cctx = null; this.img = null;
+    for (let i = 0; i < DYN_MAX; i++) this.dyn[i].ttl = 0;
+    this.dynCursor = 0;
   };
 
   Lighting.onTileChanged = function (x, y) {
     this.dirty = true;
   };
+
+  // Register a transient light source; it feeds the NEXT recompute and lives
+  // for ttl seconds. Coordinates x, y AND radius r are in WORLD PIXELS
+  // (callers like projectiles/gear work in px); intensity is 0..1 light.
+  // Pool-capped at DYN_MAX slots: when full, the cursor overwrites the oldest
+  // slot. No allocation per call.
+  Lighting.addDynamic = function (x, y, r, intensity, ttl) {
+    if (!(intensity > 0) || !(r > 0)) return;
+    let slot = null;
+    for (let i = 0; i < DYN_MAX; i++) {
+      if (this.dyn[i].ttl <= 0) { slot = this.dyn[i]; break; }
+    }
+    if (!slot) slot = this.dyn[this.dynCursor++ % DYN_MAX];
+    slot.x = +x || 0;
+    slot.y = +y || 0;
+    slot.r = Math.min(+r || 0, 24 * TC.CONST.TS); // bound cost per source
+    slot.intensity = Math.min(Math.max(+intensity || 0, 0), 1);
+    slot.ttl = Math.max(+ttl || 0, 0);
+  };
+
+  // Merge alive dynamic sources into the recomputed window. Radial falloff,
+  // no wall occlusion — these are cheap transient glows (muzzle flashes,
+  // explosions, projectiles), not full propagators.
+  function mergeDynamics(L) {
+    const dyn = L.dyn, TSz = TC.CONST.TS;
+    const light = L.light, w = L.w, h = L.h;
+    const x0 = L.x0, y0 = L.y0;
+    for (let d = 0; d < DYN_MAX; d++) {
+      const s = dyn[d];
+      if (s.ttl <= 0 || s.intensity <= 0) continue;
+      const tx = s.x / TSz, ty = s.y / TSz, rt = s.r / TSz;
+      const cx0 = Math.max(x0, Math.floor(tx - rt));
+      const cx1 = Math.min(x0 + w - 1, Math.ceil(tx + rt));
+      const cy0 = Math.max(y0, Math.floor(ty - rt));
+      const cy1 = Math.min(y0 + h - 1, Math.ceil(ty + rt));
+      for (let cy = cy0; cy <= cy1; cy++) {
+        const dy = cy - ty, dy2 = dy * dy;
+        for (let cx = cx0; cx <= cx1; cx++) {
+          const dx = cx - tx;
+          const dist = Math.sqrt(dx * dx + dy2);
+          if (dist >= rt) continue;
+          const fall = 1 - dist / rt;
+          const v = s.intensity * fall * (0.4 + 0.6 * fall); // softened edge
+          const i = (cy - y0) * w + (cx - x0);
+          if (v > light[i]) light[i] = v;
+        }
+      }
+    }
+  }
 
   function skyLevel() {
     const L = TC.CONST.LIGHT;
@@ -111,11 +179,17 @@
         }
       }
     }
+
+    // transient sources ride on top of the propagated field
+    mergeDynamics(this);
   };
 
   Lighting.update = function (dt, cam) {
     if (!this.world) return;
     this.timer += dt;
+    for (let i = 0; i < DYN_MAX; i++) {
+      if (this.dyn[i].ttl > 0) this.dyn[i].ttl -= dt;
+    }
     if (this.dirty || this.timer >= TC.CONST.LIGHT.interval) {
       this.dirty = false;
       this.timer = 0;
@@ -123,31 +197,57 @@
     }
   };
 
+  // Presentation quality knob: TC.CONST.LIGHT_QUALITY 'high' (default,
+  // current look — tile-res buffer bilinearly scaled up) or 'low' (half-res
+  // overlay sampled from the same light field — quarter the fill cost).
   Lighting.draw = function (ctx, cam) {
     const w = this.w, h = this.h;
     if (!this.world || !this.light || w <= 0 || h <= 0) return;
+    const low = TC.CONST.LIGHT_QUALITY === 'low';
 
-    if (!this.cvs) {
-      this.cvs = document.createElement('canvas');
-      this.cctx = this.cvs.getContext('2d');
+    let cvs, cctx, iw, ih;
+    if (low) {
+      if (!this.lowCvs) {
+        this.lowCvs = document.createElement('canvas');
+        this.lowCtx = this.lowCvs.getContext('2d');
+      }
+      const hw = Math.ceil(w / 2), hh = Math.ceil(h / 2);
+      if (this.lowCvs.width !== hw || this.lowCvs.height !== hh) {
+        this.lowCvs.width = hw;
+        this.lowCvs.height = hh;
+        this.lowImg = null;
+      }
+      if (!this.lowImg) this.lowImg = this.lowCtx.createImageData(hw, hh);
+      cvs = this.lowCvs; cctx = this.lowCtx; iw = hw; ih = hh;
+    } else {
+      if (!this.cvs) {
+        this.cvs = document.createElement('canvas');
+        this.cctx = this.cvs.getContext('2d');
+      }
+      if (this.cvs.width !== w || this.cvs.height !== h) {
+        this.cvs.width = w;
+        this.cvs.height = h;
+        this.img = null;
+      }
+      if (!this.img) this.img = this.cctx.createImageData(w, h);
+      cvs = this.cvs; cctx = this.cctx; iw = w; ih = h;
     }
-    if (this.cvs.width !== w || this.cvs.height !== h) {
-      this.cvs.width = w;
-      this.cvs.height = h;
-      this.img = null;
-    }
-    if (!this.img) this.img = this.cctx.createImageData(w, h);
 
-    // black pixels, alpha encodes darkness
-    const d = this.img.data, light = this.light, n = w * h;
-    for (let i = 0; i < n; i++) {
-      let a = (1 - light[i]) * 255;
-      if (a < 0) a = 0; else if (a > 255) a = 255;
-      const j = i * 4;
-      d[j] = 0; d[j + 1] = 0; d[j + 2] = 0;
-      d[j + 3] = a | 0;
+    // black pixels, alpha encodes darkness ('low' samples every other tile)
+    const d = (low ? this.lowImg : this.img).data;
+    const light = this.light;
+    for (let y = 0; y < ih; y++) {
+      const sy = low ? y * 2 : y;
+      for (let x = 0; x < iw; x++) {
+        const sx = low ? x * 2 : x;
+        let a = (1 - light[sy * w + sx]) * 255;
+        if (a < 0) a = 0; else if (a > 255) a = 255;
+        const j = (y * iw + x) * 4;
+        d[j] = 0; d[j + 1] = 0; d[j + 2] = 0;
+        d[j + 3] = a | 0;
+      }
     }
-    this.cctx.putImageData(this.img, 0, 0);
+    cctx.putImageData(low ? this.lowImg : this.img, 0, 0);
 
     // blit scaled so each tile maps to TS*zoom screen px, aligned to world origin
     const TS = TC.CONST.TS;
@@ -157,7 +257,7 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = true;
     ctx.globalCompositeOperation = 'multiply';
-    ctx.drawImage(this.cvs, dx, dy, w * TS * cam.zoom, h * TS * cam.zoom);
+    ctx.drawImage(cvs, dx, dy, w * TS * cam.zoom, h * TS * cam.zoom);
     ctx.restore();
   };
 

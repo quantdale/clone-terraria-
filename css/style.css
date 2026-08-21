@@ -1,3 +1,12 @@
+/* Scalable HUD knobs — the in-game HUD is canvas-drawn and ignores CSS;
+   these variables exist for DOM overlays (menus/dialogs) and root scaling.
+   Adjust or consume via var(...) as overlay UI lands. */
+:root {
+  --hud-font-sm: clamp(11px, 0.55vw + 8px, 14px);
+  --hud-font-md: clamp(13px, 0.70vw + 9px, 17px);
+  --hud-font-lg: clamp(16px, 0.90vw + 11px, 22px);
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -5,6 +14,7 @@ html, body {
   height: 100%;
   overflow: hidden;
   background: #000;
+  font-size: var(--hud-font-md);
 }
 #game {
   display: block;

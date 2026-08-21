@@ -9,6 +9,9 @@
 (function () {
   const TC = window.TC;
 
+  // Ordered generation passes; generate() runs each against a shared context.
+  var PASSES = ['terrain','surface-biomes','caves','ores','structures','decor','validation'];
+
   // ------------------------------------------------------------------
   // Extension tables. New ids continue the lead-owned constants.js
   // numbering. Every consumer (tiles.js, lighting.js, minimap.js,
@@ -62,52 +65,89 @@
     addItem('sandstone_brick', 'Sandstone Brick', TC.TILE.SANDSTONE_BRICK);
   })();
 
+  // Expansion tuning (candidates for CONST.GEN; kept here to avoid edits
+  // to lead-owned constants.js). Seed-independent, shared by all passes.
+  const XG = {
+    ocean:  { width: 110, beach: 26, seaLevelOff: 6, deepMin: 10, deepVar: 12, floodDepth: 48 },
+    cactus: { spacing: 4, chance: 0.6, hMin: 2, hVar: 3 },
+    pyramid:{ chance: 0.8, baseMin: 20, baseVar: 12 },
+    evil:   { widthMin: 70, widthVar: 60, chasms: 3, chasmRad: 2.6, veins: 80, veinSize: 5 },
+    dungeon:{ roomW: 15, roomH: 9, rooms: 4 },
+    hell:   { temples: 3, tW: 23, tH: 13, lavaPoolsDeep: 14 }
+  };
+
+  // Deterministic per-pass RNG stream seed keyed by world seed + pass name.
+  const passSeed = (seed, name) =>
+    (TC.Utils.hash2(seed | 0, ((name.length * 2654435761) ^ (seed | 0)) | 0, 0) * 4294967296) >>> 0;
+
+  const PASS_FNS = {
+    'terrain': passTerrain,
+    'surface-biomes': passSurfaceBiomes,
+    'caves': passCaves,
+    'ores': passOres,
+    'structures': passStructures,
+    'decor': passDecor,
+    'validation': passValidation
+  };
+
   TC.WorldGen = {
 
     // Fully deterministic from seed: seeded RNG + seeded noise only, no Math.random.
+    // Allocates the world buffers, builds the shared pass context
+    // c = {seed,width,height,tiles,walls,surfaceY,hSurf,stoneTop,wallJobs,rng},
+    // runs every PASSES entry in order via a name-keyed mulberry32 stream,
+    // and times each pass into gen.timings (ms).
     generate(seed) {
       const U = TC.Utils;
       if (!U || typeof U.mulberry32 !== 'function' || typeof U.Noise2D !== 'function' || !TC.WALL) {
         throw new Error('WorldGen.generate requires TC.Utils (mulberry32, Noise2D) and TC.WALL');
       }
-      const C = TC.CONST, G = C.GEN, T = TC.TILE, DEFS = TC.TILE_DEFS, WALL = TC.WALL;
-      const W = C.WORLD_W, H = C.WORLD_H, BR = G.bedrockRows;
-      const Y_TOP = 1, Y_BOT = H - BR - 1;   // rows open to carving
-      const rng = U.mulberry32(seed | 0);
-
-      const surfN = new U.Noise2D(seed | 0);
-      const caveN = new U.Noise2D((seed ^ 0x5bd1e995) | 0);
-      const underN = new U.Noise2D((seed ^ 0xA5A5A5) | 0);
-      const oceanN = new U.Noise2D((seed ^ 0x1F123BB5) | 0);
-
-      const tiles = new Uint8Array(W * H);
-      const hSurf = new Int16Array(W);    // heightmap: row of the ground tile
-      const stoneTop = new Int16Array(W); // first stone row per column
-
-      const idx = (x, y) => y * W + x;
-      const inB = (x, y) => x >= 0 && x < W && y >= 0 && y < H;
-      const ri = (n) => (rng() * n) | 0;  // int in [0, n)
-
-      // opaque/solid LUTs from tile defs
-      const OPQ = new Uint8Array(DEFS.length), SOLID = new Uint8Array(DEFS.length);
-      for (let i = 0; i < DEFS.length; i++) {
-        OPQ[i] = DEFS[i].opaque ? 1 : 0;
-        SOLID[i] = DEFS[i].solid ? 1 : 0;
-      }
-
-      // Expansion tuning (candidates for CONST.GEN; kept here to avoid edits
-      // to lead-owned constants.js).
-      const XG = {
-        ocean:  { width: 110, beach: 26, seaLevelOff: 6, deepMin: 10, deepVar: 12, floodDepth: 48 },
-        cactus: { spacing: 4, chance: 0.6, hMin: 2, hVar: 3 },
-        pyramid:{ chance: 0.8, baseMin: 20, baseVar: 12 },
-        evil:   { widthMin: 70, widthVar: 60, chasms: 3, chasmRad: 2.6, veins: 80, veinSize: 5 },
-        dungeon:{ roomW: 15, roomH: 9, rooms: 4 },
-        hell:   { temples: 3, tW: 23, tH: 13, lavaPoolsDeep: 14 }
+      const W = TC.CONST.WORLD_W, H = TC.CONST.WORLD_H;
+      const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? () => performance.now() : () => Date.now();
+      const timings = {};
+      const c = {
+        seed: seed | 0,
+        width: W,
+        height: H,
+        tiles: new Uint8Array(W * H),
+        walls: new Uint8Array(W * H),
+        surfaceY: new Int16Array(W),
+        hSurf: new Int16Array(W),     // heightmap: row of the ground tile
+        stoneTop: new Int16Array(W),  // first stone row per column
+        wallJobs: [],                 // rects wanting a background wall (stamped by validation)
+        rng: null                     // replaced per pass with a name-keyed stream
       };
+      for (const name of PASSES) {
+        c.rng = U.mulberry32(passSeed(c.seed, name));
+        const t0 = now();
+        PASS_FNS[name](c);
+        timings[name] = now() - t0;
+      }
+      return { width: W, height: H, tiles: c.tiles, walls: c.walls, surfaceY: c.surfaceY, spawnX: c.spawnX, spawnY: c.spawnY, timings: timings };
+    },
 
-      // Rects that get a matching background wall after the terrain pass.
-      const wallJobs = [];
+    // Run one named generation pass against a context shaped like c above.
+    runPass(name, c) {
+      const fn = PASS_FNS[name];
+      if (!fn) throw new Error('Unknown generation pass: ' + name);
+      return fn(c);
+    },
+
+    GENERATION_VERSION: 2,
+    CONFIG: { deepCaves: false, microBiomes: false, richOres: false }
+  };
+
+  // ---- Pass: terrain — heightmap (+ edge oceans) and soil columns ----
+  function passTerrain(c) {
+    const U = TC.Utils, G = TC.CONST.GEN, T = TC.TILE;
+    const W = c.width, H = c.height;
+    const tiles = c.tiles, hSurf = c.hSurf, stoneTop = c.stoneTop;
+    const rng = c.rng;
+    const idx = (x, y) => y * W + x;
+    const ri = (n) => (rng() * n) | 0;  // int in [0, n)
+    const surfN = new U.Noise2D(c.seed);
+    const oceanN = new U.Noise2D((c.seed ^ 0x1F123BB5) | 0);
 
       // ---- 1. surface heightmap (+ ocean profiles at both edges) ----
       for (let x = 0; x < W; x++) {
@@ -148,9 +188,24 @@
         for (let y = s + 1; y < stoneTop[x]; y++) tiles[idx(x, y)] = T.DIRT;
         for (let y = stoneTop[x]; y < H; y++) tiles[idx(x, y)] = T.STONE;
       }
+    }
+
+    // ---- Pass: surface biomes — deserts, snow/jungle bands, evil strip ----
+    function passSurfaceBiomes(c) {
+      const G = TC.CONST.GEN, T = TC.TILE;
+      const W = c.width, H = c.height;
+      const tiles = c.tiles, hSurf = c.hSurf, stoneTop = c.stoneTop;
+      const rng = c.rng;
+      const idx = (x, y) => y * W + x;
+      const ri = (n) => (rng() * n) | 0;  // int in [0, n)
+      const BR = G.bedrockRows;
+      const Y_TOP = 1, Y_BOT = H - BR - 1;   // rows open to carving
+      // Inland placement bounds (rng-free; matches terrain's ocean/beach widths).
+      const inlandLo = Math.min(XG.ocean.width, W >> 3) + XG.ocean.beach + 8;
+      const inlandHi = W - inlandLo;
+      const deserts = c.deserts = [];        // reused by structures (pyramids, dungeon site)
 
       // ---- 3. deserts: sand down to stone ----
-      const deserts = [];
       for (let d = 0, guard = 0; d < G.desertCount && guard < 200; guard++) {
         const wd = G.desertWidthMin + ri(G.desertWidthVar);
         const x0 = inlandLo + ri(Math.max(1, inlandHi - inlandLo - wd));
@@ -172,7 +227,7 @@
       }
 
       // ---- 3b. snow & jungle biome ranges (avoid deserts, each other, spawn) ----
-      const biomes = [];
+      const biomes = c.biomes = [];          // reused by structures (dungeon site)
       const biomeKinds = [
         { count: G.biomes.snowCount, wMin: G.biomes.snowWidthMin, wVar: G.biomes.snowWidthVar, tile: T.SNOW },
         { count: G.biomes.jungleCount, wMin: G.biomes.jungleWidthMin, wVar: G.biomes.jungleWidthVar, tile: T.JGRASS }
@@ -277,6 +332,50 @@
           }
         }
       }
+      c.evilRange = evilRange;             // consumed by structures + validation
+    }
+
+    // ---- Pass: caves — cheese caverns, worm tunnels, ocean water/sealing,
+    // underworld caverns + lava fields + hell temples ----
+    function passCaves(c) {
+      const U = TC.Utils, G = TC.CONST.GEN, T = TC.TILE, WALL = TC.WALL;
+      const W = c.width, H = c.height;
+      const tiles = c.tiles, hSurf = c.hSurf, stoneTop = c.stoneTop;
+      const rng = c.rng;
+      const idx = (x, y) => y * W + x;
+      const inB = (x, y) => x >= 0 && x < W && y >= 0 && y < H;
+      const ri = (n) => (rng() * n) | 0;  // int in [0, n)
+      const BR = G.bedrockRows;
+      const Y_TOP = 1, Y_BOT = H - BR - 1;   // rows open to carving
+      const caveN = new U.Noise2D((c.seed ^ 0x5bd1e995) | 0);
+      const underN = new U.Noise2D((c.seed ^ 0xA5A5A5) | 0);
+      // Ocean geometry recomputed deterministically (rng-free) for 5a below.
+      const SEA = G.baseSurface + XG.ocean.seaLevelOff;
+      const OCW = Math.min(XG.ocean.width, W >> 3);
+      const BCH = XG.ocean.beach;
+      // Rects stamped here that want a matching background wall (temples).
+      const wallJobs = c.wallJobs;
+
+      // solid LUT from tile defs (used by the liquid pool filler)
+      const DEFS = TC.TILE_DEFS;
+      const SOLID = new Uint8Array(DEFS.length);
+      for (let i = 0; i < DEFS.length; i++) {
+        SOLID[i] = DEFS[i].solid ? 1 : 0;
+      }
+
+      // circle carver shared by tunnels and evil chasms
+      const carveCircle = (cx, cy, r) => {
+        const x0 = Math.max(1, Math.floor(cx - r)), x1 = Math.min(W - 2, Math.ceil(cx + r));
+        const y0 = Math.max(Y_TOP, Math.floor(cy - r)), y1 = Math.min(Y_BOT, Math.ceil(cy + r));
+        for (let y = y0; y <= y1; y++) {
+          for (let x = x0; x <= x1; x++) {
+            const dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy <= r * r && tiles[idx(x, y)] !== T.BEDROCK) {
+              tiles[idx(x, y)] = T.AIR;
+            }
+          }
+        }
+      };
 
       // ---- 4. cheese caves ----
       for (let x = 0; x < W; x++) {
@@ -433,6 +532,18 @@
         const ty0 = UW.startY + 4 + ri(Math.max(1, Y_BOT - XG.hell.tH - 6 - UW.startY));
         stampTemple(tx0, ty0);
       }
+    }
+
+    // ---- Pass: ores — copper/iron/gold veins in stone ----
+    function passOres(c) {
+      const G = TC.CONST.GEN, T = TC.TILE;
+      const W = c.width, H = c.height;
+      const tiles = c.tiles, hSurf = c.hSurf;
+      const rng = c.rng;
+      const idx = (x, y) => y * W + x;
+      const ri = (n) => (rng() * n) | 0;  // int in [0, n)
+      const BR = G.bedrockRows;
+      const Y_BOT = H - BR - 1;           // deepest carveable row
 
       // ---- 6. ore veins (replace STONE only, inside depth windows) ----
       const oreKinds = [['copper', T.COPPER_ORE], ['iron', T.IRON_ORE], ['gold', T.GOLD_ORE]];
@@ -458,6 +569,28 @@
           }
         }
       }
+    }
+
+    // ---- Pass: structures — bedrock floor, buried pyramids + cactus scrub,
+    // surface dungeon keep ----
+    function passStructures(c) {
+      const G = TC.CONST.GEN, T = TC.TILE, WALL = TC.WALL;
+      const W = c.width, H = c.height;
+      const tiles = c.tiles, hSurf = c.hSurf;
+      const rng = c.rng;
+      const idx = (x, y) => y * W + x;
+      const inB = (x, y) => x >= 0 && x < W && y >= 0 && y < H;
+      const ri = (n) => (rng() * n) | 0;  // int in [0, n)
+      const BR = G.bedrockRows;
+      const Y_TOP = 1, Y_BOT = H - BR - 1;   // rows open to carving
+      // Inland placement bounds (rng-free; matches terrain's ocean/beach widths).
+      const inlandLo = Math.min(XG.ocean.width, W >> 3) + XG.ocean.beach + 8;
+      const inlandHi = W - inlandLo;
+      const deserts = c.deserts;             // placed by surface-biomes
+      const biomes = c.biomes;               // placed by surface-biomes
+      const evilRange = c.evilRange;         // placed by surface-biomes
+      // Rects stamped here that want a matching background wall.
+      const wallJobs = c.wallJobs;
 
       // ---- 7. bedrock floor (+ noisy third row) ----
       for (let x = 0; x < W; x++) {
@@ -567,6 +700,52 @@
         }
         wallJobs.push({ x0: dgx - 5, x1: dgx + 5, y0: topY - 5, y1: botY, w: WALL.DUNGEON });
       }
+    }
+
+    // ---- Pass: decor — spawn point, trees, flowers, cave water pools,
+    // spawn clearing ----
+    function passDecor(c) {
+      const G = TC.CONST.GEN, T = TC.TILE;
+      const W = c.width, H = c.height;
+      const tiles = c.tiles, hSurf = c.hSurf;
+      const rng = c.rng;
+      const idx = (x, y) => y * W + x;
+      const inB = (x, y) => x >= 0 && x < W && y >= 0 && y < H;
+      const ri = (n) => (rng() * n) | 0;  // int in [0, n)
+      const BR = G.bedrockRows;
+      const Y_TOP = 1, Y_BOT = H - BR - 1; // top placeable / deepest carveable row
+
+      // solid LUT from tile defs (spawn check + pool filler)
+      const DEFS = TC.TILE_DEFS;
+      const SOLID = new Uint8Array(DEFS.length);
+      for (let i = 0; i < DEFS.length; i++) {
+        SOLID[i] = DEFS[i].solid ? 1 : 0;
+      }
+
+      // Flood-fill a liquid pool from a cave floor cell; returns tiles placed.
+      const liqStamp = new Uint32Array(W * H);
+      let liqCur = 0;
+      const pool = (sx, sy, id, maxTiles) => {
+        if (!inB(sx, sy + 1) || tiles[idx(sx, sy)] !== T.AIR) return 0;
+        if (SOLID[tiles[idx(sx, sy + 1)]] !== 1) return 0; // must start on a floor
+        liqCur++;
+        const q = [idx(sx, sy)];
+        let head = 0, filled = 0;
+        while (head < q.length && filled < maxTiles) {
+          const ci = q[head++];
+          if (liqStamp[ci] === liqCur) continue;
+          liqStamp[ci] = liqCur;
+          if (tiles[ci] !== T.AIR) continue;
+          tiles[ci] = id;
+          filled++;
+          const cxx = ci % W, cyy = (ci / W) | 0;
+          if (cxx > 0) q.push(ci - 1);
+          if (cxx < W - 1) q.push(ci + 1);
+          if (cyy > 0) q.push(ci - W);
+          if (cyy < H - 1) q.push(ci + W);
+        }
+        return filled;
+      };
 
       // ---- 8. spawn: flat grass near world center ----
       const spawnFlat = (x, tol) => {
@@ -658,9 +837,34 @@
           }
         }
       }
+      c.spawnX = spawnX;                   // consumed by validation
+    }
+
+    // ---- Pass: validation — surface scan, spawn row, background walls ----
+    function passValidation(c) {
+      const T = TC.TILE, WALL = TC.WALL;
+      const W = c.width, H = c.height;
+      const tiles = c.tiles, hSurf = c.hSurf, stoneTop = c.stoneTop;
+      const idx = (x, y) => y * W + x;
+      // Ocean geometry recomputed deterministically (rng-free).
+      const G = TC.CONST.GEN;
+      const SEA = G.baseSurface + XG.ocean.seaLevelOff;
+      const OCW = Math.min(XG.ocean.width, W >> 3);
+      const BCH = XG.ocean.beach;
+      const inOceanX = (x) => x < OCW + BCH || x >= W - OCW - BCH;
+      // opaque LUT from tile defs (first opaque tile = surface)
+      const DEFS = TC.TILE_DEFS;
+      const OPQ = new Uint8Array(DEFS.length);
+      for (let i = 0; i < DEFS.length; i++) {
+        OPQ[i] = DEFS[i].opaque ? 1 : 0;
+      }
+      const evilRange = c.evilRange;         // placed by surface-biomes
+      const spawnX = c.spawnX;               // chosen by decor
+      // Structural wall jobs pushed by caves/structures win over column walls.
+      const wallJobs = c.wallJobs;
 
       // ---- 13. final surface scan + spawn row ----
-      const surfaceY = new Int16Array(W);
+      const surfaceY = c.surfaceY;
       for (let x = 0; x < W; x++) {
         let y = 0;
         while (y < H && !OPQ[tiles[idx(x, y)]]) y++;
@@ -671,7 +875,7 @@
       // ---- 14. background walls: dirt above the stone line, stone below ----
       // Ocean/evil columns carry their own backdrop; structural wallJobs
       // (dungeon, temples, pyramids) are stamped last, winning over columns.
-      const walls = new Uint8Array(W * H);
+      const walls = c.walls;
       const isEvilCol = (x) => !!evilRange && x >= evilRange[0] && x < evilRange[1];
       for (let x = 0; x < W; x++) {
         const st = stoneTop[x];
@@ -691,8 +895,6 @@
           }
         }
       }
-
-      return { width: W, height: H, tiles: tiles, walls: walls, surfaceY: surfaceY, spawnX: spawnX, spawnY: spawnY };
+      c.spawnY = surfaceY[spawnX];         // spawn row from the final scan
     }
-  };
-})();
+  })();
