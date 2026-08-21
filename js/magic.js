@@ -285,6 +285,9 @@
         colors: colors
       });
       if (p) watchBolt(p, colors);
+      if (TC.Lighting && typeof TC.Lighting.addDynamic === 'function') {
+        try { TC.Lighting.addDynamic(x, y, 64, 0.6, 0.15); } catch (e) {}
+      }
       return p;
     }
     return fireFallbackBolt(def, x, y, ang);

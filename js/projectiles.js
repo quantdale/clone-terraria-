@@ -549,6 +549,16 @@
         radius: f.radius
       });
     }
+
+    // feed transient sources into the lighting system's dynamic pool
+    if (TC.Lighting && typeof TC.Lighting.addDynamic === 'function') {
+      for (let i = 0; i < lights.length; i++) {
+        const l = lights[i];
+        try {
+          TC.Lighting.addDynamic(l.x, l.y, l.radius, l.intensity, 2 * dt + 0.05);
+        } catch (e) {}
+      }
+    }
   }
 
   // ---- drawing ----

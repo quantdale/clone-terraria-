@@ -34,6 +34,7 @@ TC.CONST = {
   AUTOSAVE_INTERVAL: 30,
 
   LIGHT: { skyDay: 1.0, skyNight: 0.14, decayAir: 0.075, decaySolid: 0.28, interval: 0.08, margin: 14 },
+  LIGHT_QUALITY: 'high',   // 'low' halves the overlay resolution for cheap GPUs
 
   GEN: {
     baseSurface: 110, surfaceAmplitude: 22, surfaceFreq: 0.006,
