@@ -37,6 +37,7 @@
     if (addTile('PLATFORM', {
           name: 'wood platform', hardness: 0.15, drop: 'platform',
           pattern: 'platform', hammerable: true,
+          defaultShape: 1,               // TC.Shapes.PLATFORM (const hoists below)
           colors: ['#a97d4b', '#7a5230']
         })) {
       TC.ITEM_DEFS.platform = { name: 'Wood Platform', kind: 'block', maxStack: 999, tile: T.PLATFORM };
@@ -68,9 +69,17 @@
   }
   extendContent();
 
-  // Hammer shape codes shared with world.js: 0 full, 1 half-depth,
-  // 2 ramp rising to the right ("/"), 3 ramp rising to the left ("\").
-  const SHAPE = { FULL: 0, HALF: 1, SLOPE_R: 2, SLOPE_L: 3 };
+  // Hammer/tile-shape vocabulary shared with world.js (TC.Shapes). tiles.js
+  // loads first, so fall back to a literal copy of the same ids when world.js
+  // is not present yet; by draw time both modules are loaded and agree.
+  const SHAPES = TC.Shapes || {
+    FULL: 0, PLATFORM: 1, HALF: 2,
+    SLOPE_NE: 3, SLOPE_NW: 4, SLOPE_SE: 5, SLOPE_SW: 6,
+    solidAt: function () { return false; },
+    topSurfaceY: function () { return 0; },
+    blocksMovement: function () { return true; },
+    renderPath: function () { return { kind: 'full', poly: null }; }
+  };
 
   // ---- color helpers (hex in, css string out) ----
   function toRgb(hex) {
@@ -385,25 +394,34 @@
            (w.get(tx - 1, ty) === id ? 8 : 0);
   }
 
-  // Cut a hammered shape out of a finished tile canvas. HALF keeps the top
-  // half; SLOPE_R is a "/" ramp (high side east), SLOPE_L a "\" ramp (high
-  // side west); both get a lit/dithered edge along the cut.
-  function clipShape(g, def, shape) {
+  // Cut a hammered shape out of a freshly painted tile canvas: wipe it, clip
+  // to the shape's unit-space polygon (TC.Shapes.renderPath), repaint the
+  // texture inside, then light the cut with a dithered lip. HALF keeps the
+  // lower half; PLATFORM keeps the thin deck band; slopes are right triangles
+  // filled toward their namesake corner.
+  function carveShape(g, def, shape, repaint) {
+    const desc = SHAPES.renderPath(shape);
+    if (!desc || !desc.poly) return;
     const lip = shade(def.colors[0], -0.3);
     const hi = shade(def.colors[0], 0.25);
-    if (shape === SHAPE.HALF) {
-      g.clearRect(0, 8, BASE, BASE - 8);
-      rect(g, lip, 0, 7, BASE, 1);
-    } else if (shape === SHAPE.SLOPE_R) {
-      for (let x = 0; x < BASE; x++) {
-        g.clearRect(x, BASE - x, 1, x);
-        rect(g, x & 1 ? hi : lip, x, BASE - 1 - x, 1, 1);
-      }
-    } else if (shape === SHAPE.SLOPE_L) {
-      for (let x = 0; x < BASE; x++) {
-        g.clearRect(x, x + 1, 1, BASE - 1 - x);
-        rect(g, x & 1 ? hi : lip, x, x, 1, 1);
-      }
+    g.clearRect(0, 0, BASE, BASE);     // wipe, then rebuild only inside the clip
+    g.save();
+    g.beginPath();
+    const p = desc.poly;
+    g.moveTo(p[0][0] * BASE, p[0][1] * BASE);
+    for (let i = 1; i < p.length; i++) g.lineTo(p[i][0] * BASE, p[i][1] * BASE);
+    g.closePath();
+    g.clip();
+    repaint();
+    g.restore();
+    if (shape === SHAPES.PLATFORM) {
+      rect(g, lip, 0, 8, BASE, 1);     // underside of the deck band
+    } else if (shape === SHAPES.HALF) {
+      rect(g, lip, 0, 7, BASE, 1);     // walkable mid-tile ledge
+    } else if (shape === SHAPES.SLOPE_NE || shape === SHAPES.SLOPE_SW) {
+      for (let x = 0; x < BASE; x++) rect(g, x & 1 ? hi : lip, x, x, 1, 1);          // "\"
+    } else {
+      for (let x = 0; x < BASE; x++) rect(g, x & 1 ? hi : lip, x, BASE - 1 - x, 1, 1); // "/"
     }
   }
 
@@ -433,13 +451,16 @@
     // position-independent while remaining deterministic from the seed.
     const H = function (k) { return hash2(v, id, k); };
     const pat = PATTERNS[def.pattern];
-    if (pat) {
-      pat(g, def, H, flags, {
-        n: !!(conn & 1), e: !!(conn & 2), s: !!(conn & 4), w: !!(conn & 8)
-      });
-    }
-    if (flags & 1) rect(g, shade(def.colors[0], 0.22), 0, 0, BASE, 1);
-    if (shape) clipShape(g, def, shape);
+    const nb = {
+      n: !!(conn & 1), e: !!(conn & 2), s: !!(conn & 4), w: !!(conn & 8)
+    };
+    // Paints the full tile texture; reused inside shape clips after a wipe.
+    const repaint = function () {
+      if (pat) pat(g, def, H, flags, nb);
+      if (flags & 1) rect(g, shade(def.colors[0], 0.22), 0, 0, BASE, 1);
+    };
+    repaint();
+    if (shape) carveShape(g, def, shape, repaint);
     return cv;
   }
 
@@ -456,7 +477,7 @@
     if (!def || def.pattern === 'empty') return;
     ts = ts || (TC.CONST && TC.CONST.TS) || BASE;
     tx = tx | 0; ty = ty | 0; mask = mask | 0;
-    shape = (shape | 0) & 3;                       // hammer shape, wraps into range
+    shape = (shape | 0) & 7;                       // TC.Shapes id, wraps into range
     paint = paint | 0;
     if (paint < 0 || paint >= PAINT_SLOTS) paint = 0;
     const v = (hash2(tx, ty, id) * VARIANTS) | 0;
@@ -464,8 +485,8 @@
     if (!(mask & 1) && TOP_EDGE[def.pattern]) flags |= 1;
     if (def.pattern === 'liquid' && !waterAbove(tx, ty, mask)) flags |= 2;
     const conn = CONNECTS[def.pattern] ? connBits(id, tx, ty) : 0;
-    // key layout: id/variant/flags -> shape -> paint -> neighbour connection
-    const key = ((((id * VARIANTS + v) * 4 + flags) * 4 + shape) * PAINT_SLOTS + paint) * 16 + conn;
+    // key layout: id/variant/flags -> shape (8 ids) -> paint -> neighbour connection
+    const key = ((((id * VARIANTS + v) * 4 + flags) * 8 + shape) * PAINT_SLOTS + paint) * 16 + conn;
     let cv = cache.get(key);
     if (!cv) {
       cv = buildTile(id, v, flags, conn, shape);
@@ -554,5 +575,32 @@
     ctx.restore();
   }
 
-  TC.Tiles = { drawTile, drawCracks, drawWall, SHAPE };
+  // Ghost outline of a tile shape for placement/hammer previews. Screen or
+  // world space, caller's transform; draws a translucent fill plus dashed
+  // outline of the shape region (full square when shape is FULL).
+  function drawShapePreview(ctx, px, py, ts, shape) {
+    const desc = SHAPES.renderPath((shape | 0) & 7);
+    const poly = desc && desc.poly;
+    const ox = Math.round(px), oy = Math.round(py);
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    ctx.lineWidth = Math.max(1, ts / 16);
+    ctx.setLineDash([Math.max(2, ts / 4), Math.max(2, ts / 4)]);
+    ctx.beginPath();
+    if (poly) {
+      ctx.moveTo(ox + poly[0][0] * ts, oy + poly[0][1] * ts);
+      for (let i = 1; i < poly.length; i++) {
+        ctx.lineTo(ox + poly[i][0] * ts, oy + poly[i][1] * ts);
+      }
+      ctx.closePath();
+    } else {
+      ctx.rect(ox, oy, ts, ts);
+    }
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  TC.Tiles = { drawTile, drawCracks, drawWall, drawShapePreview, SHAPE: SHAPES };
 })();

@@ -9,6 +9,63 @@
   const TS = TC.CONST.TS;
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
+  // ---- tile shape vocabulary (PHY-001 / roadmap M3.1) ----
+  // Shape metadata is a parallel layer beside tile content (this.shapes), so
+  // tile ids stay plain for lighting/minimap. Local coords lx/ly are fractions
+  // of one tile, x grows east, y grows down (ly=0 top edge, ly=1 bottom edge).
+  // Slopes are named for the corner holding their right angle:
+  //   SLOPE_NE solid {(0,0),(1,0),(1,1)}  hypotenuse "\"  walkable top ly = lx
+  //   SLOPE_NW solid {(0,0),(1,0),(0,1)}  hypotenuse "/"  walkable top ly = 1-lx
+  //   SLOPE_SE solid {(1,0),(0,1),(1,1)}  hypotenuse "/"  walkable top ly = 1-lx
+  //   SLOPE_SW solid {(0,0),(0,1),(1,1)}  hypotenuse "\"  walkable top ly = lx
+  // SE/SW sit on the ground (solid below their hypotenuse); NE/NW hug the
+  // ceiling side and exist for corner smoothing.
+  const SHAPES = {
+    FULL: 0, PLATFORM: 1, HALF: 2,
+    SLOPE_NE: 3, SLOPE_NW: 4, SLOPE_SE: 5, SLOPE_SW: 6,
+
+    // Is the point at local fraction (lx, ly) inside solid matter?
+    // PLATFORM never blocks here — it is one-way, see World.shapeSolidQuery.
+    solidAt(shape, lx, ly) {
+      switch (shape) {
+        case 2: return ly >= 0.5;          // HALF: lower half only
+        case 3: return ly <= lx;           // SLOPE_NE
+        case 4: return lx + ly <= 1;       // SLOPE_NW
+        case 5: return lx + ly >= 1;       // SLOPE_SE
+        case 6: return ly >= lx;           // SLOPE_SW
+        default: return shape === 0;       // FULL yes, PLATFORM no
+      }
+    },
+
+    // Height fraction of the walkable top at local x (slopes vary with lx,
+    // default midpoint when omitted).
+    topSurfaceY(shape, lx) {
+      if (lx == null) lx = 0.5;
+      switch (shape) {
+        case 5: return 1 - lx;             // SLOPE_SE rises eastward
+        case 6: return lx;                 // SLOPE_SW falls eastward
+        default: return shape === 2 ? 0.5 : 0; // HALF mid, others flat top
+      }
+    },
+
+    blocksMovement(shape) { return shape !== 1; }, // PLATFORM is pass-through
+
+    // Unit-space render descriptor: polygon vertices the renderer clips to.
+    // FULL needs no clip -> poly null.
+    renderPath(shape) {
+      switch (shape) {
+        case 1: return { kind: 'platform', poly: [[0, 5 / 16], [1, 5 / 16], [1, 8 / 16], [0, 8 / 16]] };
+        case 2: return { kind: 'half', poly: [[0, 0.5], [1, 0.5], [1, 1], [0, 1]] };
+        case 3: return { kind: 'slope', poly: [[0, 0], [1, 0], [1, 1]] };
+        case 4: return { kind: 'slope', poly: [[0, 0], [1, 0], [0, 1]] };
+        case 5: return { kind: 'slope', poly: [[1, 0], [1, 1], [0, 1]] };
+        case 6: return { kind: 'slope', poly: [[0, 0], [1, 1], [0, 1]] };
+        default: return { kind: 'full', poly: null };
+      }
+    }
+  };
+  TC.Shapes = SHAPES;
+
   // ---- flowing water (active-set cellular sim) ----
   const WATER_TICK = 0.05;        // seconds between sim steps
   const WATER_BUDGET = 400;       // active cells processed per step
@@ -55,7 +112,7 @@
       this.walls = gen.walls || new Uint8Array(this.width * this.height); // wall ids, row-major
       this.damage = new Map();       // tileIndex -> mining progress 0..1
       this.wallDamage = new Map();   // tileIndex -> wall mining progress 0..1
-      this.shapes = new Uint8Array(this.width * this.height); // hammer shape per tile (TC.Tiles.SHAPE)
+      this.shapes = new Uint8Array(this.width * this.height); // hammer shape per tile (TC.Shapes)
       this.paints = new Map();       // tileIndex -> paint slot (compatibility stub)
       this.CHUNK = 32;               // chunk size in tiles
       this.chunksX = Math.ceil(this.width / this.CHUNK);
@@ -71,6 +128,9 @@
     idx(x, y) { return y * this.width + x; }
     inB(x, y) { return x >= 0 && y >= 0 && x < this.width && y < this.height; }
     get(x, y) { return this.inB(x, y) ? this.tiles[this.idx(x, y)] : TC.TILE.BEDROCK; }
+    // Movement solidity for CURRENT physics: only full-solid tile defs block.
+    // Shape metadata does NOT participate here — HALF/slopes/platforms keep
+    // old behaviour until player.js migrates to World.shapeSolidQuery.
     isSolid(x, y) {
       if (!TC.TILE_DEFS[this.get(x, y)].solid) return false;
       return !(TC.Wiring && typeof TC.Wiring.isGhost === 'function' && TC.Wiring.isGhost(x, y));
@@ -208,38 +268,97 @@
     // must stay plain. Shapes are session-only until Save adopts the
     // serializeShapes/loadShapes hooks below.
     shapeAt(x, y) {
-      return this.inB(x, y) ? this.shapes[this.idx(x, y)] : 0;
+      const s = this.inB(x, y) ? this.shapes[this.idx(x, y)] : 0;
+      if (s === 7) return SHAPES.FULL;   // sentinel: explicit FULL over a defaultShape
+      if (s) return s;
+      const def = TC.TILE_DEFS[this.get(x, y)];
+      return (def && def.defaultShape) || 0;   // e.g. PLATFORM tiles default to shaped
     }
 
+    // Shape write: dirty chunk + crack reset, no event (set() owns TileChanged).
     setShape(x, y, s) {
       if (!this.inB(x, y)) return false;
       const i = this.idx(x, y);
-      s = (s | 0) & 3;
+      s = (s | 0) & 7;
       if (this.shapes[i] === s) return false;
       this.shapes[i] = s;
+      this.damage.delete(i);         // reshaping clears mining progress
       this.markDirtyAt(x, y);
       return true;
     }
 
-    // Hammer tool hook. Cycles platform states (flat -> "/" -> "\" -> flat),
-    // then slopes/halves on opaque solid blocks (full -> half -> "/" ->
-    // "\" -> full). Returns true when the hit changed something so callers
-    // can fall back to mining when false. Player integration: route held
-    // items whose def.tool === 'hammer' here instead of doMine.
-    hammer(tx, ty) {
-      const id = this.get(tx, ty);
+    // May a hammer act on this tile? Rejects air/liquids/bedrock and anything
+    // support-anchored: plants, torches, chests, doors, crafting stations.
+    canShape(x, y) {
+      if (!this.inB(x, y)) return false;
+      const id = this.tiles[this.idx(x, y)];
       const def = TC.TILE_DEFS[id];
       if (!def) return false;
-      const SH = (TC.Tiles && TC.Tiles.SHAPE) || { FULL: 0, HALF: 1, SLOPE_R: 2, SLOPE_L: 3 };
-      const cur = this.shapeAt(tx, ty);
-      if (def.hammerable) {
+      if (id === TC.TILE.AIR) return false;
+      if (def.needsSupport || def.replaceable) return false;
+      if (!def.hammerable && !def.solid) return false;
+      if (def.hardness >= 9999) return false;  // unmineable blocks stay whole
+      return !(TC.Wiring && typeof TC.Wiring.isGhost === 'function' && TC.Wiring.isGhost(x, y));
+    }
+
+    // May a hammer act on this tile? Rejects air/liquids/bedrock and support-
+    // anchored decor or furniture (plants, torches, chests, doors, stations);
+    // platforms pass despite their 'any' anchor because they are hammerable.
+    canShape(x, y) {
+      if (!this.inB(x, y)) return false;
+      const id = this.tiles[this.idx(x, y)];
+      const def = TC.TILE_DEFS[id];
+      if (!def) return false;
+      if (id === TC.TILE.AIR) return false;
+      if (def.replaceable) return false;
+      if (!def.hammerable && !def.solid) return false;
+      if (def.needsSupport === 'below') return false;
+      if (def.hardness >= 9999) return false;  // unmineable blocks stay whole
+      return !(TC.Wiring && typeof TC.Wiring.isGhost === 'function' && TC.Wiring.isGhost(x, y));
+    }
+
+    // Movement query shim for the player physics port (M3.2). dy is the
+    // sample's pixel depth below the tile top; fromAbove says the mover
+    // approaches the top face. PLATFORM-shaped tiles land only from above,
+    // whether their def is solid or not. Slope solidity uses the mid-tile
+    // surface until swept collision passes exact local x.
+    shapeSolidQuery(tx, ty, fromAbove, dy) {
+      const out = { solid: false, platform: false };
+      if (TC.Wiring && typeof TC.Wiring.isGhost === 'function' && TC.Wiring.isGhost(tx, ty)) return out;
+      const s = this.shapeAt(tx, ty);
+      if (s === SHAPES.PLATFORM) {
+        out.platform = true;
+        out.solid = !!fromAbove;       // land on it, never blocked from below
+        return out;
+      }
+      const def = TC.TILE_DEFS[this.get(tx, ty)];
+      if (!def.solid) return out;
+      if (s === SHAPES.FULL) { out.solid = true; return out; }
+      const d = dy == null ? 0 : dy;
+      if (s === SHAPES.HALF) out.solid = d >= TS / 2;
+      else out.solid = d >= SHAPES.topSurfaceY(s) * TS;
+      return out;
+    }
+
+    // Hammer tool hook: shapes the hit tile. nextShape (optional) forces an
+    // exact TC.Shapes id; otherwise cycles FULL -> PLATFORM -> HALF ->
+    // SLOPE_NE -> NW -> SE -> SW -> FULL for terrain, or flips platform decks
+    // between deck and full-block states (stored 7 = explicit FULL, since a
+    // plain 0 would read back as the tile's default shape). Returns true when
+    // something changed so callers can fall back to mining when false.
+    // Player integration: route held items whose def.tool === 'hammer' here
+    // instead of doMine.
+    hammer(tx, ty, nextShape) {
+      if (!this.canShape(tx, ty)) return false;
+      const def = TC.TILE_DEFS[this.get(tx, ty)];
+      if (nextShape != null) return this.setShape(tx, ty, nextShape);
+      if (def.hammerable) {            // platform decks toggle, never slope
         return this.setShape(tx, ty,
-          cur === SH.FULL ? SH.SLOPE_R : (cur === SH.SLOPE_R ? SH.SLOPE_L : SH.FULL));
+          this.shapes[this.idx(tx, ty)] === 7 ? SHAPES.PLATFORM : 7);
       }
-      if (def.solid && def.opaque) {   // terrain blocks only, never furniture
-        return this.setShape(tx, ty, (cur + 1) & 3);
-      }
-      return false;
+      const cur = this.shapeAt(tx, ty);
+      const next = cur >= SHAPES.SLOPE_SW ? SHAPES.FULL : cur + 1;
+      return this.setShape(tx, ty, next);
     }
 
     // Paint compatibility stub: stores a paint slot per position; chunk
@@ -276,9 +395,8 @@
       if (this.toggleFurniture(x, y)) return true;
       const def = TC.TILE_DEFS[this.get(x, y)];
       if (def && def.hammerable) {     // platforms respond to wires too
-        const SH = (TC.Tiles && TC.Tiles.SHAPE) || { FULL: 0, HALF: 1, SLOPE_R: 2, SLOPE_L: 3 };
-        const cur = this.shapeAt(x, y);
-        return this.setShape(x, y, cur === SH.SLOPE_R ? SH.SLOPE_L : SH.SLOPE_R);
+        return this.setShape(x, y,
+          this.shapes[this.idx(x, y)] === 7 ? SHAPES.PLATFORM : 7);
       }
       return false;
     }
@@ -308,7 +426,7 @@
       for (let k = 0; k < list.length; k++) {
         const e = list[k];
         if (Array.isArray(e) && e[0] >= 0 && e[0] < this.shapes.length) {
-          this.shapes[e[0]] = (e[1] | 0) & 3;
+          this.shapes[e[0]] = (e[1] | 0) & 7;
           this.markDirtyAt(e[0] % this.width, (e[0] / this.width) | 0);
         }
       }
