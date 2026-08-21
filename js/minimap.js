@@ -1,9 +1,13 @@
 /* minimap.js — offscreen 1px-per-tile world map, lazily repainted in column
-   strips, drawn as a top-right overlay centered on the player. Toggle: N. */
+   strips, drawn as a top-right overlay centered on the player. Toggle: N.
+   Pixels are tinted by biome region (mirroring TC.Biomes' rules, which only
+   classify the player's own position) and the current biome is labelled
+   under the map. */
 'use strict';
 (function () {
   const TC = window.TC;
   const TS = TC.CONST.TS;
+  const T = TC.TILE || {};
 
   const STRIP = 60;                    // columns repainted per update tick
   const PANEL_W = 200, PANEL_H = 150;  // overlay size in tiles/px (1 tile = 1 px)
@@ -11,6 +15,47 @@
   const SKY_RGB = [127, 184, 232];     // #7fb8e8, air above the surface line
   const CAVE_RGB = [16, 16, 16];       // #101010, air below it
   const DARKEN = 0.75;                 // ~25% darker tile colors
+
+  // ---- biome region tinting (mirrors TC.Biomes' detection rules) ----
+  const UNDER_START =
+    (TC.CONST.GEN && TC.CONST.GEN.underworld && TC.CONST.GEN.underworld.startY) || 355;
+  const OCEAN_EDGE = 55;               // matches TC.Biomes' ocean margin
+  const BIOME_TINT = {                // null = leave untinted
+    forest: null,
+    ocean: [42, 96, 150],
+    desert: [216, 186, 100],
+    snow: [222, 234, 246],
+    jungle: [46, 138, 74],
+    underworld: [168, 52, 30],
+    cave: null
+  };
+  const UNDER_TINT = BIOME_TINT.underworld;
+  const UNDER_AIR = [44, 14, 10];      // cavern air below the underworld line
+  const AIR_MIX = 0.4;                 // how strongly air pixels take the tint
+  const TILE_MIX = 0.18;               // how strongly ground pixels take it
+
+  // Column-level biome guess. TC.Biomes only exposes the player's own tag,
+  // so map strips classify themselves with the same region rules: ocean at
+  // the world margins, otherwise whichever stamped surface tile (SNOW/SAND/
+  // JGRASS) dominates a small window around the column — matching how
+  // worldgen marks biome regions. Depth zones (cave/underworld) are applied
+  // per pixel in paintColumns.
+  function classifyColumn(world, tx) {
+    const W = world.width;
+    if (tx < OCEAN_EDGE || tx >= W - OCEAN_EDGE) return 'ocean';
+    let snow = 0, sand = 0, jg = 0;
+    const x0 = Math.max(0, tx - 6), x1 = Math.min(W - 1, tx + 6);
+    for (let x = x0; x <= x1; x++) {
+      const id = world.tiles[(world.surfaceY[x] | 0) * W + x];
+      if (id === T.SNOW) snow++;
+      else if (id === T.SAND) sand++;
+      else if (id === T.JGRASS) jg++;
+    }
+    if (snow > 3) return 'snow';
+    if (sand > 3) return 'desert';
+    if (jg > 3) return 'jungle';
+    return 'forest';
+  }
 
   const mini = {
     visible: false,
@@ -59,14 +104,25 @@
       const data = this.img.data;
       const defs = TC.TILE_DEFS;
       const AIR = TC.TILE.AIR, WATER = TC.TILE.WATER;
+      const underStart = UNDER_START - 4;          // TC.Biomes' depth cutoff
       for (let i = 0; i < count; i++) {
         const tx = x0 + i;
         const surf = world.surfaceY[tx] | 0;
+        const tint = BIOME_TINT[classifyColumn(world, tx)] || null;
+        // Pre-mix this column's sky color so the inner loop stays cheap.
+        let skyR = SKY_RGB[0], skyG = SKY_RGB[1], skyB = SKY_RGB[2];
+        if (tint) {
+          skyR += (tint[0] - skyR) * AIR_MIX;
+          skyG += (tint[1] - skyG) * AIR_MIX;
+          skyB += (tint[2] - skyB) * AIR_MIX;
+        }
         for (let ty = 0; ty < h; ty++) {
           const id = world.tiles[ty * w + tx];
+          const under = ty >= underStart;           // underworld dominates by depth
           let r, g, b;
           if (id === AIR) {
-            if (ty < surf) { r = SKY_RGB[0]; g = SKY_RGB[1]; b = SKY_RGB[2]; }
+            if (under) { r = UNDER_AIR[0]; g = UNDER_AIR[1]; b = UNDER_AIR[2]; }
+            else if (ty < surf) { r = skyR; g = skyG; b = skyB; }
             else { r = CAVE_RGB[0]; g = CAVE_RGB[1]; b = CAVE_RGB[2]; }
           } else {
             const def = defs[id];
@@ -76,13 +132,34 @@
               r = (rgb[0] * DARKEN) | 0;
               g = (rgb[1] * DARKEN) | 0;
               b = (rgb[2] * DARKEN) | 0;
+              const tn = under ? UNDER_TINT : tint; // ground picks up a faint cast
+              if (tn) {
+                r += (tn[0] - r) * TILE_MIX;
+                g += (tn[1] - g) * TILE_MIX;
+                b += (tn[2] - b) * TILE_MIX;
+              }
             }
           }
           const p = (ty * w + tx) * 4;
-          data[p] = r; data[p + 1] = g; data[p + 2] = b; data[p + 3] = 255;
+          data[p] = r | 0; data[p + 1] = g | 0; data[p + 2] = b | 0; data[p + 3] = 255;
         }
       }
       this.mctx.putImageData(this.img, 0, 0, x0, 0, count, h);
+    },
+
+    // Player's biome label: TC.Biomes' stable tag when present, else the
+    // column guess at the player's position.
+    biomeLabel() {
+      let tag = null;
+      try {
+        if (TC.Biomes && typeof TC.Biomes.current === 'string') tag = TC.Biomes.current;
+      } catch (e) { /* ignore */ }
+      const world = TC.world;
+      if (!tag && world) {
+        const tx = Math.max(0, Math.min(world.width - 1, Math.round(this.ptx)));
+        tag = classifyColumn(world, tx);
+      }
+      return tag ? tag.charAt(0).toUpperCase() + tag.slice(1) : '';
     },
 
     update(dt) {
@@ -136,6 +213,11 @@
       ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255,255,255,0.4)';
       ctx.fillText('[N] map', px + PANEL_W / 2, py + PANEL_H + 12);
+      const bio = this.biomeLabel();
+      if (bio) {
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.fillText(bio, px + PANEL_W / 2, py + PANEL_H + 24);
+      }
       ctx.restore();
     }
   };

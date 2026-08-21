@@ -97,7 +97,13 @@
     hurt()   { blip('sawtooth', 450, 130, 0.22, 0.3); },
     pickup() { blip('square', 750, 750, 0.06, 0.16); blip('square', 1125, 1125, 0.08, 0.16, 0.07); },
     craft()  { blip('triangle', 523, 523, 0.09, 0.26); blip('triangle', 784, 784, 0.13, 0.26, 0.1); },
-    die()    { blip('sawtooth', 330, 40, 0.9, 0.28); hiss('lowpass', 1, 800, 90, 0.7, 0.2); }
+    die()    { blip('sawtooth', 330, 40, 0.9, 0.28); hiss('lowpass', 1, 800, 90, 0.7, 0.2); },
+    thunder() {
+      // Distant rumble: long low-passed noise swell with a crack onset.
+      hiss('lowpass', 0.6, 900, 60, 1.8, 0.5);
+      hiss('bandpass', 2, 2400, 300, 0.25, 0.35);
+      blip('sine', 55, 30, 1.6, 0.3, 0.05);
+    }
   };
 
   TC.Audio = {

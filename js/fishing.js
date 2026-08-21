@@ -799,4 +799,69 @@
       };
     }
   };
+
+  // ---- save integration ----
+  // Splice the fishing blob into the stored record (same pattern as wiring.js):
+  // placements persist via tile diffs; this carries quest/catch state only.
+  // KEY must stay in sync with save.js ('tc_save_v1').
+  const SAVE_KEY = 'tc_save_v1';
+
+  function spliceStored(mutate) {
+    try {
+      const raw = window.localStorage.getItem(SAVE_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (!data || typeof data !== 'object') return;
+      mutate(data);
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    } catch (e) { /* best-effort, like save.js */ }
+  }
+
+  function readStoredFishing() {
+    try {
+      const raw = window.localStorage.getItem(SAVE_KEY);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      return (data && typeof data === 'object') ? data.fishing || null : null;
+    } catch (e) { return null; }
+  }
+
+  function patchSaveFlow() {
+    if (TC.__fishingSavePatched) return;
+    if (TC.Save && typeof TC.Save.save === 'function') {
+      TC.__fishingSavePatched = true;
+      const origSave = TC.Save.save;
+      TC.Save.save = function () {
+        const ok = origSave ? !!origSave.call(TC.Save) : false;
+        if (ok && TC.Fishing && typeof TC.Fishing.serialize === 'function') {
+          const blob = TC.Fishing.serialize();
+          const hasAny = blob && Object.keys(blob).length > 0;
+          if (hasAny) spliceStored((data) => { data.fishing = blob; });
+          else spliceStored((data) => { delete data.fishing; });
+        }
+        return ok;
+      };
+    }
+    if (typeof TC.continueGame === 'function') {
+      TC.__fishingContinuePatched = true;
+      const origCont = TC.continueGame;
+      TC.continueGame = function () {
+        const r = origCont.call(TC);
+        if (TC.Fishing && typeof TC.Fishing.load === 'function') {
+          try { TC.Fishing.load(readStoredFishing()); } catch (e) {}
+        }
+        return r;
+      };
+    }
+    if (typeof TC.newGame === 'function') {
+      TC.__fishingNewPatched = true;
+      const origNew = TC.newGame;
+      TC.newGame = function (seed) {
+        const r = origNew.call(TC, seed);
+        if (TC.Fishing && typeof TC.Fishing.reset === 'function') TC.Fishing.reset();
+        return r;
+      };
+    }
+  }
+  patchSaveFlow();
 })();

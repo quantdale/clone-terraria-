@@ -704,8 +704,13 @@
     });
   }
 
+  // Forget every container (fresh world); no drops are spawned.
+  function chestClear() {
+    chests.clear();
+  }
+
   // ---- public surface ----
   TC.Inventory = Inventory;
   TC.Items = { drops, spawnDrop, update, draw, clearDrops, iconFor };
-  TC.Chests = { get: chestGet, spill: chestSpill, serialize: chestSerialize, load: chestLoad };
+  TC.Chests = { get: chestGet, spill: chestSpill, serialize: chestSerialize, load: chestLoad, clear: chestClear };
 })();

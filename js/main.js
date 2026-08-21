@@ -70,6 +70,7 @@
     if (TC.Enemies) TC.Enemies.clear();
     if (TC.NPCs && TC.NPCs.spawnGuide) TC.NPCs.spawnGuide(gen.spawnX * TC.CONST.TS, gen.spawnY * TC.CONST.TS);
     if (TC.Items) TC.Items.clearDrops();
+    if (TC.Chests && typeof TC.Chests.clear === 'function') TC.Chests.clear();
     if (TC.Combat) TC.Combat.clear();
     if (TC.Particles) TC.Particles.clear();
     if (TC.Sky) TC.Sky.reset();

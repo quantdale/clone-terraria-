@@ -1,5 +1,10 @@
 /* sky.js — day/night cycle: keyframed sky gradients, sun/moon arcs, stars,
-   drifting clouds, parallax hill silhouettes, underground fade. Screen space. */
+   drifting clouds, parallax hill silhouettes, underground fade. Screen space.
+   Moon runs an 8-phase cycle, one phase per full day/night cycle
+   (phase = floor(time / CYCLE) % 8; 0 = full moon, 4 = new moon) — derived
+   from the already-persisted Sky.time, no extra saved state. Full-moon nights
+   are flagged by TC.Sky.isBloodMoonFriendly() as a future event hook
+   (intentionally not consumed by enemies.js yet). */
 'use strict';
 (function () {
   const TC = window.TC;

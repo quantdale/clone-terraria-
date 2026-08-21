@@ -1,6 +1,9 @@
 /* music.js — generative WebAudio soundtrack. Day pentatonic arpeggio, night drone,
-   boss pulse; crossfaded mood buses. Own independent AudioContext (lazy, after first
-   gesture) so TC.Audio SFX throttling is unaffected. Failures never crash the game. */
+   boss pulse, plus per-biome variations driven by TC.Biomes.musicTag (underworld
+   drone, snow arpeggio, jungle percussion, desert phrygian plucks, ocean swells).
+   Mood priority: boss > biome > day/night; crossfaded mood buses. Own independent
+   AudioContext (lazy, after first gesture) so TC.Audio SFX throttling is unaffected.
+   Failures never crash the game. */
 'use strict';
 (function () {
   window.TC = window.TC || {};
@@ -9,7 +12,9 @@
   const MASTER_VOL = 0.12;       // quiet bed under SFX
   const LOOKAHEAD = 0.3;         // seconds of notes scheduled ahead of ctx.currentTime
   const FADE_TC = 0.7;           // crossfade time constant (~2s to settle)
-  const MOODS = ['day', 'night', 'boss'];
+  const MOODS = ['day', 'night', 'boss', 'underworld', 'snow', 'jungle', 'desert', 'ocean'];
+  // Biome tags that select their own mood bus; forest/cave keep the day/night pair.
+  const BIOME_MOODS = { underworld: 1, snow: 1, jungle: 1, desert: 1, ocean: 1 };
 
   let ctx = null;                // AudioContext, created lazily on first user gesture
   let master = null;             // master gain node
@@ -19,14 +24,20 @@
 
   // Per-layer scheduler clocks (absolute ctx time of next event).
   const layers = {
-    arp:   { next: 0 },
-    pad:   { next: 0 },
-    drone: { next: 0 },
-    wash:  { next: 0 },
-    bell:  { next: 0 },
-    bass:  { next: 0 }
+    arp:     { next: 0 },
+    pad:     { next: 0 },
+    drone:   { next: 0 },
+    wash:    { next: 0 },
+    bell:    { next: 0 },
+    bass:    { next: 0 },
+    udrone:  { next: 0 },        // underworld ominous drone
+    snowarp: { next: 0 },        // snow hushed arpeggio
+    perc:    { next: 0 },        // jungle percussion pulse
+    dune:    { next: 0 },        // desert sparse plucks
+    swell:   { next: 0 }         // ocean wave swells
   };
   let bassStep = 0;              // eighth-note counter for the boss bass pattern
+  let percStep = 0;              // step counter for the jungle percussion accent
 
   function mtof(m) { return 440 * Math.pow(2, (m - 69) / 12); }
 
@@ -78,6 +89,7 @@
     if (restart) {
       for (const k in layers) layers[k].next = t + 0.06;
       bassStep = 0;
+      percStep = 0;
     }
   }
 
@@ -90,6 +102,9 @@
           if (e && e.def && e.def.boss) return 'boss';
         }
       }
+      // Biome variation outranks day/night but never a living boss.
+      const tag = TC.Biomes && TC.Biomes.musicTag;
+      if (BIOME_MOODS[tag]) return tag;
       if (TC.Sky && typeof TC.Sky.daylight === 'function') {
         return TC.Sky.daylight() >= 0.5 ? 'day' : 'night';
       }
@@ -180,46 +195,122 @@
   }
 
   // ---- night: low drone + filtered noise wash + distant bells ----
-  function drone(t0) {
-    const end = t0 + 10;
+  // Low sustained drone; parameterized so the underworld mood reuses it darker
+  // (lower root, slowly beating detuned pair, faint tritone partial).
+  function drone(t0, bus, f0, f1, peak, dur, beatCents, partialF, partialVol) {
+    bus = bus || buses.night;
+    f0 = f0 || 55;
+    f1 = f1 == null ? 55.6 : f1;                 // barely-moving drift
+    peak = peak || 0.22;
+    dur = dur || 10;
+    const end = t0 + dur;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.linearRampToValueAtTime(0.22, t0 + 2);
+    g.gain.linearRampToValueAtTime(peak, t0 + dur * 0.2);
     g.gain.linearRampToValueAtTime(0.0001, end);
-    const o = ctx.createOscillator();
-    o.type = 'sine';
-    o.frequency.setValueAtTime(55, t0);
-    o.frequency.linearRampToValueAtTime(55.6, end);  // barely-moving drift
-    o.connect(g).connect(buses.night);
-    o.start(t0);
-    o.stop(end + 0.05);
+    const osc = (fq, cents) => {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(fq, t0);
+      o.frequency.linearRampToValueAtTime(f1, end);
+      o.detune.value = cents || 0;
+      o.connect(g);
+      o.start(t0);
+      o.stop(end + 0.05);
+    };
+    osc(f0, 0);
+    if (beatCents) osc(f0, beatCents);           // slow-beating twin
+    if (partialF) {                              // quiet dissonant color
+      const pg = ctx.createGain();
+      pg.gain.value = partialVol || 0.05;
+      const po = ctx.createOscillator();
+      po.type = 'triangle';
+      po.frequency.setValueAtTime(partialF, t0);
+      po.connect(pg).connect(g);
+      po.start(t0);
+      po.stop(end + 0.05);
+    }
+    g.connect(bus);
   }
 
-  function wash(t0) {
+  // Underworld: the night drone sunk to D1 with a beating twin and a
+  // tritone shadow — low and ominous.
+  function udrone(t0) {
+    drone(t0, buses.underworld, 36.7, 37.3, 0.3, 12, 16, 51.9, 0.05);
+  }
+
+  // Filtered-noise swell; the night wash and ocean waves share this voice.
+  // o: { bus, dur, atk, sweep, fLo, fHi, peak }
+  function wash(t0, o) {
     const buf = getNoise();
     if (!buf) return;
-    const end = t0 + 11;
+    o = o || {};
+    const bus = o.bus || buses.night;
+    const dur = o.dur || 11;
+    const atk = o.atk || 2.5;
+    const sweep = o.sweep || 5.5;
+    const fLo = o.fLo || 180;
+    const fHi = o.fHi || 420;
+    const end = t0 + dur;
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.loop = true;
     const flt = ctx.createBiquadFilter();
     flt.type = 'lowpass';
     flt.Q.value = 0.5;
-    flt.frequency.setValueAtTime(180, t0);
-    flt.frequency.linearRampToValueAtTime(420, t0 + 5.5);
-    flt.frequency.linearRampToValueAtTime(180, end);
+    flt.frequency.setValueAtTime(fLo, t0);
+    flt.frequency.linearRampToValueAtTime(fHi, t0 + sweep);
+    flt.frequency.linearRampToValueAtTime(fLo, end);
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.linearRampToValueAtTime(0.05, t0 + 2.5);
+    g.gain.linearRampToValueAtTime(o.peak || 0.05, t0 + atk);
     g.gain.linearRampToValueAtTime(0.0001, end);
-    src.connect(flt).connect(g).connect(buses.night);
+    src.connect(flt).connect(g).connect(bus);
     src.start(t0);
     src.stop(end + 0.05);
+  }
+
+  // Ocean: slow lowpass sweeps rolling in and out like waves.
+  function swell(t0) {
+    wash(t0, { bus: buses.ocean, dur: 13, atk: 4, sweep: 6.5, fLo: 110, fHi: 520, peak: 0.06 });
   }
 
   const BELLS = [81, 84, 88, 93];              // A4 C5 E5 A5
   function bellNote(t0) {
     note(buses.night, 'sine', mtof(BELLS[(Math.random() * BELLS.length) | 0]), t0, 3.5, 0.1);
+  }
+
+  // ---- snow: the day arpeggio hushed, raised an octave and stretched out ----
+  function snowArp(t0) {
+    let m = ARP[(Math.random() * ARP.length) | 0] + 12;
+    if (Math.random() < 0.25) m -= 12;         // occasional low anchor tone
+    note(buses.snow, 'sine', mtof(m), t0, 1.6, 0.11);
+  }
+
+  // ---- jungle: short bandpassed noise hits, accented on the quarter note ----
+  function perc(t0, accent) {
+    const buf = getNoise();
+    if (!buf) return;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const flt = ctx.createBiquadFilter();
+    flt.type = 'bandpass';
+    flt.Q.value = 1.2;
+    flt.frequency.value = accent ? 320 : 210;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(accent ? 0.14 : 0.06, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+    src.connect(flt).connect(g).connect(buses.jungle);
+    src.start(t0, Math.random() * 1.5);        // fresh slice of the noise bed
+    src.stop(t0 + 0.15);
+  }
+
+  // ---- desert: sparse plucks from A phrygian (the flat-2 gives the flavor) ----
+  const PHRYGIAN = [57, 58, 60, 62, 64, 65, 67];
+  function dunePluck(t0) {
+    let m = PHRYGIAN[(Math.random() * PHRYGIAN.length) | 0];
+    if (Math.random() < 0.25) m -= 12;
+    note(buses.desert, 'triangle', mtof(m), t0, 1.1, 0.15);
   }
 
   // ---- boss: driving eighth pulse + minor-second stab each bar ----
@@ -251,6 +342,23 @@
         bassStep++;
         layers.bass.next += EIGHTH;
       }
+    } else if (mood === 'underworld') {
+      while (layers.udrone.next < horizon) { udrone(layers.udrone.next); layers.udrone.next += 11; }
+    } else if (mood === 'snow') {
+      while (layers.snowarp.next < horizon) { snowArp(layers.snowarp.next); layers.snowarp.next += 0.85; }
+    } else if (mood === 'jungle') {
+      while (layers.perc.next < horizon) {
+        perc(layers.perc.next, percStep % 4 === 0);
+        percStep++;
+        layers.perc.next += 0.23;              // ~130 bpm eighths
+      }
+    } else if (mood === 'desert') {
+      while (layers.dune.next < horizon) {
+        dunePluck(layers.dune.next);
+        layers.dune.next += 1.6 + Math.random() * 2.8;
+      }
+    } else if (mood === 'ocean') {
+      while (layers.swell.next < horizon) { swell(layers.swell.next); layers.swell.next += 11.5; }
     }
   }
 
