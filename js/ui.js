@@ -33,6 +33,12 @@
   const BUBBLE_R = 4;         // bubble radius (~8px circle)
   const BUBBLE_GAP = 4;
   const BREATH_FADE = 0.25;   // breath bubble row fade-in/out duration (seconds)
+  const INV_BTN_H = 18;       // inventory panel action-button height
+  const SHOP_ROW_H = 26;      // NPC shop row height
+  // Shop currency: ITEM_DEFS has no coin item today, so prices are shown as
+  // informational text and purchases only go through when this stack exists.
+  const CURRENCY_ID = 'coin_item';
+  const CURRENCY_NAME = 'coin';
 
   const GOLD = '#ffd24a';
   const GOLD_DIM = '#a8863a';
@@ -49,6 +55,8 @@
   let tooltip = null;         // {x,y,lines:[{text,color}]} rebuilt every frame
   const toasts = [];          // {msg,life}
   let breathT = 0;            // breath bubble row fade (0..1)
+  let craftShowAll = false;   // crafting panel: false = craftable only
+  let lastShop = null;        // {panel, rows:[{rect,entry}], npcName} from the last layout
 
   // pixel heart bitmap, 7 wide x 6 tall
   const HEART_MAP = [
@@ -86,6 +94,109 @@
         (TC.Input.down('ShiftLeft') || TC.Input.down('ShiftRight')));
     } catch (e) { return false; }
   }
+
+  // Ctrl+click is the favorite-pin gesture: unused elsewhere, so it cannot
+  // collide with shift+click quick-move or plain right-click transfers.
+  function ctrlHeld() {
+    try {
+      return !!(TC.Input && TC.Input.down &&
+        (TC.Input.down('ControlLeft') || TC.Input.down('ControlRight')));
+    } catch (e) { return false; }
+  }
+
+  // ---- shop currency (informational until a coin item exists) ----
+  function currencyCount(inv) {
+    if (!inv || typeof inv.count !== 'function') return 0;
+    let n = 0;
+    try { n = inv.count(CURRENCY_ID) | 0; } catch (e) { n = 0; }
+    return n;
+  }
+
+  // ---- nearest chest within reach (for Quick Stack with no panel open) ----
+  function nearestChestSlots() {
+    const p = TC.player;
+    const world = TC.world;
+    if (!p || !world || typeof world.get !== 'function' ||
+        !TC.Chests || typeof TC.Chests.get !== 'function' || !TC.TILE) return null;
+    const ts = TC.CONST.TS;
+    const reach = (TC.CONST.REACH || 96);
+    const r = Math.ceil(reach / ts) + 1;
+    const ptx = Math.floor((p.x + (p.w || 16) / 2) / ts);
+    const pty = Math.floor((p.y + (p.h || 16) / 2) / ts);
+    let best = null, bestD2 = Infinity;
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const tx = ptx + dx, ty = pty + dy;
+        if (tx < 0 || ty < 0 || tx >= world.width || ty >= world.height) continue;
+        let id = null;
+        try { id = world.get(tx, ty); } catch (e) { id = null; }
+        if (id !== TC.TILE.CHEST) continue;
+        const cx = (tx + 0.5) * ts - (p.x + (p.w || 16) / 2);
+        const cy = (ty + 0.5) * ts - (p.y + (p.h || 16) / 2);
+        const d2 = cx * cx + cy * cy;
+        if (d2 < bestD2 && d2 <= reach * reach) { bestD2 = d2; best = { tx: tx, ty: ty }; }
+      }
+    }
+    if (!best) return null;
+    try { return TC.Chests.get(best.tx, best.ty) || null; } catch (e) { return null; }
+  }
+
+  // ---- recipe station helpers (crafting column tags/hints) ----
+  // Required station names for display: string or any-of array plus the
+  // names implied by required capability tags. Returns [] when unrestricted.
+  function recipeStationNames(r) {
+    const names = [];
+    if (!r) return names;
+    if (typeof r.station === 'string' && r.station) names.push(r.station);
+    else if (Array.isArray(r.station)) {
+      for (let i = 0; i < r.station.length; i++) {
+        if (typeof r.station[i] === 'string') names.push(r.station[i]);
+      }
+    }
+    if (TC.Crafting && typeof TC.Crafting.stationTags === 'function') {
+      try {
+        TC.Crafting.stationTags(r).forEach(function (tag) {
+          const name = /^station:(.+)$/.exec(tag);
+          if (name) names.push(name[1]);
+        });
+      } catch (e) {}
+    }
+    return names;
+  }
+
+  // Station names a recipe still lacks given the nearby-station Set.
+  function missingStations(r, stations) {
+    const need = recipeStationNames(r);
+    const out = [];
+    for (let i = 0; i < need.length; i++) {
+      if (!(stations instanceof Set) || !stations.has(need[i])) out.push(need[i]);
+    }
+    return out;
+  }
+
+  // ---- NPC shop resolution ----
+  // The dialog carries only a display name, so match it against live NPCs
+  // and prefer whoever stands closest to the player. Null while no shop NPC
+  // is speaking.
+  function resolveShop() {
+    if (!UI.dialog || !TC.NPCs || !Array.isArray(TC.NPCs.list)) return null;
+    const stock = (typeof TC.NPCs.shopOf === 'function')
+      ? TC.NPCs.shopOf : null;
+    if (!stock) return null;
+    const p = TC.player;
+    let bestNpc = null, bestD2 = Infinity;
+    for (let i = 0; i < TC.NPCs.list.length; i++) {
+      const n = TC.NPCs.list[i];
+      if (!n || n.name !== UI.dialog.name) continue;
+      const entries = stock(n.type);
+      if (!entries || !entries.length) continue;
+      const dx = n.x - (p ? p.x : 0), dy = n.y - (p ? p.y : 0);
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) { bestD2 = d2; bestNpc = n; }
+    }
+    return bestNpc ? stock(bestNpc.type) : null;
+  }
+
 
   function playerCenter() {
     const p = TC.player;
@@ -262,6 +373,7 @@
     UI.chest = null;
     UI.dialog = null;
     cursorStack = null;
+    lastShop = null;
   }
 
   // ---- menu actions ----
@@ -294,6 +406,43 @@
     return 'Sound: ' + ((TC.Audio && TC.Audio.muted) ? 'Off' : 'On');
   }
 
+  // ---- inventory panel actions (Sort / Quick Stack / Split buttons) ----
+  function actSort(inv) {
+    if (!inv || typeof inv.sort !== 'function') return;
+    const n = inv.sort() | 0;
+    toast(n > 0 ? ('Sorted ' + n + ' stack' + (n === 1 ? '' : 's')) : 'Nothing to sort');
+  }
+
+  // Open chest panel wins; otherwise the nearest chest within reach.
+  function actQuickStack(inv) {
+    if (!inv || typeof inv.depositAll !== 'function') return;
+    const cs = UI.chest ? chestSlots() : nearestChestSlots();
+    if (!cs) { toast('No chest nearby'); return; }
+    const moved = inv.depositAll(cs) | 0;
+    toast(moved > 0 ? ('Stored ' + moved + ' items') : 'Nothing to store');
+  }
+
+  // Split half of the selected hotbar stack into the first FREE slot —
+  // swapOrPlace (empty-slot branch) keeps the half from rejoining its own
+  // source stack the way add()'s merge-first rule would. Anything that
+  // cannot fit is thrown toward the cursor like a drop.
+  function actSplit(inv) {
+    if (!inv || typeof inv.stackSplit !== 'function') return;
+    const half = inv.stackSplit(UI.selected);
+    if (!half) { toast('Select a hotbar slot holding a stack'); return; }
+    let rest = half;
+    if (typeof inv.swapOrPlace === 'function') {
+      for (let i = 0; i < inv.slots.length && rest && rest.count > 0; i++) {
+        if (inv.get(i)) continue;              // only empty slots
+        try { rest = inv.swapOrPlace(i, rest); } catch (e) { break; }
+      }
+    }
+    if (rest && rest.count > 0) {
+      const m = mousePos();
+      throwStack(rest, m.x, m.y);
+    }
+  }
+
   // ---- crafting context (cheap: <=17 recipes, 11x11 tile scan) ----
   function getCraftContext() {
     const inv = getInv(false);
@@ -310,21 +459,27 @@
 
   // ---- layout ----
   // Recomputed every call so input handling and drawing always agree.
-  function layout(w, h) {
+  // ctx is needed only for NPC dialog/shop wrapping; callers pass the main
+  // canvas context (screen space).
+  function layout(ctx, w, h) {
     const L = {
       w: w, h: h,
       hotbar: [],
       bag: [],
       bagPanel: null,
+      invButtons: [],
       chestPanel: null,
       chestRects: [],
       equipPanel: null,
       equipRects: [],
       craftPanel: null,
+      craftToggle: null,
       craftRects: [],
       craftCtx: null,
       craftList: [],
+      craftMeta: [],       // per-recipe {ok, missing[]} aligned with craftList
       craftMaxRows: 0,
+      shop: null,          // {panel, rows:[{rect,entry,name}]}
       pausePanel: null,
       buttons: [],
       uiRects: []
@@ -340,6 +495,24 @@
     const bagW = HOTBAR_N * SLOT + (HOTBAR_N - 1) * GAP + 16;
     const bagH = 22 + BAG_ROWS * SLOT + (BAG_ROWS - 1) * GAP + 8;
     L.bagPanel = { x: bagX, y: bagY, w: bagW, h: bagH };
+    // action buttons in the header row, right-aligned (Sort/Stack/Split)
+    if (UI.invOpen) {
+      const defs = [
+        { id: 'sort', label: 'Sort' },
+        { id: 'stack', label: 'Quick Stack' },
+        { id: 'split', label: 'Split' }
+      ];
+      let bx = bagX + bagW - 6;
+      for (let i = defs.length - 1; i >= 0; i--) {
+        const bw2 = defs[i].label.length * 7 + 16;
+        bx -= bw2;
+        L.invButtons.push({
+          id: defs[i].id, label: defs[i].label,
+          rect: { x: bx, y: bagY + 3, w: bw2, h: INV_BTN_H }
+        });
+        bx -= 6;
+      }
+    }
     for (let r = 0; r < BAG_ROWS; r++) {
       for (let c = 0; c < HOTBAR_N; c++) {
         L.bag.push({
@@ -396,13 +569,34 @@
       w: CRAFT_W,
       h: 44 + L.craftMaxRows * CRAFT_ROW_H + 6
     };
+    // craftable-only filter toggle, top-right of the panel header
+    if (UI.invOpen) {
+      L.craftToggle = {
+        label: craftShowAll ? 'All' : 'Craftable',
+        rect: { x: 8 + CRAFT_W - 82, y: craftTop + 6, w: 76, h: 17 }
+      };
+    }
 
     if (TC.state === 'playing' && UI.invOpen) {
       const cc = getCraftContext();
       if (cc) {
         L.craftCtx = cc;
-        L.craftList = cc.list;
-        const n = Math.min(cc.list.length, L.craftMaxRows);
+        if (craftShowAll && Array.isArray(TC.RECIPES)) {
+          // every recipe, dimmed when not currently makeable
+          L.craftList = TC.RECIPES.slice();
+          for (let i = 0; i < L.craftList.length; i++) {
+            let ok = false;
+            try { ok = TC.Crafting.canCraft(L.craftList[i], cc.inv, cc.stations); }
+            catch (e) { ok = false; }
+            L.craftMeta.push({ ok: ok, missing: missingStations(L.craftList[i], cc.stations) });
+          }
+        } else {
+          L.craftList = cc.list;             // already filtered by available()
+          for (let i = 0; i < L.craftList.length; i++) {
+            L.craftMeta.push({ ok: true, missing: [] });
+          }
+        }
+        const n = Math.min(L.craftList.length, L.craftMaxRows);
         for (let i = 0; i < n; i++) {
           L.craftRects.push({
             x: L.craftPanel.x + 6,
@@ -413,6 +607,11 @@
         }
       }
     }
+
+    // NPC shop list under the speech box while a shopkeeper is talking
+    L.shop = (TC.state === 'playing' && UI.dialog && !UI.paused)
+      ? shopLayout(ctx, w, h) : null;
+    lastShop = L.shop;
 
     // interactive regions for uiHover
     if (TC.state !== 'title') {
@@ -524,6 +723,18 @@
     txt(ctx, b.label, r.x + r.w / 2, r.y + r.h / 2 + 1, 17, hov ? GOLD : TEXT, 'center', true);
   }
 
+  // compact header-row variant (Sort / Quick Stack / Split / filter toggle)
+  function drawSmallButton(ctx, b, mx, my) {
+    const r = b.rect;
+    const hov = inRect(mx, my, r);
+    ctx.fillStyle = hov ? 'rgba(72,56,22,0.94)' : 'rgba(28,22,34,0.9)';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = hov ? GOLD : 'rgba(255,210,74,0.35)';
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    txt(ctx, b.label, r.x + r.w / 2, r.y + r.h / 2 + 1, 11, hov ? GOLD : TEXT_DIM, 'center', true);
+  }
+
   function drawSlotBox(ctx, r, stack, opts) {
     opts = opts || {};
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
@@ -539,6 +750,18 @@
     }
   }
 
+  // favorite-pin marker: small gold triangle in the slot's top-right corner
+  function drawFavPin(ctx, r) {
+    const s = 8;
+    ctx.fillStyle = GOLD;
+    ctx.beginPath();
+    ctx.moveTo(r.x + r.w - s, r.y);
+    ctx.lineTo(r.x + r.w, r.y);
+    ctx.lineTo(r.x + r.w, r.y + s);
+    ctx.closePath();
+    ctx.fill();
+  }
+
   // ---- tooltips ----
   function itemLines(id) {
     const d = itemDef(id);
@@ -546,10 +769,21 @@
     if (!d) return lines;
     if (d.damage != null) lines.push({ text: 'damage ' + d.damage, color: TEXT });
     if (d.power != null) lines.push({ text: (d.tool || 'tool') + ' power ' + d.power + '%', color: TEXT });
+    if (d.defense != null && d.defense > 0) {
+      lines.push({ text: '+' + d.defense + ' defense', color: TEXT });
+    }
     if (d.knockback != null) lines.push({ text: 'knockback ' + d.knockback, color: TEXT_DIM });
+    if (d.useTime != null) lines.push({ text: 'use time ' + d.useTime + 's', color: TEXT_DIM });
     if (d.kind === 'block') lines.push({ text: 'placeable', color: TEXT_DIM });
     else if (d.kind === 'material') lines.push({ text: 'crafting material', color: TEXT_DIM });
     else if (d.kind === 'ammo') lines.push({ text: 'ammunition', color: TEXT_DIM });
+    else if (d.kind === 'armor' && d.slot) {
+      lines.push({ text: 'armor - worn on ' + d.slot, color: TEXT_DIM });
+    } else if (d.kind === 'summon' && d.boss) {
+      const bd = TC.ENEMY_DEFS ? TC.ENEMY_DEFS[d.boss] : null;
+      lines.push({ text: 'summons ' + ((bd && bd.name) || d.boss) + ' at night',
+                   color: TEXT_DIM });
+    }
     lines.push({ text: 'max stack ' + maxStack(id), color: TEXT_DIM });
     return lines;
   }
@@ -558,7 +792,19 @@
     if (!tooltip) tooltip = { x: mx + 18, y: my + 10, lines: itemLines(id) };
   }
 
-  function craftTooltip(mx, my, rec, cc) {
+  // Bag/hotbar slot tooltip plus the favorite-pin gesture hint.
+  function slotTooltip(mx, my, id, pinned) {
+    if (tooltip) return;
+    hoverItemTooltip(mx, my, id);
+    if (tooltip) {
+      tooltip.lines.push({
+        text: pinned ? 'Ctrl+click: unpin' : 'Ctrl+click: pin (kept by Quick Stack)',
+        color: GOLD_DIM
+      });
+    }
+  }
+
+  function craftTooltip(mx, my, rec, cc, meta) {
     const d = itemDef(rec.out);
     const lines = [{
       text: (d ? d.name : String(rec.out)) + (rec.n > 1 ? ' x' + rec.n : ''),
@@ -566,15 +812,26 @@
     }];
     const cost = rec.cost || {};
     for (const id in cost) {
+      const v = cost[id];
+      // tagged/any-of ingredients show as tag totals; plain ids as counts
+      if (v && typeof v === 'object') {
+        const label = (typeof v.tag === 'string' && v.tag) ? v.tag : null;
+        const need = (typeof v.n === 'number' && isFinite(v.n)) ? v.n : 1;
+        lines.push({ text: (label || String(id)) + ': x' + need, color: TEXT });
+        continue;
+      }
       const have = cc.inv.count(id) | 0;
-      const need = cost[id];
       const cd = itemDef(id);
       lines.push({
-        text: (cd ? cd.name : id) + ': ' + have + '/' + need,
-        color: have >= need ? '#8fe08f' : '#ff7a6a'
+        text: (cd ? cd.name : id) + ': ' + have + '/' + v,
+        color: have >= v ? '#8fe08f' : '#ff7a6a'
       });
     }
-    if (rec.station) lines.push({ text: 'requires: ' + rec.station, color: GOLD_DIM });
+    if (rec.station) lines.push({ text: 'requires: ' +
+      (Array.isArray(rec.station) ? rec.station.join(' / ') : rec.station), color: GOLD_DIM });
+    if (meta && meta.missing.length) {
+      lines.push({ text: 'missing station: ' + meta.missing.join(', '), color: '#ff7a6a' });
+    }
     tooltip = { x: mx + 18, y: my + 10, lines: lines };
   }
 
@@ -699,7 +956,9 @@
       const r = L.hotbar[i];
       const s = inv ? slotAt(inv, i) : null;
       drawSlotBox(ctx, r, s, { selected: UI.selected === i, label: String((i + 1) % 10) });
-      if (s && inRect(mx, my, r)) hoverItemTooltip(mx, my, s.id);
+      const pin = inv && typeof inv.isFavorite === 'function' && inv.isFavorite(i);
+      if (pin) drawFavPin(ctx, r);
+      if (s && inRect(mx, my, r)) slotTooltip(mx, my, s.id, !!pin);
     }
   }
 
@@ -707,6 +966,7 @@
     const p = L.bagPanel;
     panel(ctx, p.x, p.y, p.w, p.h, true);
     txt(ctx, 'INVENTORY', p.x + 10, p.y + 12, 12, GOLD_DIM, 'left', true);
+    for (let i = 0; i < L.invButtons.length; i++) drawSmallButton(ctx, L.invButtons[i], mx, my);
     const inv = getInv(true);
     if (!inv) {
       txt(ctx, '(inventory unavailable)', p.x + p.w / 2, p.y + p.h / 2, 13, TEXT_DIM, 'center');
@@ -716,7 +976,9 @@
       const r = L.bag[i];
       const s = slotAt(inv, r.index);
       drawSlotBox(ctx, r, s, {});
-      if (s && inRect(mx, my, r)) hoverItemTooltip(mx, my, s.id);
+      const pin = typeof inv.isFavorite === 'function' && inv.isFavorite(r.index);
+      if (pin) drawFavPin(ctx, r);
+      if (s && inRect(mx, my, r)) slotTooltip(mx, my, s.id, !!pin);
     }
   }
 
@@ -745,16 +1007,7 @@
       const r = L.equipRects[i];
       const id = equippedId(r.slot);
       drawSlotBox(ctx, r, id ? { id: id, count: 1 } : null, { label: r.slot });
-      if (id && inRect(mx, my, r) && !tooltip) {
-        const d = itemDef(id);
-        tooltip = {
-          x: mx + 18, y: my + 10,
-          lines: [
-            { text: d ? d.name : String(id), color: GOLD },
-            { text: '+' + ((d && d.defense) || 0) + ' defense', color: TEXT }
-          ]
-        };
-      }
+      if (id && inRect(mx, my, r) && !tooltip) hoverItemTooltip(mx, my, id);
     }
   }
 
@@ -762,6 +1015,7 @@
     const p = L.craftPanel;
     panel(ctx, p.x, p.y, p.w, p.h, true);
     txt(ctx, 'CRAFTING', p.x + 10, p.y + 15, 13, GOLD, 'left', true);
+    if (L.craftToggle) drawSmallButton(ctx, L.craftToggle, mx, my);
     const cc = L.craftCtx;
     if (!cc) {
       txt(ctx, '(unavailable)', p.x + p.w / 2, p.y + 36, 12, TEXT_DIM, 'center');
@@ -776,17 +1030,28 @@
       const r = L.craftRects[i];
       const rec = L.craftList[i];
       if (!rec) continue;
+      const meta = L.craftMeta[i] || null;
       const hov = inRect(mx, my, r);
+      const dim = !!meta && !meta.ok;    // 'All' mode: not currently makeable
       if (hov) {
         ctx.fillStyle = 'rgba(255,210,74,0.12)';
         ctx.fillRect(r.x, r.y, r.w, r.h);
       }
+      ctx.save();
+      if (dim) ctx.globalAlpha = 0.45;
       drawIcon(ctx, rec.out, r.x + 4, r.y + 3, CRAFT_ROW_H - 10);
       const d = itemDef(rec.out);
       let label = d ? d.name : String(rec.out);
       if (rec.n > 1) label += ' x' + rec.n;
-      txt(ctx, label, r.x + CRAFT_ROW_H + 4, r.y + r.h / 2, 13, hov ? GOLD : TEXT, 'left');
-      if (hov) craftTooltip(mx, my, rec, cc);
+      txt(ctx, label, r.x + CRAFT_ROW_H + 4, r.y + r.h / 2, 13,
+          hov ? GOLD : TEXT, 'left');
+      // right-aligned missing-station tag (All mode only)
+      if (meta && meta.missing.length && !hov) {
+        txt(ctx, '[' + meta.missing[0] + ']', r.x + r.w - 4, r.y + r.h / 2, 10,
+            '#ff7a6a', 'right');
+      }
+      ctx.restore();
+      if (hov) craftTooltip(mx, my, rec, cc, meta);
     }
     if (L.craftList.length > L.craftRects.length) {
       txt(ctx, '+' + (L.craftList.length - L.craftRects.length) + ' more...',
@@ -916,28 +1181,139 @@
     return lines;
   }
 
+  // Shared NPC dialog box geometry (screen space) for drawing, the shop
+  // panel anchor, and click hit-testing.
+  function dialogGeom(c, w, h) {
+    const d = UI.dialog;
+    if (!d) return null;
+    const dw = Math.round(w * 0.6);
+    c.font = '13px monospace';
+    const lines = wrapText(c, d.text, dw - 24);
+    const dh = 36 + lines.length * 18;
+    return {
+      x: Math.round(w / 2 - dw / 2),
+      y: h - dh - 64,                    // above the toast strip
+      w: dw, h: dh, textLines: lines
+    };
+  }
+
+  // Shop panel geometry anchored to the open dialog; null while no shop NPC
+  // is speaking. Rows are hit-tested against the same rects that are drawn.
+  function shopLayout(c, w, h) {
+    const entries = resolveShop();
+    if (!entries || !entries.length) return null;
+    const g = dialogGeom(c, w, h);
+    if (!g) return null;
+    const pw = clamp(g.w, 280, 380);
+    const ph = 20 + entries.length * SHOP_ROW_H + 6;
+    let x = Math.round(w / 2 - pw / 2);
+    let y = g.y + g.h + 8;               // under the speech box...
+    if (y + ph > h - 4) y = g.y - ph - 8; // ...else stacked above it
+    if (y < 4) y = Math.max(4, h - 4 - ph);
+    const rows = [];
+    for (let i = 0; i < entries.length; i++) {
+      rows.push({
+        rect: { x: x + 6, y: y + 20 + i * SHOP_ROW_H, w: pw - 12, h: SHOP_ROW_H - 3 },
+        entry: entries[i]
+      });
+    }
+    return { name: UI.dialog.name, panel: { x: x, y: y, w: pw, h: ph }, rows: rows };
+  }
+
+  // Transactional purchase: coins leave first; if the bought item cannot fit
+  // (inventory full) the coins are refunded. InventoryChanged events flow
+  // through Inventory.add/remove. Prices are informational today — ITEM_DEFS
+  // has no coin item yet, so affordability fails honestly until one exists.
+  function buyItem(entry) {
+    if (!entry || typeof entry.itemId !== 'string') return;
+    const inv = getInv(false);
+    if (!inv || typeof inv.remove !== 'function' || typeof inv.add !== 'function') return;
+    const price = Math.max(1, Math.floor(entry.price) || 1);
+    if (currencyCount(inv) < price) {
+      toast('Price: ' + price + ' ' + CURRENCY_NAME +
+            (price === 1 ? '' : 's') + ' each');
+      return;
+    }
+    let paid = false;
+    try { paid = !!inv.remove(CURRENCY_ID, price); } catch (e) { paid = false; }
+    if (!paid) { toast('Purchase failed'); return; }
+    let left = 0;
+    try { left = inv.add(entry.itemId, 1); } catch (e) { left = 0; }
+    if (typeof left !== 'number' || !isFinite(left)) left = 0;
+    if (left > 0) {                        // could not fit: refund and abort
+      try { inv.add(CURRENCY_ID, price); } catch (e) {}
+      toast('Inventory full');
+      return;
+    }
+    if (TC.Audio && typeof TC.Audio.play === 'function') {
+      try { TC.Audio.play('pickup'); } catch (e) {}
+    }
+    const d = itemDef(entry.itemId);
+    toast('Bought ' + (d ? d.name : entry.itemId));
+  }
+
+  // Shop list under an open NPC dialog: icon, name, coin-priced row per stock
+  // entry. Hover shows the standard item tooltip plus the price line.
+  function drawShop(c, shop, mx, my) {
+    if (!shop) return;
+    const p = shop.panel;
+    panel(c, p.x, p.y, p.w, p.h, true);
+    txt(c, 'SHOP - click a line to buy', p.x + 10, p.y + 11, 11, GOLD_DIM, 'left', true);
+    const purse = currencyCount(getInv(false));
+    for (let i = 0; i < shop.rows.length; i++) {
+      const row = shop.rows[i];
+      const r = row.rect;
+      const e = row.entry;
+      const price = Math.max(1, Math.floor(e.price) || 1);
+      const hov = inRect(mx, my, r);
+      if (hov) {
+        c.fillStyle = 'rgba(255,210,74,0.12)';
+        c.fillRect(r.x, r.y, r.w, r.h);
+      }
+      drawIcon(c, e.itemId, r.x + 4, r.y + (r.h - 18) / 2, 18);
+      const d = itemDef(e.itemId);
+      txt(c, d ? d.name : String(e.itemId), r.x + 26, r.y + r.h / 2, 13,
+          hov ? GOLD : TEXT, 'left');
+      const afford = purse >= price;
+      c.font = 'bold 13px monospace';
+      const pw2 = c.measureText(String(price)).width;
+      c.beginPath();                       // tiny coin dot left of the number
+      c.arc(r.x + r.w - 10 - pw2 - 6, r.y + r.h / 2, 3.5, 0, Math.PI * 2);
+      c.fillStyle = afford ? GOLD : '#6a5a30';
+      c.fill();
+      txt(c, String(price), r.x + r.w - 10, r.y + r.h / 2, 13,
+          afford ? '#8fe08f' : '#ff7a6a', 'right', true);
+      if (hov) {
+        const lines = itemLines(e.itemId);
+        lines.push({
+          text: 'price: ' + price + ' ' + CURRENCY_NAME +
+                (purse >= price ? '' : '  (you have ' + purse + ')'),
+          color: afford ? '#8fe08f' : '#ff7a6a'
+        });
+        tooltip = { x: mx + 18, y: my + 10, lines: lines };
+      }
+    }
+  }
+
   // Bottom-center NPC speech box: dark backing, gold border, gold speaker
   // name, white wrapped text; fades in/out over DIALOG_FADE seconds.
-  function drawDialog(ctx, w, h) {
+  function drawDialog(c, w, h) {
     const d = UI.dialog;
     if (!d) return;
     const alpha = clamp(Math.min(DIALOG_T - d.t, d.t) / DIALOG_FADE, 0, 1);
-    const dw = Math.round(w * 0.6);
-    ctx.font = '13px monospace';
-    const lines = wrapText(ctx, d.text, dw - 24);
-    const dh = 36 + lines.length * 18;
-    const x = Math.round(w / 2 - dw / 2);
-    const y = h - dh - 64;               // above the toast strip
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    panel(ctx, x, y, dw, dh, true);
-    txt(ctx, d.name, x + 12, y + 16, 14, GOLD, 'left', true);
+    const g = dialogGeom(c, w, h);
+    if (!g) return;
+    const x = g.x, y = g.y;
+    c.save();
+    c.globalAlpha = alpha;
+    panel(c, x, y, g.w, g.h, true);
+    txt(c, d.name, x + 12, y + 16, 14, GOLD, 'left', true);
     let yy = y + 38;
-    for (let i = 0; i < lines.length; i++) {
-      txt(ctx, lines[i], x + 12, yy, 13, '#ffffff', 'left');
+    for (let i = 0; i < g.textLines.length; i++) {
+      txt(c, g.textLines[i], x + 12, yy, 13, '#ffffff', 'left');
       yy += 18;
     }
-    ctx.restore();
+    c.restore();
   }
 
   function drawToasts(ctx, w, h) {
@@ -1064,6 +1440,14 @@
 
   function slotClick(inv, i, rightClick) {
     const s = slotAt(inv, i);
+    // Ctrl+click toggles the favorite pin (no cursor stack held): distinct
+    // from shift+click quick-move and plain right-click transfers.
+    if (!rightClick && !cursorStack && s && ctrlHeld() &&
+        typeof inv.toggleFavorite === 'function') {
+      const now = inv.toggleFavorite(i);
+      toast(now ? 'Pinned (kept by Quick Stack)' : 'Unpinned');
+      return;
+    }
     if (!rightClick && shiftHeld() && !cursorStack && s) {
       // with a chest open, shift moves between bag and chest; otherwise
       // it shuttles between the hotbar row and the bag rows
@@ -1133,6 +1517,23 @@
 
     const inv = getInv(true);
     if (!inv) return;
+
+    // inventory panel action buttons (Sort / Quick Stack / Split)
+    if (!rightClick) {
+      for (let i = 0; i < L.invButtons.length; i++) {
+        const b = L.invButtons[i];
+        if (!inRect(mx, my, b.rect)) continue;
+        if (b.id === 'sort') actSort(inv);
+        else if (b.id === 'stack') actQuickStack(inv);
+        else if (b.id === 'split') actSplit(inv);
+        return;
+      }
+      // craftable-only filter toggle
+      if (L.craftToggle && inRect(mx, my, L.craftToggle.rect)) {
+        craftShowAll = !craftShowAll;
+        return;
+      }
+    }
 
     // crafting rows
     if (!rightClick && L.craftCtx) {
@@ -1212,12 +1613,22 @@
     const mx = m.x | 0, my = m.y | 0;
     // clicked/rightClicked are latched by input.js for one frame, so a
     // press+release that lands entirely between two frames is still seen.
-    // While a dialog is visible the first click only dismisses it: the latch
-    // is swallowed here so it never reaches onClick; updateHover() also
+    // While a dialog is visible clicks are swallowed before reaching onClick:
+    // a shop-row click buys, anything else dismisses. updateHover() also
     // raises uiHover for the dialog's lifetime so player.js world actions
     // (held mining, RMB interact) stay suppressed.
     if (UI.dialog && (m.clicked || m.rightClicked)) {
-      UI.dialog = null;
+      let handled = false;
+      if (m.clicked && lastShop) {
+        for (let i = 0; i < lastShop.rows.length; i++) {
+          const row = lastShop.rows[i];
+          if (!inRect(mx, my, row.rect)) continue;
+          buyItem(row.entry);
+          handled = true;
+          break;
+        }
+      }
+      if (!handled) UI.dialog = null;
     } else {
       if (m.clicked) onClick(L, mx, my, false);
       if (m.rightClicked) onClick(L, mx, my, true);
@@ -1288,8 +1699,14 @@
     const showBreath = typeof br === 'number' && br < 1;
     breathT = clamp(breathT + (showBreath ? dt : -dt) / BREATH_FADE, 0, 1);
     if (UI.dialog) {
-      UI.dialog.t -= dt;
-      if (UI.dialog.t <= 0) UI.dialog = null;
+      // hovering the shop panel holds the dialog open so browsing/buying is
+      // not cut off by the auto-dismiss timer
+      const mp = mousePos();
+      const overShop = !!(lastShop && inRect(mp.x, mp.y, lastShop.panel));
+      if (!overShop) {
+        UI.dialog.t -= dt;
+        if (UI.dialog.t <= 0) UI.dialog = null;
+      }
     }
     for (let i = toasts.length - 1; i >= 0; i--) {
       toasts[i].life -= dt;
@@ -1299,7 +1716,7 @@
 
   UI.draw = function (ctx, w, h) {
     syncState();
-    const L = layout(w, h);
+    const L = layout(ctx, w, h);
     processInput(L);
 
     const m = mousePos();
@@ -1323,7 +1740,10 @@
     }
 
     drawTooltip(ctx, w, h);
-    if (TC.state === 'playing') drawDialog(ctx, w, h);   // NPC dialog, under toasts
+    if (TC.state === 'playing') {
+      drawDialog(ctx, w, h);             // NPC dialog, under toasts
+      drawShop(ctx, L.shop, mx, my);     // stock list under a shopkeeper's dialog
+    }
     drawToasts(ctx, w, h);
     drawCursorStack(ctx, mx, my);
     updateHover(L, mx, my);
