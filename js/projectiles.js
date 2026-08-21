@@ -11,6 +11,28 @@
    no changes. Projectiles are transient — not part of save data, same as
    the old arrow array. All cross-module calls are guarded.
 
+   Events: every successful spawn emits TC.Events.EVENT.ProjectileSpawned
+   with { type, x, y, angle } (guarded — a missing bus never blocks a shot).
+
+   Lighting hook: after each update(), TC.Projectiles.lights (same array via
+   getLights()) holds one { x, y, intensity, radius } entry for every live
+   projectile whose def.light > 0 plus decaying explosion flashes. A lighting
+   pass can consume it directly; entries are world-pixel coordinates.
+
+   Spawn options (per-call overrides of the TYPES def; all optional):
+     speed      launch speed px/s          dmg        damage (def fallback 5)
+     kb         knockback power            pierce     extra enemies (-1 infinite)
+     owner      tether/homing anchor       life       maxAge override in s
+     gravity    px/s^2 (ballistic)         bounce     initial tile-bounce budget
+     crit       crit-chance bonus 0..1     hitRadius  enemy-hit test radius px
+     accel      straight-motion accel      maxSpeed   straight-motion cap
+     color      '#rrggbb' render tint      colors     array (first entry used)
+   These align with magic.js weapon defs (speed/damage/knockback/pierce/life/
+   gravity/bounce/crit/accel/maxSpeed/colors) so magic weapons can delegate
+   onto 'magic_bolt', and with gear.js's falling_star usage. Per-spawn visual
+   style (orb/scythe/spark painters) is NOT pooled yet — delegation today
+   maps every bolt onto the standard bolt painter tinted by colors[0].
+
    Tuning lives in TYPES below. constants.js is lead-owned, so stable
    values should be promoted into TC.CONST.PROJECTILE by lead decision;
    wiring new items to these types needs ITEM_DEFS entries there too, e.g.
@@ -117,12 +139,13 @@
     }
   }
 
-  // Apply DMG_VARIANCE then CRIT_CHANCE double-damage roll. Shared with
-  // combat.js so melee and projectiles crit identically.
-  function rollDamage(base) {
+  // Apply DMG_VARIANCE then CRIT_CHANCE (+ per-projectile bonus) double-damage
+  // roll. Shared shape with combat.js/magic.js so melee, arrows and pooled
+  // projectiles crit identically.
+  function rollDamage(base, critBonus) {
     const v = TC.CONST.DMG_VARIANCE || 0;
     let d = base * (1 - v + Math.random() * 2 * v);
-    const crit = Math.random() < (TC.CONST.CRIT_CHANCE || 0);
+    const crit = Math.random() < ((TC.CONST.CRIT_CHANCE || 0) + (critBonus || 0));
     if (crit) d *= 2;
     return { dmg: Math.max(1, Math.round(d)), crit };
   }
@@ -131,14 +154,18 @@
     pBurst(x, y, 6, ['#ffd76a', '#e8a53a'], { speed: 110 });
   }
 
-  // Nearest living enemy center within range of (x, y), or null.
-  function nearestEnemy(x, y, range) {
+  // Nearest living enemy center within range of (x, y), or null. `skip`
+  // lists enemies to ignore — homing passes its projectile's hit list so a
+  // piercing bolt keeps flying toward fresh targets instead of U-turning
+  // back into one it already struck.
+  function nearestEnemy(x, y, range, skip) {
     if (!TC.Enemies || !TC.Enemies.list) return null;
     const list = TC.Enemies.list;
     let best = null, bestD2 = range * range;
     for (let i = 0; i < list.length; i++) {
       const e = list[i];
       if (!e || e.hp <= 0) continue;
+      if (skip && skip.indexOf(e) >= 0) continue;
       const dx = e.x + e.w / 2 - x, dy = e.y + e.h / 2 - y;
       const d2 = dx * dx + dy * dy;
       if (d2 < bestD2) { bestD2 = d2; best = e; }
@@ -156,7 +183,11 @@
       state: 0,        // motion phase: 0 out / 1 returning / 2 stuck
       timer: 0,        // secondary timer: rehit window, trail throttle
       spin: 0,         // visual rotation (boomerang, yoyo)
-      hits: []         // enemy refs already damaged by this projectile
+      hits: [],        // enemy refs already damaged by this projectile
+      // per-spawn overrides resolved in spawn() (def values when unset)
+      maxAge: 0, gravity: 0, accel: 0, maxSpeed: 0,
+      hitRadius: 10, critBonus: 0, color: null,
+      fire: false      // foreign decoration (gear.js molotov); reset on reuse
     };
   }
 
@@ -165,7 +196,11 @@
   let cursor = 0;          // rolling spawn scan start
   let liveCount = 0;
 
-  const lights = [];       // lighting hook: [{x,y,intensity,radius}] per frame
+  // Lighting hook: rebuilt every update(). Each entry is
+  //   { x, y, intensity 0..1+, radius px } in world pixels — one per live
+  //  projectile with def.light > 0, plus decaying explosion flashes.
+  // getLights() hands back the same live array for a lighting pass to consume.
+  const lights = [];
   const flashes = [];      // transient explosion flashes feeding `lights`
   const viewScratch = [];  // reused by viewOf()
 
@@ -178,8 +213,10 @@
 
   // ---- spawning ----
   // Spawn projectile `type` from (x, y) along `angle` (radians). opts:
-  //   { speed, dmg, kb, pierce, owner }. Returns the pooled projectile or
-  //   null when the pool is exhausted or the type is unknown.
+  //   { speed, dmg, kb, pierce, owner, life, gravity, bounce, crit,
+  //     hitRadius, accel, maxSpeed, color, colors } — see the header table.
+  // Returns the pooled projectile or null when the pool is exhausted or the
+  // type is unknown.
   function spawn(type, x, y, angle, opts) {
     const def = TYPES[type];
     if (!def) return null;
@@ -203,10 +240,28 @@
     p.dmg = (typeof o.dmg === 'number' && o.dmg > 0) ? o.dmg : (def.dmg || 5);
     p.kb = (typeof o.kb === 'number') ? o.kb : (def.kb || 3);
     p.pierce = (typeof o.pierce === 'number') ? o.pierce : (def.pierce || 0);
-    p.bounces = def.bounce || 0;
+    p.bounces = (typeof o.bounce === 'number' && o.bounce > 0) ? o.bounce : (def.bounce || 0);
     p.owner = (o.owner !== undefined) ? o.owner : (TC.player || null);
+    // per-spawn overrides (def value when unset); slots are recycled, so
+    // every one of these is re-resolved on each spawn — nothing leaks across
+    // lives, including foreign decorations like gear.js's `fire` flag.
+    p.maxAge = (typeof o.life === 'number' && o.life > 0) ? o.life : (def.maxAge || 3);
+    p.gravity = (typeof o.gravity === 'number') ? o.gravity : (def.gravity || 0);
+    p.accel = (typeof o.accel === 'number') ? o.accel : (def.accel || 0);
+    p.maxSpeed = (typeof o.maxSpeed === 'number') ? o.maxSpeed : (def.maxSpeed || 0);
+    p.hitRadius = (typeof o.hitRadius === 'number' && o.hitRadius > 0)
+      ? o.hitRadius : (def.hitRadius || 10);
+    p.critBonus = (typeof o.crit === 'number' && o.crit > 0) ? o.crit : 0;
+    p.color = (typeof o.color === 'string' && o.color) ? o.color
+            : (Array.isArray(o.colors) && typeof o.colors[0] === 'string') ? o.colors[0]
+            : def.color;
+    p.fire = false;
     p.hits.length = 0;
     liveCount++;
+    if (TC.Events && typeof TC.Events.emit === 'function' &&
+        TC.Events.EVENT && TC.Events.EVENT.ProjectileSpawned) {
+      try { TC.Events.emit(TC.Events.EVENT.ProjectileSpawned, { type: type, x: x, y: y, angle: angle }); } catch (e) {}
+    }
     return p;
   }
 
@@ -256,7 +311,7 @@
   // Radial damage with linear falloff, particles, flash + light hook.
   // Deliberately hits enemies only (no player damage, no tile destruction —
   // world.set cascades are too risky from a projectile pass).
-  function detonate(cx, cy, dmg, kb, ex) {
+  function detonate(cx, cy, dmg, kb, ex, critBonus) {
     const radius = ex ? ex.radius : 48;
     const mul = ex ? ex.dmgMul : 1;
 
@@ -269,7 +324,7 @@
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist > radius + Math.max(e.w, e.h) / 2) continue;
         const falloff = 1 - clamp(dist / radius, 0, 1) * 0.6;
-        const roll = rollDamage(dmg * mul * falloff);
+        const roll = rollDamage(dmg * mul * falloff, critBonus);
         TC.Enemies.damageEnemy(e, roll.dmg, dx >= 0 ? 1 : -1, kb, roll.crit);
       }
     }
@@ -281,7 +336,7 @@
   }
 
   function explode(p) {
-    detonate(p.x, p.y, p.dmg, p.kb, p.def.explode);
+    detonate(p.x, p.y, p.dmg, p.kb, p.def.explode, p.critBonus);
     deactivate(p);
   }
 
@@ -310,10 +365,10 @@
       const e = list[i];
       if (!e || e.hp <= 0) continue;
       if (p.hits.indexOf(e) >= 0) continue;
-      if (distToRect(tx, ty, e.x, e.y, e.w, e.h) > p.def.hitRadius) continue;
+      if (distToRect(tx, ty, e.x, e.y, e.w, e.h) > p.hitRadius) continue;
 
       if (p.type === 'grenade') { explode(p); return; }   // contact detonation
-      const roll = rollDamage(p.dmg);
+      const roll = rollDamage(p.dmg, p.critBonus);
       TC.Enemies.damageEnemy(e, roll.dmg, p.vx >= 0 ? 1 : -1, p.kb, roll.crit);
       p.hits.push(e);
 
@@ -328,7 +383,7 @@
 
   // ---- per-type motion ----
   function stepBallistic(p, dt) {
-    p.vy += (p.def.gravity || 0) * dt;
+    p.vy += p.gravity * dt;
     moveWithTiles(p, dt);
   }
 
@@ -339,7 +394,7 @@
       return;
     }
     if (p.def.homing > 0) {
-      const target = nearestEnemy(p.x, p.y, p.def.homingRange || 140);
+      const target = nearestEnemy(p.x, p.y, p.def.homingRange || 140, p.hits);
       if (target) {
         const cur = Math.atan2(p.vy, p.vx);
         let da = Math.atan2(target.y + target.h / 2 - p.y,
@@ -351,6 +406,12 @@
         p.vx = Math.cos(cur + turn) * spd;
         p.vy = Math.sin(cur + turn) * spd;
       }
+    }
+    if (p.accel > 0) {                            // scythe-style speed-up along heading
+      const sp = Math.sqrt(p.vx * p.vx + p.vy * p.vy) || 1;
+      const ns = Math.min(p.maxSpeed || sp, sp + p.accel * dt);
+      p.vx = p.vx / sp * ns;
+      p.vy = p.vy / sp * ns;
     }
     moveWithTiles(p, dt);
   }
@@ -392,7 +453,7 @@
   function stepBoomerang(p, dt) {
     if (p.state === 0) {                          // outbound: decelerate
       const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
-      const next = spd - (p.def.accel || 900) * dt;
+      const next = spd - (p.accel || 900) * dt;
       if (next <= 40) {
         p.state = 1;                              // stall: come back
         p.hits.length = 0;                        // can hit again on return
@@ -408,7 +469,7 @@
       const dy = owner.y + owner.h / 2 - p.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
       const spd = Math.min((p.def.speed || 330) * 1.15,
-                           Math.sqrt(p.vx * p.vx + p.vy * p.vy) + (p.def.accel || 900) * dt);
+                           Math.sqrt(p.vx * p.vx + p.vy * p.vy) + (p.accel || 900) * dt);
       p.vx = dx / dist * spd;
       p.vy = dy / dist * spd;
       p.x += p.vx * dt;
@@ -431,8 +492,8 @@
 
       // lifetime / fuse (yoyo maxAge is a wedge-safety net only)
       if (p.type === 'grenade') {
-        if (p.age >= def.maxAge) { explode(p); continue; }
-      } else if (p.age > def.maxAge) {
+        if (p.age >= p.maxAge) { explode(p); continue; }
+      } else if (p.age > p.maxAge) {
         deactivate(p);
         continue;
       }
@@ -462,7 +523,7 @@
       // glowing trails (throttled; timer stays owned by the motion code)
       if (def.light > 0 && p.state !== 2) {
         if (Math.random() < 0.35) {
-          pBurst(p.x, p.y, 1, [def.color, '#ffffff'],
+          pBurst(p.x, p.y, 1, [p.color, '#ffffff'],
             { speed: 18, life: 0.3, size: 2, gravity: 0 });
         }
       }
@@ -522,7 +583,7 @@
   }
 
   function drawGlow(c, p) {
-    const col = p.def.color;
+    const col = p.color || p.def.color;
     const r = 9 + p.def.light * 22;
     c.save();
     c.globalCompositeOperation = 'lighter';
@@ -541,7 +602,7 @@
     c.save();
     c.translate(p.x, p.y);
     c.rotate(ang);
-    c.fillStyle = p.def.color;
+    c.fillStyle = p.color || p.def.color;
     c.beginPath();
     c.ellipse(0, 0, 8, 3.2, 0, 0, TAU);
     c.fill();
@@ -565,7 +626,7 @@
     c.save();
     c.translate(p.x, p.y);
     c.rotate(p.spin);
-    c.fillStyle = p.def.color;
+    c.fillStyle = p.color || p.def.color;
     c.beginPath();
     c.arc(0, 0, 7, 0, TAU);
     c.fill();
@@ -586,7 +647,7 @@
     c.save();
     c.translate(p.x, p.y);
     c.rotate(p.spin);
-    c.fillStyle = p.def.color;
+    c.fillStyle = p.color || p.def.color;
     c.fillRect(-11, -2.5, 22, 5);                // two crossed wooden arms
     c.fillRect(-2.5, -11, 5, 22);
     c.fillStyle = '#c99b62';                     // leading-edge highlight
@@ -596,7 +657,7 @@
   }
 
   function drawGrenade(c, p) {
-    c.fillStyle = p.def.color;
+    c.fillStyle = p.color || p.def.color;
     c.beginPath();
     c.arc(p.x, p.y, 5, 0, TAU);
     c.fill();
@@ -617,7 +678,7 @@
     c.save();
     c.translate(p.x, p.y);
     // streak opposite travel
-    c.strokeStyle = hexA(p.def.color, 0.55);
+    c.strokeStyle = hexA(p.color || p.def.color, 0.55);
     c.lineWidth = 2;
     c.beginPath();
     c.moveTo(-Math.cos(ang) * 16, -Math.sin(ang) * 16);
@@ -643,7 +704,7 @@
     c.save();
     c.translate(p.x, p.y);
     c.rotate(ang);
-    c.strokeStyle = hexA(p.def.color, 0.5);      // energy trail
+    c.strokeStyle = hexA(p.color || p.def.color, 0.5);      // energy trail
     c.lineWidth = 2;
     c.beginPath();
     c.moveTo(-14, 0);
@@ -651,7 +712,7 @@
     c.stroke();
     c.fillStyle = '#d8d8e2';
     c.fillRect(-4, -1.5, 8, 3);                  // needle body
-    c.fillStyle = p.def.color;
+    c.fillStyle = p.color || p.def.color;
     c.fillRect(4, -1.5, 3, 3);                   // tip
     c.restore();
   }
@@ -737,16 +798,23 @@
     cursor = 0;
   }
 
+  // Canonical "wipe every projectile" entry point (world transitions,
+  // player death). Alias of clear(); kept as a distinct name so callers can
+  // express intent and legacy arrow arrays can be flushed alongside.
+  const clearAll = clear;
+
   TC.Projectiles = {
     MAX: MAX_PROJECTILES,
     pool: pool,
     list: pool,          // parity with Enemies.list; entries carry .active
     TYPES: TYPES,
-    lights: lights,      // dynamic-light hook for a future lighting pass
+    lights: lights,      // dynamic-light hook; prefer getLights()
+    getLights: function () { return lights; },
     spawn: spawn,
     update: update,
     draw: draw,
     clear: clear,
+    clearAll: clearAll,
     activeCount: activeCount,
     viewOf: viewOf,
     rollDamage: rollDamage,

@@ -1,41 +1,90 @@
 /* loot.js — TC.Loot: breakable pots, life crystals, and treasure.
 
-   Owns exactly this file. constants.js / main.js / index.html are lead-owned,
-   so this module EXTENDS the shared tables at load time and PATCHES existing
-   prototypes/functions at runtime instead of editing them (same pattern as
-   wiring.js / accessories.js):
+   Owns exactly this file. Foundation-contract edition: NO monkey patching.
+   This module EXTENDS the shared tables at load time (constants.js /
+   main.js / index.html are lead-owned), subscribes to TC.Events for
+   reactions, registers a TC.SaveCore provider for persistence, and exposes
+   plain functions the lead calls from the game loop / useHeld switch.
 
    - Table extensions (promote into constants.js when convenient):
      TC.TILE:      POT, LIFE_CRYSTAL
      TC.TILE_DEFS: matching defs appended
      TC.ITEM_DEFS: pot (placeable), life_crystal (kind 'crystal'), heart
 
-   - Runtime hooks (all guarded + idempotent):
-     WorldGen.generate          -> deterministic post-pass: pots sprinkled on
-                                   underground cave floors (~1 per 90 candidate
-                                   tiles, cap 400), ~25 life crystals below
-                                   y=200, and generated CHEST tiles pre-filled
-                                   with loot keyed by position hash
-     World.prototype.applyMineDamage -> breaking a POT scatters small loot;
-                                   completes the break for POT/LIFE_CRYSTAL if
-                                   wiring.js's global shim is absent
-     World.prototype.draw       -> paints POT / LIFE_CRYSTAL (their patterns are
-                                   unknown to tiles.js, which renders them blank)
-     Items.iconFor              -> procedural icons for pot / life_crystal / heart
-     Player.prototype.useHeld   -> kind 'crystal' consumable: +20 maxHp, cap 400
-     Player.prototype.update    -> crystal cooldown + maxHp floor maintenance
-     Player.prototype.serialize / Player.deserialize -> persists lifeCrystals
-                                  (player.js's own blob has no maxHp field)
-     Accessories.modsOf         -> folds the crystal HP bonus into the gear-mod
-                                   sum so accessories.js syncMaxHp never clobbers it
-     newGame                    -> TC.Loot.reset()
+   - Exposed surface:
+     TC.Loot.reset()                    zero the stats counters (fresh world)
+     TC.Loot.stats                      { potsBroken, crystalsUsed }
+     TC.Loot.populateWorld(gen, seed)   deterministic worldgen post-pass:
+                                        pots sprinkled on underground cave
+                                        floors (~1 per 90 candidate tiles, cap
+                                        400), ~25 life crystals below y=200,
+                                        generated CHEST tiles pre-filled with
+                                        position-hash loot. Call from
+                                        buildWorld right after
+                                        WorldGen.generate; `seed` falls back
+                                        to TC.worldSeed when omitted. Returns
+                                        gen. Decoration only — never throws.
+     TC.Loot.onTileBroken(tx, ty)       scatter pot loot for one broken POT.
+                                        Exactly one path per break: either
+                                        call this directly from your break
+                                        completion OR rely on the built-in
+                                        TileBroken subscription below — never
+                                        both (double scatter).
+     TC.Loot.onUseHeld(player, def, dt) -> bool
+                                        true when def.kind is 'crystal' and
+                                        the use was fully handled (at the HP
+                                        cap it swings + cooldowns without
+                                        consuming — still true).
+     TC.Loot.update(player, dt)         crystal cooldown tick + maxHp floor
+                                        maintenance (covers sessions where
+                                        accessories.js is absent). Call once
+                                        per frame after player.update.
+     TC.Loot.drawTiles(ctx, cam, world) world-space overlay painting POT /
+                                        LIFE_CRYSTAL (tiles.js renders their
+                                        patterns blank). Call after
+                                        TC.world.draw while the camera
+                                        transform is active.
+     TC.Loot.iconFor(id) -> canvas|null hand-painted 16px icons for pot /
+                                        life_crystal / heart; null otherwise.
+     TC.Loot.crystalBonus(player)       flat maxHp granted by the player's
+                                        crystal count (cap 15 * 20). Fold this
+                                        into accessory mod sums so
+                                        accessories.js syncMaxHp keeps the
+                                        crystal gains instead of clobbering
+                                        them each frame.
+     TC.SaveCore 'character.core.loot'  provider persisting
+                                        { lifeCrystals, hp } from/to the live
+                                        player object (field player.lifeCrystals
+                                        unchanged); deserialize re-raises
+                                        maxHp then re-clamps hp, mirroring the
+                                        old Player.deserialize wrap.
 
-   REQUIRES one line in index.html (lead-owned, not added here), AFTER
-   js/worldgen.js and BEFORE js/main.js — directly under the worldgen tag:
-     <script src="js/worldgen.js"></script>
-     <script src="js/loot.js"></script>
+   - Event wiring (guarded; no-ops when the bus is absent):
+     TileBroken   -> pot loot scatter (payload.tile === POT)
+     WorldLoaded  -> reset()
+     WorldProgressChanged <- emitted on each life crystal consumed
 
-   Exposed API: TC.Loot.{reset, populateChest, stats}. */
+   INTEGRATION (one line each, lead-owned files):
+     main.js buildWorld(), right after `const gen = ...` generate call:
+       if (TC.Loot) TC.Loot.populateWorld(gen, seed);
+     main.js step(), after `TC.player.update(dt)`:
+       if (TC.Loot && TC.player) TC.Loot.update(TC.player, dt);
+     main.js draw(), after `TC.world.draw(ctx, cam)`:
+       if (TC.Loot) TC.Loot.drawTiles(ctx, cam, TC.world);
+     main.js newGame(): if (TC.Loot) TC.Loot.reset();
+     player.js useHeld(), after resolving sel/def and BEFORE the kind switch:
+       if (TC.Loot && def && TC.Loot.onUseHeld(this, def, dt)) return;
+     items.js iconFor(), before its own painters:
+       const gic = (TC.Gear && TC.Gear.iconFor(key)) ||
+                   (TC.Loot && TC.Loot.iconFor(key));
+       if (gic) return gic;
+     accessories.js combinedMods(), after summing gear/buff mods:
+       m.maxHp += (TC.Loot && TC.Loot.crystalBonus) ?
+         TC.Loot.crystalBonus(player) : 0;
+
+   Pot/crystal break COMPLETION (writing AIR) is upstream's job now — the
+   MineTile command / migrated doMine tail does it and emits TileBroken; this
+   module no longer patches applyMineDamage to compensate. */
 'use strict';
 (function () {
   const TC = window.TC = window.TC || {};
@@ -155,6 +204,13 @@
       ? TC.Utils.hash2(x, y, s) : 0.5;
   }
 
+  // Observation only; a missing or misbehaving bus never breaks gameplay.
+  function emit(name, payload) {
+    if (TC.Events && TC.Events.EVENT && typeof TC.Events.emit === 'function') {
+      try { TC.Events.emit(name, payload); } catch (e) {}
+    }
+  }
+
   // Remove n of id from a slot; tolerates slot-index or id-based removal.
   function consumeFromSlot(p, slotIdx, id, n) {
     const inv = p.inventory;
@@ -175,6 +231,8 @@
   // Life crystals — use path + persistence + maxHp maintenance
   // ======================================================================
 
+  // Flat maxHp the player's crystal count grants (exported accessor: fold
+  // into accessory/buff mod sums so syncMaxHp keeps the crystal gains).
   function crystalBonus(p) {
     return Math.min(p.lifeCrystals | 0, CRYSTAL_MAX_USES) * CRYSTAL_STEP;
   }
@@ -212,6 +270,27 @@
     pBurst(cx, p.y + p.h / 2, 10, ['#e23b48', '#ff8a94', '#ffffff'], 90);
     floatText(cx, p.y - 6, '+' + CRYSTAL_STEP + ' max HP', healCol);
     swing();
+    emit(TC.Events.EVENT.WorldProgressChanged,
+      { kind: 'lifeCrystal', lifeCrystals: p.lifeCrystals, maxHp: p.maxHp });
+  }
+
+  // Lead-facing hook (was a Player.prototype.useHeld wrap): fully handles one
+  // use of a kind 'crystal' item. True = the vanilla switch must not run.
+  function onUseHeld(player, def, dt) {
+    if (!player || !def || def.kind !== 'crystal') return false;
+    const sel = (typeof player.selectedSlot === 'function') ? player.selectedSlot() : null;
+    const itemId = (sel && TC.ITEM_DEFS && TC.ITEM_DEFS[sel.id] === def) ? sel.id : null;
+    if (!itemId) return false;
+    useLifeCrystal(player, itemId);            // dt unused: uses are click-paced
+    return true;
+  }
+
+  // Per-frame maintenance (was a Player.prototype.update wrap): cooldown tick
+  // + keep maxHp at the crystal floor when no accessory sync would.
+  function update(player, dt) {
+    if (!player || !(dt > 0)) return;
+    if ((player._crystalCd || 0) > 0) player._crystalCd -= dt;
+    ensureCrystalHp(player);
   }
 
   // ======================================================================
@@ -239,6 +318,13 @@
     }
     sfx('break');
     pBurst(cx, cy, 10, ['#b3623a', '#8a4626', '#5f2f18'], 120);
+  }
+
+  // Lead-facing hook for one broken POT tile. Prefer the built-in TileBroken
+  // subscription (below) over calling this directly — exactly one path per
+  // break, or the loot scatters twice.
+  function onTileBroken(tx, ty) {
+    breakPot(tx | 0, ty | 0);
   }
 
   // ======================================================================
@@ -275,6 +361,8 @@
 
   // ======================================================================
   // Worldgen post-pass — sprinkle pots + crystals, fill generated chests
+  // (was a WorldGen.generate wrap; the lead calls populateWorld(gen, seed)
+  // from buildWorld instead)
   // ======================================================================
 
   // Partial Fisher-Yates over spot indices; writes id into the picked cells.
@@ -324,23 +412,18 @@
     }
   }
 
-  function patchWorldGen() {
-    if (!TC.WorldGen || typeof TC.WorldGen.generate !== 'function') return;
-    if (TC.WorldGen.__lootWrapped || TC.WorldGen.generate.__lootWrapped) return;
-    const orig = TC.WorldGen.generate;
-    const wrapped = function (seed) {
-      const gen = orig.apply(this, arguments);
-      try { sprinkle(gen, seed | 0); } catch (e) {}   // decoration only, never fatal
-      return gen;
-    };
-    wrapped.__lootWrapped = true;
-    TC.WorldGen.__lootWrapped = true;
-    TC.WorldGen.generate = wrapped;
+  // Deterministic post-pass over a freshly generated world. Decoration only:
+  // a failure here must never fail worldgen (same contract as the old wrap).
+  function populateWorld(gen, seed) {
+    if (seed == null) seed = (typeof TC.worldSeed === 'number') ? TC.worldSeed : 0;
+    try { sprinkle(gen, seed | 0); } catch (e) {}
+    return gen;
   }
 
   // ======================================================================
   // Rendering — POT / LIFE_CRYSTAL overlay (tiles.js leaves unknown patterns
-  // blank inside chunk canvases, so these draw after World.draw each frame)
+  // blank inside chunk canvases, so these draw after World.draw each frame;
+  // lead calls drawTiles(ctx, cam, world) under the camera transform)
   // ======================================================================
 
   function rect(g, style, x, y, w, h) { g.fillStyle = style; g.fillRect(x, y, w, h); }
@@ -394,7 +477,8 @@
   }
 
   // ======================================================================
-  // Item icons — hand-painted 16px canvases for the ids added above
+  // Item icons — hand-painted 16px canvases for the ids added above; the
+  // lead's items.js iconFor consults TC.Loot.iconFor first.
   // ======================================================================
 
   const ICON_PAINTERS = {
@@ -416,105 +500,45 @@
     }
   };
 
-  function patchIcons() {
-    if (!TC.Items || typeof TC.Items.iconFor !== 'function' ||
-        TC.Items.iconFor.__lootIcons) return;
-    const orig = TC.Items.iconFor;
-    const cache = new Map();
-    const wrapped = function (id) {
-      const paint = id && ICON_PAINTERS[id];
-      if (paint) {
-        let cv = cache.get(id);
-        if (!cv) {
-          cv = document.createElement('canvas');
-          cv.width = 16;
-          cv.height = 16;
-          paint(cv.getContext('2d'));
-          cache.set(id, cv);
-        }
-        return cv;
-      }
-      return orig.call(TC.Items, id);
-    };
-    wrapped.__lootIcons = true;
-    TC.Items.iconFor = wrapped;
+  const iconCache = new Map();
+
+  // Canvas for a loot item id, or null when the id is not ours.
+  function iconFor(id) {
+    const paint = id && ICON_PAINTERS[id];
+    if (!paint) return null;
+    let cv = iconCache.get(id);
+    if (!cv) {
+      cv = document.createElement('canvas');
+      cv.width = 16;
+      cv.height = 16;
+      paint(cv.getContext('2d'));
+      iconCache.set(id, cv);
+    }
+    return cv;
   }
 
   // ======================================================================
-  // Runtime patches (guarded, idempotent)
+  // Persistence — SaveCore provider (was Player.serialize/deserialize wraps).
+  // The live field stays player.lifeCrystals; the provider mirrors it into
+  // the envelope and restores it (re-raising maxHp, then re-clamping hp
+  // against the raised cap — the vanilla deserialize clamps hp to the
+  // default maxHp first, so restore must run after player creation).
   // ======================================================================
 
-  function mark(fn) { fn.__lootWrap = true; return fn; }
-
-  function patchWorld() {
-    const WP = TC.World && TC.World.prototype;
-    if (!WP || WP.__lootPatched) return;
-    WP.__lootPatched = true;
-
-    // Pot loot + break completion for our two tiles. wiring.js's global shim
-    // normally writes AIR for any broken tile; this scoped fallback keeps pots
-    // and crystals working when wiring.js is absent.
-    const origAmd = WP.applyMineDamage;
-    WP.applyMineDamage = function (tx, ty, amt) {
-      const i = this.inB(tx, ty) ? this.idx(tx, ty) : -1;
-      const id = i >= 0 ? this.tiles[i] : -1;
-      const broke = origAmd.call(this, tx, ty, amt);
-      if (broke && (id === T.POT || id === T.LIFE_CRYSTAL)) {
-        if (i >= 0 && this.tiles[i] !== T.AIR) {
-          try { this.set(tx, ty, T.AIR); } catch (e) {}
-        }
-        if (id === T.POT) breakPot(tx, ty);
-        // LIFE_CRYSTAL's item drop flows through the vanilla td.drop path.
-      }
-      return broke;
-    };
-
-    // Overlay render chained onto the world's own draw (camera already applied).
-    const origDraw = WP.draw;
-    WP.draw = function (ctx, cam) {
-      origDraw.call(this, ctx, cam);
-      try { drawLootTiles(ctx, cam, this); } catch (e) {}
-    };
-  }
-
-  function patchPlayer() {
-    const PP = TC.Player && TC.Player.prototype;
-    if (!PP || PP.__lootPatched) return;
-    PP.__lootPatched = true;
-
-    // kind 'crystal' consumables short-circuit the normal use switch.
-    const origUseHeld = PP.useHeld;
-    PP.useHeld = function (dt) {
-      const sel = (typeof this.selectedSlot === 'function') ? this.selectedSlot() : null;
-      const def = (sel && TC.ITEM_DEFS) ? TC.ITEM_DEFS[sel.id] : null;
-      if (def && def.kind === 'crystal') { useLifeCrystal(this, sel.id); return; }
-      return origUseHeld.call(this, dt);
-    };
-
-    // Cooldown tick + keep maxHp at the crystal floor (covers sessions where
-    // accessories.js is absent; with it present both agree on the same value).
-    const origUpdate = PP.update;
-    PP.update = function (dt) {
-      if ((this._crystalCd || 0) > 0) this._crystalCd -= dt;
-      ensureCrystalHp(this);
-      return origUpdate.call(this, dt);
-    };
-
-    // Persist the crystal count alongside the rest of the player blob.
-    const origSerialize = PP.serialize;
-    PP.serialize = function () {
-      const data = origSerialize ? origSerialize.call(this) : {};
-      if (data && typeof data === 'object') data.lifeCrystals = this.lifeCrystals | 0;
-      return data;
-    };
-
-    // Restore crystals, re-raise maxHp, then re-clamp hp against the raised cap
-    // (the vanilla deserialize clamps hp to the default maxHp first).
-    if (typeof TC.Player.deserialize === 'function' && !TC.Player.deserialize.__lootWrap) {
-      const origDeserialize = TC.Player.deserialize;
-      TC.Player.deserialize = mark(function (data) {
-        const p = origDeserialize.call(this, data);
-        if (p && data && typeof data === 'object') {
+  if (TC.SaveCore && typeof TC.SaveCore.register === 'function') {
+    try {
+      TC.SaveCore.register('character.core.loot', {
+        version: 1,
+        serialize(ctx) {
+          const p = ctx ? ctx.player : null;
+          return {
+            lifeCrystals: p ? (p.lifeCrystals | 0) : 0,
+            hp: p ? p.hp : 0
+          };
+        },
+        deserialize(data, ctx) {
+          const p = ctx ? ctx.player : null;
+          if (!p || !data || typeof data !== 'object') return;
           const n = data.lifeCrystals;
           p.lifeCrystals = (typeof n === 'number' && isFinite(n))
             ? Math.max(0, Math.min(n | 0, CRYSTAL_MAX_USES)) : 0;
@@ -524,58 +548,33 @@
             p.hp = Math.min(p.maxHp, Math.max(1, hp));
           }
         }
-        return p;
       });
+    } catch (e) {
+      console.warn('[TC.Loot] SaveCore provider refused:', e && e.message);
     }
   }
 
-  // Fold the crystal bonus into the accessory/buff mod sum so accessories.js's
-  // syncMaxHp (want = PLAYER_HP + mods.maxHp) keeps the crystal gains instead
-  // of resetting maxHp to the gear-only value every frame.
-  function hookAccessories() {
-    const Acc = TC.Accessories;
-    if (!Acc || typeof Acc.modsOf !== 'function' ||
-        (Acc.modsOf.__lootWrap)) return;
-    const origModsOf = Acc.modsOf;
-    Acc.modsOf = mark(function (player) {
-      const m = origModsOf.call(this, player);
-      if (m && player && player.lifeCrystals) m.maxHp += crystalBonus(player);
-      return m;
+  // ======================================================================
+  // Event wiring — reactions only, installed once at load (guarded).
+  // ======================================================================
+
+  if (TC.Events && TC.Events.EVENT && typeof TC.Events.on === 'function') {
+    // Pot loot rides the canonical break event (commands.js MineTile emits
+    // it after break completion). Do NOT also call onTileBroken by hand.
+    TC.Events.on(TC.Events.EVENT.TileBroken, function (p) {
+      if (p && p.tile === T.POT) onTileBroken(p.tx, p.ty);
     });
-  }
-
-  function patchFlow() {
-    if (typeof TC.newGame === 'function' && !TC.newGame.__lootWrap) {
-      const origNew = TC.newGame;
-      TC.newGame = mark(function (seed) {
-        const r = origNew.call(TC, seed);
-        reset();                                 // fresh world: fresh loot stats
-        return r;
-      });
-    }
+    // Fresh world: fresh loot stats (reset() stays public for direct calls).
+    TC.Events.on(TC.Events.EVENT.WorldLoaded, function () { reset(); });
   }
 
   // ======================================================================
-  // Install — prototype patches need all sibling scripts loaded, so defer to
-  // DOMContentLoaded when loot.js sits before them (sync scripts have all run
-  // by then). Same approach as wiring.js.
+  // Public API
   // ======================================================================
 
-  function install() {
-    patchWorldGen();
-    patchWorld();
-    patchPlayer();
-    patchIcons();
-    hookAccessories();
-    patchFlow();
-  }
-
-  patchWorldGen();   // worldgen.js precedes this file per the required placement
-  if (typeof document === 'undefined' || document.readyState !== 'loading') {
-    install();
-  } else {
-    document.addEventListener('DOMContentLoaded', install);
-  }
-
-  TC.Loot = { reset, populateChest, stats };
+  TC.Loot = {
+    reset, stats, populateChest, populateWorld,
+    onTileBroken, onUseHeld, update,
+    drawTiles: drawLootTiles, iconFor, crystalBonus
+  };
 })();

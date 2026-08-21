@@ -407,6 +407,8 @@
       const cx = this.x + this.w / 2;
       if (isFinite(m.worldX)) this.facing = m.worldX >= cx ? 1 : -1;
       if (!def) { this.mineTarget = null; return; }
+      if (TC.Gear && TC.Gear.onUseHeld(this, def, dt)) return;
+      if (TC.Loot && TC.Loot.onUseHeld(this, def, dt)) return;
       switch (def.kind) {
         case 'tool': this.doMine(def, m, dt); break;
         case 'block': this.mineTarget = null; this.doPlace(def, sel.id, m); break;

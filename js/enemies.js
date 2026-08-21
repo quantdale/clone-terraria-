@@ -183,7 +183,9 @@
   }
   function zoneTable(zone, pcol) {
     const C = TC.CONST;
-    const base = (C.SPAWN && C.SPAWN[zone]) || [];
+    const bio = (TC.Biomes && typeof TC.Biomes.getSpawnOverride === 'function')
+      ? TC.Biomes.getSpawnOverride() : null;
+    const base = (bio && zone !== 'cave') ? bio : ((C.SPAWN && C.SPAWN[zone]) || []);
     if (zone === 'night' && bloodMoon) return BLOOD_MOON_TABLE;
     const extra = (EXTRA_SPAWN[zone] || []).filter(function (entry) {
       const def = TC.ENEMY_DEFS[entry[0]];
@@ -690,6 +692,9 @@
     if (e.def.ai === 'skeletron' && e.handsAlive > 0) final *= 0.35;
     final = Math.max(1, Math.round(final - (e.def.defense || 0)));
     e.hp -= final;
+    if (TC.Events) {
+      try { TC.Events.emit(TC.Events.EVENT.EntityDamaged, { type: e.type, dmg: final, crit: !!crit, hp: e.hp }); } catch (err) {}
+    }
     e.flashTimer = FLASH_TIME;
     const resist = 1 - (e.def.kbResist || 0);
     if (resist > 0) {
@@ -714,6 +719,12 @@
     const i = list.indexOf(e);
     if (i >= 0) list.splice(i, 1);
     const cx = e.x + e.w / 2, cy = e.y + e.h / 2;
+    if (TC.Events) {
+      try { TC.Events.emit(TC.Events.EVENT.EntityKilled, { type: e.type, x: cx, y: cy, boss: !!e.def.boss }); } catch (err) {}
+      if (e.def.boss) {
+        try { TC.Events.emit(TC.Events.EVENT.BossDefeated, { type: e.type }); } catch (err2) {}
+      }
+    }
     if (TC.Particles) {
       if (e.def.boss) {
         TC.Particles.burst(cx, cy, 60, {

@@ -631,6 +631,9 @@
     const key = String(id);
     let cv = iconCache.get(key);
     if (cv) return cv;
+    const gic = (TC.Gear && TC.Gear.iconFor && TC.Gear.iconFor(key)) ||
+                (TC.Loot && TC.Loot.iconFor && TC.Loot.iconFor(key));
+    if (gic) { iconCache.set(key, gic); return gic; }
     cv = document.createElement('canvas');
     cv.width = ICON;
     cv.height = ICON;

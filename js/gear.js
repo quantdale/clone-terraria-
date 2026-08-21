@@ -2,32 +2,49 @@
    TC.Projectiles pool (yoyos, boomerangs, grenades) plus night falling
    stars that occasionally shed a fallen_star material drop.
 
-   Owns exactly this file. constants.js / main.js / index.html are lead-owned,
-   so this module EXTENDS the shared tables at load time and PATCHES existing
-   prototypes/functions at runtime instead of editing them (same pattern as
-   wiring.js):
+   Owns exactly this file. Foundation-contract edition: NO monkey patching.
+   This module only EXTENDS the shared tables at load time and registers its
+   content ids with TC.Registry; every former runtime wrap is now a plain
+   exported function the lead calls from the game loop / useHeld switch.
 
    - Table extensions (promote into constants.js when convenient):
      TC.ITEM_DEFS: wooden_yoyo, metal_yoyo, wooden_boomerang, grenade,
                    fire_grenade, flint, fallen_star
      TC.RECIPES:   workbench/anvil recipes for all of the above
-   - Runtime hooks (all guarded + idempotent):
-     Player.prototype.useHeld -> kind 'yoyo'/'boomerang'/'grenade' throws via
-                                 TC.Projectiles.spawn (one live yoyo per
-                                 player, consumable grenades, useTime swings)
-     TC.Combat.update         -> per-frame tick: night falling-star spawner +
-                                 death watchers (star drops, ember bursts)
-     TC.Projectiles.draw      -> molotov flame overlay on fire-tagged grenades
-     Items.iconFor            -> procedural icons for the new ids only
 
-   REQUIRES one line in index.html (lead-owned, not added here), AFTER
-   js/projectiles.js and BEFORE js/main.js. Put it directly before main.js
-   so js/combat.js (whose update is wrapped for the star tick) has loaded:
+   - Exposed surface:
+     TC.Gear.defs                       snapshot of the gear ITEM_DEFS entries
+     TC.Gear.reset()                    clear watchers + star cadence (safe on
+                                        title screens; update() also self-heals
+                                        on world switches)
+     TC.Gear.update(dt)                 per-frame tick: projectile death
+                                        watchers + night falling-star spawner.
+                                        Call AFTER TC.Combat.update so freshly
+                                        spent pool slots are seen as dead.
+     TC.Gear.draw(ctx, cam)             world-space molotov overlay on
+                                        fire-tagged grenades. Call right after
+                                        TC.Combat.draw (camera transform is
+                                        applied inside, like the old wrap).
+     TC.Gear.onUseHeld(player, def, dt) -> bool
+                                        true when def.kind is 'yoyo' /
+                                        'boomerang' / 'grenade' and the use was
+                                        fully handled (even when the throw was
+                                        skipped for cooldown/ammo reasons — the
+                                        vanilla switch must not run either way).
+     TC.Gear.iconFor(id) -> canvas|null hand-painted 16px icons for the gear
+                                        ids only; null for anything else.
 
-     <script src="js/gear.js"></script>
-     <script src="js/main.js"></script>
-
-   Exposed API: TC.Gear.{defs,reset}.
+   INTEGRATION (one line each, lead-owned files):
+     main.js step(), directly after `if (TC.Combat) TC.Combat.update(dt);`:
+       if (TC.Gear) TC.Gear.update(dt);
+     main.js draw(), directly after `if (TC.Combat) TC.Combat.draw(ctx, cam);`:
+       if (TC.Gear) TC.Gear.draw(ctx, cam);
+     player.js useHeld(), after resolving sel/def and BEFORE the kind switch:
+       if (TC.Gear && def && TC.Gear.onUseHeld(this, def, dt)) return;
+     items.js iconFor(), before its own painters:
+       const gic = (TC.Gear && TC.Gear.iconFor(key)) ||
+                   (TC.Loot && TC.Loot.iconFor(key));
+       if (gic) return gic;
 
    Runtime randomness here (star timing, drop rolls) is gameplay-only,
    matching combat.js precedent; worldgen determinism is untouched. */
@@ -198,8 +215,9 @@
   }
 
   // ======================================================================
-  // Weapon use — layered in front of Player.useHeld for the gear kinds.
-  // Cooldowns reuse the vanilla swing record so the arm animation runs.
+  // Weapon use — called from the lead's useHeld routing (was a Player
+  // prototype wrap). Cooldowns reuse the vanilla swing record so the arm
+  // animation runs.
   // ======================================================================
 
   const GEAR_KINDS = { yoyo: 1, boomerang: 1, grenade: 1 };
@@ -271,8 +289,19 @@
     startSwing(player, def);
   }
 
-  // ---- per-frame tick (driven via wrapped TC.Combat.update) ----
-  function tick(dt) {
+  // Lead-facing hook: resolve the selected slot's id against the def (the id
+  // is needed for grenade consumption), run the gear throw, report handling.
+  function onUseHeld(player, def, dt) {
+    if (!player || !def || !GEAR_KINDS[def.kind]) return false;
+    const sel = (typeof player.selectedSlot === 'function') ? player.selectedSlot() : null;
+    const itemId = (sel && TC.ITEM_DEFS && TC.ITEM_DEFS[sel.id] === def) ? sel.id : null;
+    if (!itemId) return false;
+    useGear(player, def, itemId);              // dt unused: throws are click-paced
+    return true;
+  }
+
+  // ---- per-frame tick (lead calls from step(), after Combat.update) ----
+  function update(dt) {
     const w = TC.world;
     if (w !== curWorld) { curWorld = w; watched.length = 0; }   // fresh world
     sweepWatched();
@@ -280,8 +309,51 @@
   }
 
   // ======================================================================
+  // Molotov overlay — lead calls draw(ctx, cam) after Combat.draw. The pool
+  // paints every grenade with one painter, so fire-tagged instances get a
+  // flame halo + burning rag drawn on top here.
+  // ======================================================================
+
+  function drawFireGrenades(ctx, cam) {
+    if (!ctx || !TC.Projectiles || typeof TC.Projectiles.viewOf !== 'function') return;
+    const live = TC.Projectiles.viewOf('grenade');   // scratch array: read now
+    let any = false;
+    for (let i = 0; i < live.length; i++) {
+      if (live[i] && live[i].fire) { any = true; break; }
+    }
+    if (!any) return;
+
+    ctx.save();
+    if (typeof TC.applyCam === 'function') TC.applyCam(ctx);
+    else if (cam) ctx.setTransform(cam.zoom, 0, 0, cam.zoom, -cam.x * cam.zoom, -cam.y * cam.zoom);
+    for (let i = 0; i < live.length; i++) {
+      const p = live[i];
+      if (!p || !p.fire) continue;
+      const fl = 0.6 + 0.4 * Math.sin(p.age * 22);           // flicker
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 10);
+      g.addColorStop(0, 'rgba(255,140,58,' + (0.5 * fl).toFixed(3) + ')');
+      g.addColorStop(1, 'rgba(255,140,58,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 10, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = C.fireLite;                            // rag flame
+      ctx.beginPath();
+      ctx.arc(p.x, p.y - 7, 2.2 + fl, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = '#e85a1a';
+      ctx.fillRect(p.x - 1, p.y - 8, 2, 2);
+    }
+    ctx.restore();
+  }
+
+  // ======================================================================
   // Item icons — iconFor paints blanks for unknown kinds, so gear items get
-  // hand-painted 16px canvases here (wiring.js ICON_PAINTERS pattern).
+  // hand-painted 16px canvases here; the lead's items.js iconFor consults
+  // TC.Gear.iconFor first.
   // ======================================================================
 
   function mkIcon(paint) {
@@ -397,104 +469,15 @@
     }
   };
 
-  function patchIcons() {
-    if (!TC.Items || typeof TC.Items.iconFor !== 'function' || TC.Items.__gearIcons) return;
-    const orig = TC.Items.iconFor;
-    const cache = new Map();
-    const wrapped = function (id) {
-      const paint = id && ICON_PAINTERS[id];
-      if (paint) {
-        let cv = cache.get(id);
-        if (!cv) { cv = mkIcon(paint); cache.set(id, cv); }
-        return cv;
-      }
-      return orig.call(TC.Items, id);
-    };
-    wrapped.__gear = true;
-    TC.Items.__gearIcons = true;
-    TC.Items.iconFor = wrapped;
-  }
+  const iconCache = new Map();
 
-  // ======================================================================
-  // Runtime patches (guarded, idempotent)
-  // ======================================================================
-
-  function patchPlayer() {
-    const PP = TC.Player && TC.Player.prototype;
-    if (!PP || typeof PP.useHeld !== 'function' || PP.useHeld.__gearWrapped) return;
-    const orig = PP.useHeld;
-    PP.useHeld = function (dt) {
-      const sel = (typeof this.selectedSlot === 'function') ? this.selectedSlot() : null;
-      const def = (sel && TC.ITEM_DEFS) ? TC.ITEM_DEFS[sel.id] : null;
-      if (def && GEAR_KINDS[def.kind]) {
-        useGear(this, def, sel.id);
-        return;
-      }
-      return orig.call(this, dt);
-    };
-    PP.useHeld.__gearWrapped = true;
-  }
-
-  function patchCombat() {
-    if (!TC.Combat || typeof TC.Combat.update !== 'function' ||
-        TC.Combat.update.__gearWrapped) return;
-    const orig = TC.Combat.update;
-    TC.Combat.update = function (dt) {       // pool tick runs inside orig
-      const r = orig.apply(this, arguments);
-      try { tick(dt); } catch (e) {}
-      return r;
-    };
-    TC.Combat.update.__gearWrapped = true;
-  }
-
-  // Molotov overlay: the pool paints every grenade with one painter, so
-  // fire-tagged instances get a flame halo + burning rag drawn on top here.
-  function patchProjDraw() {
-    if (!TC.Projectiles || typeof TC.Projectiles.draw !== 'function' ||
-        TC.Projectiles.draw.__gearWrapped) return;
-    const orig = TC.Projectiles.draw;
-    TC.Projectiles.draw = function (ctx, cam) {
-      const r = orig.apply(this, arguments);
-      try { drawFireGrenades(ctx, cam); } catch (e) {}
-      return r;
-    };
-    TC.Projectiles.draw.__gearWrapped = true;
-  }
-
-  function drawFireGrenades(ctx, cam) {
-    if (!ctx || !TC.Projectiles || typeof TC.Projectiles.viewOf !== 'function') return;
-    const live = TC.Projectiles.viewOf('grenade');   // scratch array: read now
-    let any = false;
-    for (let i = 0; i < live.length; i++) {
-      if (live[i] && live[i].fire) { any = true; break; }
-    }
-    if (!any) return;
-
-    ctx.save();
-    if (typeof TC.applyCam === 'function') TC.applyCam(ctx);
-    else if (cam) ctx.setTransform(cam.zoom, 0, 0, cam.zoom, -cam.x * cam.zoom, -cam.y * cam.zoom);
-    for (let i = 0; i < live.length; i++) {
-      const p = live[i];
-      if (!p || !p.fire) continue;
-      const fl = 0.6 + 0.4 * Math.sin(p.age * 22);           // flicker
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 10);
-      g.addColorStop(0, 'rgba(255,140,58,' + (0.5 * fl).toFixed(3) + ')');
-      g.addColorStop(1, 'rgba(255,140,58,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 10, 0, TAU);
-      ctx.fill();
-      ctx.restore();
-      ctx.fillStyle = C.fireLite;                            // rag flame
-      ctx.beginPath();
-      ctx.arc(p.x, p.y - 7, 2.2 + fl, 0, TAU);
-      ctx.fill();
-      ctx.fillStyle = '#e85a1a';
-      ctx.fillRect(p.x - 1, p.y - 8, 2, 2);
-    }
-    ctx.restore();
+  // Canvas for a gear item id, or null when the id is not ours.
+  function iconFor(id) {
+    const paint = id && ICON_PAINTERS[id];
+    if (!paint) return null;
+    let cv = iconCache.get(id);
+    if (!cv) { cv = mkIcon(paint); iconCache.set(id, cv); }
+    return cv;
   }
 
   // ======================================================================
@@ -516,28 +499,16 @@
     if (d) defs[GEAR_IDS[i]] = d;
   }
 
-  TC.Gear = { defs, reset };
-
-  // ======================================================================
-  // Install
-  // ======================================================================
-
-  let installed = false;
-  function install() {
-    if (installed) return;
-    installed = true;
-    patchIcons();
-    patchPlayer();
-    patchCombat();
-    patchProjDraw();
+  // Stable content ids under this module's own namespace (the shared-table
+  // auto-mirror separately records them as core:* — both may coexist).
+  if (TC.Registry && typeof TC.Registry.define === 'function') {
+    for (let i = 0; i < GEAR_IDS.length; i++) {
+      const d = TC.ITEM_DEFS ? TC.ITEM_DEFS[GEAR_IDS[i]] : null;
+      if (!d) continue;
+      try { TC.Registry.define('item', 'gear:' + GEAR_IDS[i], d); }
+      catch (e) { /* duplicate or rejected: content still ships via tables */ }
+    }
   }
 
-  // Prototype patches need player.js/combat.js symbols; with the normal
-  // index.html order they exist by now. Otherwise defer to DOMContentLoaded
-  // (sync scripts have all executed by then), like wiring.js.
-  if (typeof document === 'undefined' || document.readyState !== 'loading') {
-    install();
-  } else {
-    document.addEventListener('DOMContentLoaded', install);
-  }
+  TC.Gear = { defs, reset, update, draw: drawFireGrenades, onUseHeld, iconFor };
 })();

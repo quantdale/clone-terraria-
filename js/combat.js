@@ -2,7 +2,17 @@
    player damage intake. The arrow lifecycle lives in projectiles.js's
    unified pool; the local array below is a fallback kept for the case
    where projectiles.js is absent, and Combat.arrows stays readable as a
-   live view either way. */
+   live view either way.
+
+   Foundation contracts: Combat.clear() wipes the TC.Projectiles pool too
+   (plus the legacy fallback), a WorldLoaded event subscription clears
+   stale projectiles on world transitions, and the per-frame tick is
+   registered with TC.Systems as phase 'combat' system 'core.combat'
+   (guarded; main.js may keep calling Combat.update directly instead —
+   never both). hurtPlayer returns { finalDamage, defenseApplied, crit }.
+   Enemy-damage events (EntityDamaged/EntityKilled) belong at
+   TC.Enemies.damageEnemy/killEnemy in enemies.js, where every source's
+   damage funnels — not here, which only sees its own hits. */
 'use strict';
 (function () {
   const TC = window.TC;
@@ -199,17 +209,22 @@
   };
 
   // Incoming damage on the player: variance only, no crits. Equipment defense
-  // applies except for environmental 'fall'/'void' sources.
+  // applies except for environmental 'fall'/'void' sources. Returns
+  // { finalDamage, defenseApplied, crit: false } — the numbers actually passed
+  // to Player.damage — or null when no player is present.
   Combat.hurtPlayer = function (dmg, kbx, kby, src) {
-    if (!TC.player || typeof TC.player.damage !== 'function') return;
+    if (!TC.player || typeof TC.player.damage !== 'function') return null;
     const v = TC.CONST.DMG_VARIANCE || 0;
     let final = Math.max(1, Math.round(dmg * (1 - v + Math.random() * 2 * v)));
+    let defenseApplied = 0;
     if (src !== 'fall' && src !== 'void') {
-      const defense = (TC.player && typeof TC.player.totalDefense === 'function') ? TC.player.totalDefense() : 0;
+      const defense = (typeof TC.player.totalDefense === 'function') ? TC.player.totalDefense() : 0;
+      defenseApplied = Math.min(defense, final - 1);   // intake never drops below 1
       final = Math.max(1, final - defense);
     }
     TC.player.damage(final, kbx, kby, src);
     if (TC.Audio) TC.Audio.play('hurt');
+    return { finalDamage: final, defenseApplied: defenseApplied, crit: false };
   };
 
   // Radial ground-slam around (x,y): damages the player with linear falloff
@@ -235,7 +250,33 @@
     return true;
   };
 
-  Combat.clear = function () {
-    Combat.arrows.length = 0;
-  };
+  // Wipe every projectile: the pooled pool first (arrows, bolts, grenades,
+  // watchers' targets...), then the legacy fallback array. The old body only
+  // zeroed Combat.arrows — which with TC.Projectiles present is a reused
+  // viewOf() scratch buffer, so pooled projectiles survived world changes.
+  function clearAll() {
+    if (TC.Projectiles && typeof TC.Projectiles.clear === 'function') {
+      TC.Projectiles.clear();
+    }
+    legacyArrows.length = 0;
+  }
+  Combat.clear = clearAll;
+
+  // Reaction: a freshly loaded world never inherits stale projectiles.
+  // (main.js also calls Combat.clear() on newGame/continueGame; this is the
+  // event-driven backstop, harmless when both run.)
+  if (TC.Events && typeof TC.Events.on === 'function' &&
+      TC.Events.EVENT && TC.Events.EVENT.WorldLoaded) {
+    TC.Events.on(TC.Events.EVENT.WorldLoaded, function () { clearAll(); });
+  }
+
+  // Foundation scheduler: expose the tick as a 'combat'-phase system. It
+  // drives TC.Projectiles.update internally (see Combat.update), so exactly
+  // ONE of { Systems.updateAll, main.js's direct Combat.update call } may be
+  // active at a time — running both would double-step every projectile.
+  if (TC.Systems && typeof TC.Systems.register === 'function') {
+    TC.Systems.register('combat', 'core.combat', {
+      update: function (dt) { Combat.update(dt); }
+    });
+  }
 })();

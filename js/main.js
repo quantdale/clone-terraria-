@@ -36,6 +36,7 @@
 
   function buildWorld(seed, diffs, wallDiffs) {
     const gen = TC.WorldGen.generate(seed);
+    if (TC.Loot && TC.Loot.populateWorld) TC.Loot.populateWorld(gen, seed);
     TC.worldSeed = seed;
     TC.world = new TC.World(gen);
     if (diffs) {
@@ -61,6 +62,7 @@
 
   TC.newGame = function (seed) {
     seed = (seed == null) ? ((Math.random() * 2147483647) | 0) : (seed | 0);
+    if (TC.Chests && typeof TC.Chests.clear === 'function') TC.Chests.clear();
     const gen = buildWorld(seed, null);
     TC.player = new TC.Player(
       gen.spawnX * TC.CONST.TS + TC.CONST.TS / 2 - TC.CONST.PLAYER_W / 2,
@@ -70,12 +72,12 @@
     if (TC.Enemies) TC.Enemies.clear();
     if (TC.NPCs && TC.NPCs.spawnGuide) TC.NPCs.spawnGuide(gen.spawnX * TC.CONST.TS, gen.spawnY * TC.CONST.TS);
     if (TC.Items) TC.Items.clearDrops();
-    if (TC.Chests && typeof TC.Chests.clear === 'function') TC.Chests.clear();
     if (TC.Combat) TC.Combat.clear();
     if (TC.Particles) TC.Particles.clear();
     if (TC.Sky) TC.Sky.reset();
     centerCamera(true);
     TC.state = 'playing';
+    if (TC.Events) { try { TC.Events.emit(TC.Events.EVENT.WorldLoaded, { seed: seed }); } catch (e) {} }
   };
 
   TC.continueGame = function () {
@@ -99,6 +101,7 @@
     if (TC.Chests && typeof TC.Chests.load === 'function') TC.Chests.load(data.chests);
     centerCamera(true);
     TC.state = 'playing';
+    if (TC.Events) { try { TC.Events.emit(TC.Events.EVENT.WorldLoaded, { seed: data.seed }); } catch (e) {} }
   };
 
   TC.quitToTitle = function () {
@@ -133,11 +136,14 @@
     if (TC.UI) TC.UI.update(dt);   // runs on title too (menu buttons)
     if (TC.state !== 'playing') return;
     if (TC.Sky) TC.Sky.update(dt);
+    if (TC.Biomes) TC.Biomes.update(dt);
     if (TC.player) TC.player.update(dt);
+    if (TC.Loot && TC.player) TC.Loot.update(TC.player, dt);
     if (TC.Enemies) { TC.Enemies.spawnDirector(dt); TC.Enemies.update(dt); }
     if (TC.NPCs) TC.NPCs.update(dt);
     if (TC.Items) TC.Items.update(dt, TC.player);
     if (TC.Combat) TC.Combat.update(dt);
+    if (TC.Gear) TC.Gear.update(dt);
     if (TC.Particles) TC.Particles.update(dt);
     if (TC.world) TC.world.update(dt);
     if (TC.Lighting) TC.Lighting.update(dt, cam);
@@ -159,14 +165,17 @@
     if (TC.world && TC.state !== 'title') {
       TC.applyCam(ctx);
       TC.world.draw(ctx, cam);
+      if (TC.Loot) TC.Loot.drawTiles(ctx, cam, TC.world);
       if (TC.Items) TC.Items.draw(ctx, cam);
       if (TC.Enemies) TC.Enemies.draw(ctx, cam);
       if (TC.NPCs) TC.NPCs.draw(ctx, cam);
       if (TC.player) TC.player.draw(ctx, cam);
       if (TC.Combat) TC.Combat.draw(ctx, cam);
+      if (TC.Gear) TC.Gear.draw(ctx, cam);
       if (TC.Particles) TC.Particles.draw(ctx, cam);
       TC.clearCam(ctx);
 
+      if (TC.Biomes) TC.Biomes.drawOverlay(ctx, viewW, viewH, cam);
       if (TC.Lighting) TC.Lighting.draw(ctx, cam);
       if (TC.MiniMap) TC.MiniMap.draw(ctx, viewW, viewH);
       if (TC.Input) TC.Input.drawCursor(ctx, cam);

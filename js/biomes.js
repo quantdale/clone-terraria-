@@ -1,24 +1,23 @@
 /* biomes.js — TC.Biomes: player-centered biome detection, sky tints,
    ambient particles/fog, spawn-table overrides and a music flag.
 
-   Self-wiring via guarded runtime wraps — no lead-owned edits needed:
-     - wraps TC.Sky.draw to apply a blended biome tint + fog after the
-       vanilla gradient/hills (screen space)
-     - wraps TC.Enemies.spawnDirector to swap the SPAWN table when a
-       non-forest biome dominates (ocean/desert/snow/jungle/underworld)
-     - ticks detection + ambient particles each frame via a wrap on
-       TC.Sky.update and a fallback rAF loop if Sky is absent
-     - exposes TC.Biomes.current (stable), .raw (instant), .blend (0..1),
-       .musicTag (string for TC.Music), and .getSpawnOverride()
+   Patch-free foundation module — no monkey-patching. The lead drives it:
+     - TC.Biomes.update(dt): per-step detection scan (0.25s cadence),
+       hysteresis flip (0.85s), tint blend, ambient particles. Call once per
+       fixed step while playing — OR let TC.Systems 'environment' run it
+       (registered here); pick one path, never both.
+     - TC.Biomes.drawOverlay(ctx, viewW, viewH, cam): screen-space biome tint
+       + fog. Call AFTER sky+world rendering and BEFORE the lighting overlay.
+     - TC.Enemies.spawnDirector consults TC.Biomes.getSpawnOverride()
+       directly (pure getter — see the note above SPAWN_OVERRIDE).
+   Reset rides the event bus: TC.Events.EVENT.WorldLoaded clears all derived
+   state. Nothing here is persisted — every field re-derives from player
+   position within ~1s of play, so there is no SaveCore provider.
 
-   Deterministic: no Math.random for state — visual jitter uses hash2 only
-   where needed; particle spawns use Math.random (visual only).
+   Deterministic: no Math.random for state; particle spawns use Math.random
+   (visual only).
 
-   Load order: after sky.js is ideal, but install() polls until TC.Sky /
-   TC.Enemies appear, so any order before main.js works. Requires one line
-   in index.html (lead-owned):
-     <script src="js/biomes.js"></script>
-   after js/sky.js.
+   Load order: anywhere before main.js; TC.Events / TC.Systems refs guarded.
 */
 'use strict';
 (function () {
@@ -39,12 +38,6 @@
   // ---- helpers ----
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
   function lerp(a, b, t) { return a + (b - a) * t; }
-  function hash2(x, y, s) {
-    if (TC.Utils && typeof TC.Utils.hash2 === 'function') return TC.Utils.hash2(x, y, s);
-    let h = ((x | 0) * 374761393 + (y | 0) * 668265263 + (s | 0) * 1440662683) | 0;
-    h = (h ^ (h >>> 13)) | 0; h = Math.imul(h, 1274126177);
-    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-  }
 
   // ---- biome tint palette (screen overlay, rgba) ----
   // alpha is at full blend; actual alpha = pal.a * blend * daylight factor
@@ -59,7 +52,12 @@
   };
 
   // Spawn overrides per biome — keys match SPAWN table names where possible.
-  // Values are arrays of [enemyId, weight] compatible with spawnDirector.
+  // Values are arrays of [enemyId, weight], the exact shape of a
+  // CONST.SPAWN.day/night entry. getSpawnOverride() hands these to
+  // enemies.spawnDirector as the BASE table of the active zone ('day' or
+  // 'night'); the 'cave' zone keeps the vanilla table, and a blood-moon
+  // night keeps BLOOD_MOON_TABLE precedence (the old CONST-swap was ignored
+  // there too).
   const SPAWN_OVERRIDE = {
     ocean: [['cave_bat', 1], ['green_slime', 1]],
     desert: [['green_slime', 2], ['blue_slime', 1]],
@@ -146,9 +144,7 @@
         if (pendingT >= HYSTERESIS && pending !== current) setCurrent(pending);
       }
     }
-    // visual blend
-    const want = (current === 'forest' || current === 'cave') ? 0.0 : 1.0;
-    // forest/cave have subtle tints; keep them faint
+    // visual blend; forest stays untinted, cave keeps its faint palette
     const targetBlend = (current === 'forest') ? 0 : 1;
     // lerp displayed palette
     const k = 1 - Math.exp(-BLEND_SPEED * dt * 3);
@@ -201,27 +197,10 @@
     }
   }
 
-  // Public API
-  const Biomes = {
-    get current() { return current; },
-    get raw() { return raw; },
-    get blend() { return blend; },
-    get musicTag() { return current; },
-    getSpawnOverride: function () {
-      if (current === 'forest' || current === 'cave') return null;
-      return SPAWN_OVERRIDE[current] || null;
-    },
-    // called by patched Sky.update each frame; also safe to call directly
-    update: function (dt) { tick(dt); },
-    reset: function () {
-      current = 'forest'; raw = 'forest'; pending = 'forest'; pendingT = 0;
-      blend = 0; scanAcc = 0; curPal = PAL.forest; tgtPal = PAL.forest;
-    }
-  };
-  TC.Biomes = Biomes;
-
-  // ---- draw overlay (screen space) ----
-  function drawOverlay(ctx, w, h) {
+  // ---- screen-space overlay: tint + fog (+ underworld vignette) ----
+  // Placement contract: AFTER sky+world/entity rendering, BEFORE lighting.
+  // cam is accepted for signature stability; the tint is a full-screen wash.
+  function drawOverlay(ctx, w, h, cam) {
     if (TC.state === 'title') return;
     const pal = curPal;
     if (!pal || pal.a <= 0.001 || blend <= 0.001) return;
@@ -245,76 +224,43 @@
     ctx.restore();
   }
 
-  // ---- patches ----
-  function patchSky() {
-    if (!TC.Sky || TC.Sky.__biomesPatched) return false;
-    TC.Sky.__biomesPatched = true;
-    const origDraw = TC.Sky.draw;
-    TC.Sky.draw = function (c, cam, w, h) {
-      const r = origDraw.call(this, c, cam, w, h);
-      try { drawOverlay(c, w, h); } catch (e) {}
-      return r;
-    };
-    const origUpdate = TC.Sky.update;
-    TC.Sky.update = function (dt) {
-      const r = origUpdate.call(this, dt);
-      try { Biomes.update(dt); } catch (e) {}
-      return r;
-    };
-    // if Sky wasn't ticking yet (title), still tick via wrapper above
-    return true;
-  }
-
-  function patchEnemies() {
-    if (!TC.Enemies || typeof TC.Enemies.spawnDirector !== 'function' || TC.Enemies.__biomesPatched) return false;
-    TC.Enemies.__biomesPatched = true;
-    const orig = TC.Enemies.spawnDirector;
-    TC.Enemies.spawnDirector = function (dt) {
-      const ov = Biomes.getSpawnOverride();
-      if (ov && TC.CONST && TC.CONST.SPAWN) {
-        const savedDay = TC.CONST.SPAWN.day, savedNight = TC.CONST.SPAWN.night;
-        const isDay = TC.Sky && typeof TC.Sky.isDay === 'function' ? TC.Sky.isDay() : true;
-        // temporarily swap the active table so director picks from biome set
-        if (isDay) TC.CONST.SPAWN.day = ov;
-        else TC.CONST.SPAWN.night = ov;
-        const r = orig.call(this, dt);
-        TC.CONST.SPAWN.day = savedDay; TC.CONST.SPAWN.night = savedNight;
-        return r;
-      }
-      return orig.call(this, dt);
-    };
-    return true;
-  }
-
-  function patchFlow() {
-    if (typeof TC.newGame === 'function' && !TC.__biomesFlowPatched) {
-      TC.__biomesFlowPatched = true;
-      const origNew = TC.newGame;
-      TC.newGame = function (seed) { Biomes.reset(); return origNew.call(TC, seed); };
+  // ---- public API ----
+  const Biomes = {
+    get current() { return current; },
+    get raw() { return raw; },
+    get blend() { return blend; },
+    get musicTag() { return current; },
+    // Pure spawn override for enemies.spawnDirector. Returns an array of
+    // [enemyId, weight] pairs — the same shape the old CONST.SPAWN swap
+    // produced — or null to keep the vanilla table. Caller contract: when
+    // non-null, use it AS THE BASE TABLE of the active zone ('day' or
+    // 'night'); never apply it to the 'cave' zone; a blood-moon night keeps
+    // BLOOD_MOON_TABLE precedence.
+    getSpawnOverride: function () {
+      if (current === 'forest' || current === 'cave') return null;
+      return SPAWN_OVERRIDE[current] || null;
+    },
+    // Per-step tick: detection scan + hysteresis + tint blend + ambience.
+    update: tick,
+    // Screen-space tint+fog; see placement contract above.
+    drawOverlay: drawOverlay,
+    reset: function () {
+      current = 'forest'; raw = 'forest'; pending = 'forest'; pendingT = 0;
+      blend = 0; scanAcc = 0; curPal = PAL.forest; tgtPal = PAL.forest;
     }
-    if (typeof TC.continueGame === 'function' && !TC.__biomesFlowPatched2) {
-      TC.__biomesFlowPatched2 = true;
-      const origCont = TC.continueGame;
-      TC.continueGame = function () { const r = origCont.call(TC); Biomes.reset(); return r; };
-    }
-  }
+  };
+  TC.Biomes = Biomes;
 
-  function install() {
-    patchSky();
-    patchEnemies();
-    patchFlow();
-    // fallback ticker if Sky never appears (headless tests) or loads later
-    if (!TC.Sky || !TC.Sky.__biomesPatched) {
-      let last = performance.now();
-      (function loop(now) {
-        if (TC.Sky && patchSky()) { patchEnemies(); patchFlow(); return; }
-        const dt = Math.min(0.05, (now - last) / 1000); last = now;
-        if (TC.state === 'playing') try { Biomes.update(dt); } catch (e) {}
-        requestAnimationFrame(loop);
-      })(last);
-    }
+  // ---- foundation wiring ----
+  // Update scheduler: lets a Systems.updateAll-driven loop tick biomes in the
+  // 'environment' phase. Manual TC.Biomes.update(dt) callers must not ALSO
+  // run Systems.updateAll — one driver only.
+  if (TC.Systems && typeof TC.Systems.register === 'function') {
+    TC.Systems.register('environment', 'biomes', { update: tick });
   }
-
-  if (typeof document === 'undefined' || document.readyState !== 'loading') install();
-  else document.addEventListener('DOMContentLoaded', install);
+  // Fresh world => fresh derived biome state (replaces the old newGame/
+  // continueGame wraps once the lead emits WorldLoaded there).
+  if (TC.Events && TC.Events.EVENT && typeof TC.Events.on === 'function') {
+    TC.Events.on(TC.Events.EVENT.WorldLoaded, function () { Biomes.reset(); });
+  }
 })();

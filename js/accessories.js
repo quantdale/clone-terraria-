@@ -195,6 +195,7 @@
     const m = zeroMods();
     addMods(m, TC.Accessories.modsOf(player));
     addMods(m, TC.Buffs.modsOf());
+    m.maxHp += (TC.Loot && TC.Loot.crystalBonus) ? TC.Loot.crystalBonus(player) : 0;
     return m;
   }
 
