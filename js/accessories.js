@@ -3,29 +3,67 @@
    regeneration, swiftness, wrath, poisoned, burning, slowed) with stat mods,
    ambient particle icons, a HUD buff-icon row, and potion consumables.
 
-   Self-integrating via guarded runtime wraps (this file owns nothing else):
-     - Player.prototype.totalDefense  += accessory/buff/prefix defense
-     - Player.prototype.update        ticks buffs, applies move/regen/maxHp mods
-     - Player.prototype.useHeld       intercepts kind:'potion' items
-     - Player.prototype.serialize /
-       Player.deserialize             persists accessories + buffs in the save blob
-     - Combat.meleeStrike/shootArrow  scale outgoing damage
-     - Combat.hurtPlayer              lava hits apply the 'burning' debuff
-     - Items.iconFor                  paints icons for the items added below
-     - UI.draw                        appends the active-buff icon row (top right)
-     - newGame/continueGame/quitToTitle reset buff state
+   Fully de-monkey-patched (ARCHITECTURE.md §10/§11): every former runtime
+   wrap is now a plain exported function, an event reaction, or a SaveCore
+   provider. Stat arithmetic lives in TC.Stats (js/stats.js), which registers
+   'gear.accessories' -> TC.Accessories.modsOf(player) and 'status.buffs' ->
+   TC.Buffs.modsOf(); both modsOf() implementations here are pure reads.
 
-   Lead-owned files need NO edits except index.html: add
-     <script src="js/accessories.js"></script>
-   anywhere after js/player.js (hooks poll until each target module exists, so
-   any sibling order works). Item defs and recipes are appended to
-   TC.ITEM_DEFS / TC.RECIPES from here, so constants.js stays untouched.
+   Removed wraps -> supported contracts:
+     Player.totalDefense / update / useHeld / serialize / deserialize wraps
+       -> TC.Stats sources (lead rewires player.js/combat.js against
+          TC.Stats.resolve()), TC.Accessories.update/onUseHeld below, and the
+          'character.core.accessories' SaveCore provider
+     Combat.meleeStrike/shootArrow/hurtPlayer wraps
+       -> TC.Stats.resolve() damage/crit/defense + lead-applied
+          TC.Buffs.apply('burning', 4) on lava hits
+     UI.draw / Items.iconFor wraps
+       -> TC.Accessories.drawHud(ctx) / TC.Accessories.iconFor(id)
+     newGame/continueGame/quitToTitle wraps
+       -> session tracking in update(): a player instance that was never
+          handed saved state (attachToPlayer/restoreLegacy) starts with no
+          active buffs; restored players keep exactly what was loaded
 
-   Suggested AGENTS.md contract rows (lead-owned doc):
-     | accessories.js | TC.Accessories: SLOT_COUNT(5), slotsOf/equip/unequip,
-       modsOf, serialize/deserialize, PREFIX_DEFS + rollPrefix (stub) |
-     | TC.Buffs: DEFS, list, apply/remove/has/clear, modsOf, tick, drawIcons,
-       serialize/deserialize |
+   Exports:
+     TC.Accessories  SLOT_COUNT(5), PREFIX_DEFS, slotsOf/equip/unequip,
+                     modsOf, prefixMods, rollPrefix (stub), serialize/
+                     deserialize (per-player shapes), update(dt), 
+                     onUseHeld(player, def, dt) -> bool, drawHud(ctx),
+                     iconFor(id) -> canvas|null, attachToPlayer(player, data),
+                     captureOf(player), restoreLegacy(playerData)
+     TC.Buffs        DEFS, list, apply/remove/has/clear, modsOf, tick,
+                     drawIcons(ctx, w, h), serialize/deserialize,
+                     attachToPlayer(player, data), captureOf()
+
+   Events emitted (guarded; canonical names from TC.Events.EVENT):
+     BuffApplied {id, time}   on apply/refresh
+     BuffExpired {id}         on natural timeout or manual remove
+
+   INTEGRATION (one line each, lead-owned files):
+     main.js step(), after the player update line:
+       if (TC.Accessories) TC.Accessories.update(dt);
+     main.js draw() (screen space, after UI.draw):
+       if (TC.Accessories) TC.Accessories.drawHud(ctx);
+     player.js totalDefense(): `return TC.Stats.resolve(this).defense;`
+     player.js update(): moveSpeed multiplier on RUN_MAX/RUN_ACCEL, regen from
+       healthRegen, maxHp synced to maxHealth — all via TC.Stats.resolve(this)
+     player.js useHeld(), before the kind switch (next to the other use hooks):
+       if (TC.Accessories && def && TC.Accessories.onUseHeld(this, def, dt)) return;
+     combat.js meleeStrike/shootArrow callers scale dmg by
+       st.meleeDamage/st.rangedDamage and roll crit vs st.critChance;
+       hurtPlayer subtracts st.defense and, when src === 'lava',
+       calls TC.Buffs.apply('burning', 4)
+     items.js iconFor(), before its own painters:
+       const aic = TC.Accessories && TC.Accessories.iconFor(key);
+       if (aic) return aic;   // sibling gear/loot icon hooks sit alongside
+     main.js continueGame(), after `TC.player = TC.Player.deserialize(...)`:
+       if (TC.Accessories) TC.Accessories.restoreLegacy(data.player);
+     SaveCore envelope restore (after player creation) dispatches the
+       'character.core.accessories' provider registered below.
+
+   Item defs and recipes are appended to TC.ITEM_DEFS / TC.RECIPES from here,
+   and registered under 'acc:<id>' stable ids in TC.Registry (guarded), so
+   constants.js stays untouched.
 
    Prefix stub status: PREFIX_DEFS + deterministic rollPrefix exist and merge
    into stat mods, but no reforge station/UI wiring yet — a future crafting
@@ -191,12 +229,13 @@
     out.maxHp += mods.maxHp || 0;
     return out;
   }
-  function combinedMods(player) {
-    const m = zeroMods();
-    addMods(m, TC.Accessories.modsOf(player));
-    addMods(m, TC.Buffs.modsOf());
-    m.maxHp += (TC.Loot && TC.Loot.crystalBonus) ? TC.Loot.crystalBonus(player) : 0;
-    return m;
+
+  // ---- guarded event emission ----
+
+  function emitBus(key, fallback, payload) {
+    if (!TC.Events || typeof TC.Events.emit !== 'function') return;
+    const name = (TC.Events.EVENT && TC.Events.EVENT[key]) || fallback;
+    try { TC.Events.emit(name, payload); } catch (e) {}
   }
 
   // Remove n of id from the player's selected hotbar slot; tolerates
@@ -223,158 +262,155 @@
 
   const SLOT_COUNT = 5;
 
-  const Acc = TC.Accessories = {
-    SLOT_COUNT: SLOT_COUNT,
-    PREFIX_DEFS: PREFIX_DEFS,
+  // Equipped entries live on the player instance (lazy-attached):
+  // player.accessories = [null | {id, prefix}, x5]
+  function slotsOf(player) {
+    if (!player) return null;
+    if (!Array.isArray(player.accessories)) {
+      player.accessories = new Array(SLOT_COUNT).fill(null);
+    }
+    return player.accessories;
+  }
 
-    // Equipped entries live on the player instance (lazy-attached):
-    // player.accessories = [null | {id, prefix}, x5]
-    slotsOf(player) {
-      if (!player) return null;
-      if (!Array.isArray(player.accessories)) {
-        player.accessories = new Array(SLOT_COUNT).fill(null);
-      }
-      return player.accessories;
-    },
+  // Swap the inventory stack at invIndex with accessory slot slotIndex.
+  // Only kind:'accessory' items may be worn. Returns bool.
+  function equip(player, invIndex, slotIndex) {
+    const inv = player && player.inventory;
+    if (!inv || typeof inv.get !== 'function') return false;
+    const slots = slotsOf(player);
+    if (!slots || slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
+    const idx = invIndex | 0;
+    const sel = inv.get(idx);
+    const cur = slots[slotIndex];
+    const selDef = sel ? itemDef(sel.id) : null;
+    if (!cur && !(selDef && selDef.kind === 'accessory')) return false;
 
-    // Swap the inventory stack at invIndex with accessory slot slotIndex.
-    // Only kind:'accessory' items may be worn. Returns bool.
-    equip(player, invIndex, slotIndex) {
-      const inv = player && player.inventory;
-      if (!inv || typeof inv.get !== 'function') return false;
-      const slots = Acc.slotsOf(player);
-      if (!slots || slotIndex < 0 || slotIndex >= SLOT_COUNT) return false;
-      const idx = invIndex | 0;
-      const sel = inv.get(idx);
-      const cur = slots[slotIndex];
-      const selDef = sel ? itemDef(sel.id) : null;
-      if (!cur && !(selDef && selDef.kind === 'accessory')) return false;
-
-      if (cur && !sel) {                      // unequip worn piece into the bag
-        let ok = false;
-        if (typeof inv.swapOrPlace === 'function') {
-          try { inv.swapOrPlace(idx, { id: cur.id, count: 1 }); ok = true; } catch (e) {}
-        }
-        if (!ok) return false;
-        slots[slotIndex] = null;
-      } else if (selDef && selDef.kind === 'accessory') {
-        let wearId = sel.id;
-        if (cur) {                            // stow worn piece, wear what returns
-          let back = null;
-          try { back = inv.swapOrPlace(idx, { id: cur.id, count: 1 }); } catch (e) { return false; }
-          if (back) {
-            const bd = itemDef(back.id);
-            if (!(bd && bd.kind === 'accessory')) return false;
-            wearId = back.id;
-          }
-        } else {                              // take the selected stack out
-          let took = false;
-          if (typeof inv.swapOrPlace === 'function') {
-            try { inv.swapOrPlace(idx, null); took = true; } catch (e) {}
-          }
-          if (!took && Array.isArray(inv.slots)) {
-            try { inv.slots[idx] = null; took = true; } catch (e) {}
-          }
-          if (!took) return false;
-        }
-        const keepPrefix = (cur && cur.id === wearId) ? (cur.prefix || null) : null;
-        slots[slotIndex] = { id: wearId, prefix: keepPrefix };
-      } else {
-        return false;                         // selected item is not an accessory
-      }
-      sfx('pickup');
-      return true;
-    },
-
-    // Move a worn accessory back to the bag (first free slot unless invIndex given).
-    unequip(player, slotIndex, invIndex) {
-      const inv = player && player.inventory;
-      const slots = Acc.slotsOf(player);
-      if (!inv || !slots) return false;
-      const cur = slots[slotIndex];
-      if (!cur) return false;
-      let target = (invIndex != null) ? (invIndex | 0) : -1;
-      if (target < 0) {
-        const n = (Array.isArray(inv.slots) && inv.slots.length) ? inv.slots.length : 50;
-        for (let i = 0; i < n; i++) {
-          const s = (typeof inv.get === 'function') ? inv.get(i) : (inv.slots[i] || null);
-          if (!s) { target = i; break; }
-        }
-      }
-      if (target < 0) return false;
-      const occ = (typeof inv.get === 'function') ? inv.get(target)
-        : (Array.isArray(inv.slots) ? inv.slots[target] : {});
-      if (occ) return false;                  // refuse to overwrite a stack
+    if (cur && !sel) {                      // unequip worn piece into the bag
       let ok = false;
       if (typeof inv.swapOrPlace === 'function') {
-        try { inv.swapOrPlace(target, { id: cur.id, count: 1 }); ok = true; } catch (e) {}
-      }
-      if (!ok && Array.isArray(inv.slots)) {
-        try { inv.slots[target] = { id: cur.id, count: 1 }; ok = true; } catch (e) {}
+        try { inv.swapOrPlace(idx, { id: cur.id, count: 1 }); ok = true; } catch (e) {}
       }
       if (!ok) return false;
       slots[slotIndex] = null;
-      sfx('pickup');
-      return true;
-    },
-
-    // Aggregate stat modifiers from everything worn.
-    modsOf(player) {
-      const m = zeroMods();
-      const slots = (player && Array.isArray(player.accessories)) ? player.accessories : null;
-      if (!slots) return m;
-      for (let i = 0; i < slots.length && i < SLOT_COUNT; i++) {
-        const e = slots[i];
-        if (!e) continue;
-        const d = itemDef(e.id);
-        if (!d || d.kind !== 'accessory') continue;
-        addMods(m, d.mods);
-        if (e.prefix) addMods(m, Acc.prefixMods(e.prefix));
+    } else if (selDef && selDef.kind === 'accessory') {
+      let wearId = sel.id;
+      if (cur) {                            // stow worn piece, wear what returns
+        let back = null;
+        try { back = inv.swapOrPlace(idx, { id: cur.id, count: 1 }); } catch (e) { return false; }
+        if (back) {
+          const bd = itemDef(back.id);
+          if (!(bd && bd.kind === 'accessory')) return false;
+          wearId = back.id;
+        }
+      } else {                              // take the selected stack out
+        let took = false;
+        if (typeof inv.swapOrPlace === 'function') {
+          try { inv.swapOrPlace(idx, null); took = true; } catch (e) {}
+        }
+        if (!took && Array.isArray(inv.slots)) {
+          try { inv.slots[idx] = null; took = true; } catch (e) {}
+        }
+        if (!took) return false;
       }
-      return m;
-    },
-
-    prefixMods(prefixId) {
-      const p = PREFIX_DEFS[prefixId];
-      return p ? p.mods : null;
-    },
-
-    // Deterministic pseudo-reforge pick: same (itemId, seed) -> same prefix.
-    // Stub: nothing calls this yet; a reforge feature would store the result
-    // on the equipped entry's .prefix field (already serialized above).
-    rollPrefix(itemId, seed) {
-      const h = strHash(String(itemId) + '|' + String(seed));
-      const r = hash2(h, 0x51ed, 0xacce);
-      if (r < 0.34) return 'none';
-      const pool = (r < 0.78) ? POS_PREFIXES : NEG_PREFIXES;
-      return pool[(hash2(h, 0x9e37, 0x7f4a) * pool.length) | 0];
-    },
-
-    serialize(player) {
-      const slots = Acc.slotsOf(player);
-      if (!slots) return null;
-      const out = [];
-      for (let i = 0; i < SLOT_COUNT; i++) {
-        const e = slots[i];
-        out[i] = e ? { id: e.id, prefix: e.prefix || null } : null;
-      }
-      return out;
-    },
-
-    deserialize(player, data) {
-      const slots = Acc.slotsOf(player);
-      if (!slots || !Array.isArray(data)) return false;
-      for (let i = 0; i < SLOT_COUNT && i < data.length; i++) {
-        const e = data[i];
-        if (!e || typeof e !== 'object') { slots[i] = null; continue; }
-        const d = itemDef(e.id);
-        slots[i] = (d && d.kind === 'accessory')
-          ? { id: e.id, prefix: (e.prefix && PREFIX_DEFS[e.prefix]) ? e.prefix : null }
-          : null;
-      }
-      return true;
+      const keepPrefix = (cur && cur.id === wearId) ? (cur.prefix || null) : null;
+      slots[slotIndex] = { id: wearId, prefix: keepPrefix };
+    } else {
+      return false;                         // selected item is not an accessory
     }
-  };
+    sfx('pickup');
+    return true;
+  }
+
+  // Move a worn accessory back to the bag (first free slot unless invIndex given).
+  function unequip(player, slotIndex, invIndex) {
+    const inv = player && player.inventory;
+    const slots = slotsOf(player);
+    if (!inv || !slots) return false;
+    const cur = slots[slotIndex];
+    if (!cur) return false;
+    let target = (invIndex != null) ? (invIndex | 0) : -1;
+    if (target < 0) {
+      const n = (Array.isArray(inv.slots) && inv.slots.length) ? inv.slots.length : 50;
+      for (let i = 0; i < n; i++) {
+        const s = (typeof inv.get === 'function') ? inv.get(i) : (inv.slots[i] || null);
+        if (!s) { target = i; break; }
+      }
+    }
+    if (target < 0) return false;
+    const occ = (typeof inv.get === 'function') ? inv.get(target)
+      : (Array.isArray(inv.slots) ? inv.slots[target] : {});
+    if (occ) return false;                  // refuse to overwrite a stack
+    let ok = false;
+    if (typeof inv.swapOrPlace === 'function') {
+      try { inv.swapOrPlace(target, { id: cur.id, count: 1 }); ok = true; } catch (e) {}
+    }
+    if (!ok && Array.isArray(inv.slots)) {
+      try { inv.slots[target] = { id: cur.id, count: 1 }; ok = true; } catch (e) {}
+    }
+    if (!ok) return false;
+    slots[slotIndex] = null;
+    sfx('pickup');
+    return true;
+  }
+
+  // Aggregate stat modifiers from everything worn. Pure read — TC.Stats'
+  // 'gear.accessories' source folds this straight into its accumulator.
+  function modsOf(player) {
+    const m = zeroMods();
+    const slots = (player && Array.isArray(player.accessories)) ? player.accessories : null;
+    if (!slots) return m;
+    for (let i = 0; i < slots.length && i < SLOT_COUNT; i++) {
+      const e = slots[i];
+      if (!e) continue;
+      const d = itemDef(e.id);
+      if (!d || d.kind !== 'accessory') continue;
+      addMods(m, d.mods);
+      if (e.prefix) addMods(m, prefixMods(e.prefix));
+    }
+    return m;
+  }
+
+  function prefixMods(prefixId) {
+    const p = PREFIX_DEFS[prefixId];
+    return p ? p.mods : null;
+  }
+
+  // Deterministic pseudo-reforge pick: same (itemId, seed) -> same prefix.
+  // Stub: nothing calls this yet; a reforge feature would store the result
+  // on the equipped entry's .prefix field (already serialized above).
+  function rollPrefix(itemId, seed) {
+    const h = strHash(String(itemId) + '|' + String(seed));
+    const r = hash2(h, 0x51ed, 0xacce);
+    if (r < 0.34) return 'none';
+    const pool = (r < 0.78) ? POS_PREFIXES : NEG_PREFIXES;
+    return pool[(hash2(h, 0x9e37, 0x7f4a) * pool.length) | 0];
+  }
+
+  // Per-player shapes (unchanged): [{id, prefix|null}|null, x5]
+  function serializeAcc(player) {
+    const slots = slotsOf(player);
+    if (!slots) return null;
+    const out = [];
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const e = slots[i];
+      out[i] = e ? { id: e.id, prefix: e.prefix || null } : null;
+    }
+    return out;
+  }
+
+  function deserializeAcc(player, data) {
+    const slots = slotsOf(player);
+    if (!slots || !Array.isArray(data)) return false;
+    for (let i = 0; i < SLOT_COUNT && i < data.length; i++) {
+      const e = data[i];
+      if (!e || typeof e !== 'object') { slots[i] = null; continue; }
+      const d = itemDef(e.id);
+      slots[i] = (d && d.kind === 'accessory')
+        ? { id: e.id, prefix: (e.prefix && PREFIX_DEFS[e.prefix]) ? e.prefix : null }
+        : null;
+    }
+    return true;
+  }
 
   // ====================================================================
   // TC.Buffs — timed buffs/debuffs on the current player
@@ -388,117 +424,123 @@
     return null;
   }
 
-  const Buffs = TC.Buffs = {
-    DEFS: BUFF_DEFS,
-    list: list,
-
-    // Apply/refresh a buff on the player (defaults to TC.player). Re-applying
-    // extends to the longer of the remaining/new duration (Terraria-style).
-    apply(id, dur, player) {
-      const d = BUFF_DEFS[id];
-      if (!d) return false;
-      const p = player || TC.player;
-      if (!p || p.dead) return false;
-      const t = (dur != null && dur > 0) ? dur : (d.dur || 30);
-      const cur = findBuff(id);
-      if (cur) { cur.time = Math.max(cur.time, t); return true; }
-      if (list.length >= MAX_ACTIVE) list.shift();
-      list.push({ id: id, time: t, dur: t, pool: 0 });
-      floatText(p.x + p.w / 2, p.y - 12, d.name, d.color);
-      return true;
-    },
-
-    remove(id) {
-      for (let i = list.length - 1; i >= 0; i--) {
-        if (list[i].id === id) { list.splice(i, 1); return true; }
-      }
-      return false;
-    },
-
-    has(id) { return !!findBuff(id); },
-
-    clear() { list.length = 0; },
-
-    modsOf() {
-      const m = zeroMods();
-      for (let i = 0; i < list.length; i++) {
-        const d = BUFF_DEFS[list[i].id];
-        if (d) addMods(m, d.mods);
-      }
-      return m;
-    },
-
-    // Per-step upkeep: timers, damage-over-time, ambient particle icons.
-    // Driven by the wrapped Player.update; safe to call manually too.
-    tick(dt, player) {
-      if (!player) return;
-      if (player.dead) { if (list.length) list.length = 0; return; }
-      for (let i = list.length - 1; i >= 0; i--) {
-        const b = list[i];
-        b.time -= dt;
-        if (b.time <= 0) { list.splice(i, 1); continue; }
-        const d = BUFF_DEFS[b.id];
-        if (d && d.dps > 0) dotDamage(b, player, d, dt);
-      }
-      emitParticles(dt, player);
-    },
-
-    // Screen-space HUD row under the hearts/breath bubbles, right-aligned.
-    drawIcons(ctx, w, h) {
-      if (!ctx || TC.state !== 'playing' || !list.length) return;
-      const p = TC.player;
-      if (!p || p.dead) return;
-      const S = 22, GAP = 4, Y = 56;
-      ctx.save();
-      ctx.font = 'bold 11px monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      let x = w - 14 - S;
-      for (let i = 0; i < list.length; i++) {
-        const b = list[i];
-        const d = BUFF_DEFS[b.id];
-        if (!d) continue;
-        ctx.fillStyle = 'rgba(16,12,22,0.82)';
-        ctx.fillRect(x, Y, S, S);
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = d.color;
-        ctx.strokeRect(x + 0.5, Y + 0.5, S - 1, S - 1);
-        const words = d.name.split(' ');
-        const glyph = (words.length > 1 ? words[0].charAt(0) + words[1].charAt(0)
-          : d.name.slice(0, 2)).toUpperCase();
-        ctx.fillStyle = d.color;
-        ctx.fillText(glyph, x + S / 2, Y + S / 2 - 2);
-        const frac = clamp01(b.dur > 0 ? b.time / b.dur : 0);
-        ctx.fillStyle = 'rgba(255,255,255,0.75)';
-        ctx.fillRect(x + 2, Y + S - 4, (S - 4) * frac, 2);
-        x -= S + GAP;
-      }
-      ctx.restore();
-    },
-
-    // [[id, secondsRemaining], ...]
-    serialize() {
-      const out = [];
-      for (let i = 0; i < list.length; i++) {
-        out.push([list[i].id, Math.round(list[i].time * 10) / 10]);
-      }
-      return out;
-    },
-
-    deserialize(data) {
-      list.length = 0;
-      if (!Array.isArray(data)) return false;
-      for (let i = 0; i < data.length && i < MAX_ACTIVE; i++) {
-        const e = data[i];
-        if (!Array.isArray(e) || !BUFF_DEFS[e[0]]) continue;
-        const defDur = BUFF_DEFS[e[0]].dur || 30;
-        const t = (typeof e[1] === 'number' && isFinite(e[1]))
-          ? Math.min(Math.max(e[1], 0.1), 600) : defDur;
-        list.push({ id: e[0], time: t, dur: t, pool: 0 });
-      }
+  // Apply/refresh a buff on the player (defaults to TC.player). Re-applying
+  // extends to the longer of the remaining/new duration (Terraria-style).
+  function applyBuff(id, dur, player) {
+    const d = BUFF_DEFS[id];
+    if (!d) return false;
+    const p = player || TC.player;
+    if (!p || p.dead) return false;
+    const t = (dur != null && dur > 0) ? dur : (d.dur || 30);
+    const cur = findBuff(id);
+    if (cur) {
+      cur.time = Math.max(cur.time, t);
+      emitBus('BuffApplied', 'BuffApplied', { id: id, time: cur.time });
       return true;
     }
-  };
+    if (list.length >= MAX_ACTIVE) list.shift();
+    list.push({ id: id, time: t, dur: t, pool: 0 });
+    floatText(p.x + p.w / 2, p.y - 12, d.name, d.color);
+    emitBus('BuffApplied', 'BuffApplied', { id: id, time: t });
+    return true;
+  }
+
+  function removeBuff(id) {
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].id === id) {
+        list.splice(i, 1);
+        emitBus('BuffExpired', 'BuffExpired', { id: id });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function hasBuff(id) { return !!findBuff(id); }
+
+  function modsOfBuffs() {
+    const m = zeroMods();
+    for (let i = 0; i < list.length; i++) {
+      const d = BUFF_DEFS[list[i].id];
+      if (d) addMods(m, d.mods);
+    }
+    return m;
+  }
+
+  // Per-step upkeep: timers, damage-over-time, ambient particle icons.
+  // Driven by TC.Accessories.update(); safe to call manually too.
+  function tickBuffs(dt, player) {
+    if (!player) return;
+    if (player.dead) { if (list.length) list.length = 0; return; }
+    for (let i = list.length - 1; i >= 0; i--) {
+      const b = list[i];
+      b.time -= dt;
+      if (b.time <= 0) {
+        list.splice(i, 1);
+        emitBus('BuffExpired', 'BuffExpired', { id: b.id });
+        continue;
+      }
+      const d = BUFF_DEFS[b.id];
+      if (d && d.dps > 0) dotDamage(b, player, d, dt);
+    }
+    emitParticles(dt, player);
+  }
+
+  // Screen-space HUD row under the hearts/breath bubbles, right-aligned.
+  function drawBuffIcons(ctx, w, h) {
+    if (!ctx || TC.state !== 'playing' || !list.length) return;
+    const p = TC.player;
+    if (!p || p.dead) return;
+    const S = 22, GAP = 4, Y = 56;
+    ctx.save();
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    let x = w - 14 - S;
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      const d = BUFF_DEFS[b.id];
+      if (!d) continue;
+      ctx.fillStyle = 'rgba(16,12,22,0.82)';
+      ctx.fillRect(x, Y, S, S);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = d.color;
+      ctx.strokeRect(x + 0.5, Y + 0.5, S - 1, S - 1);
+      const words = d.name.split(' ');
+      const glyph = (words.length > 1 ? words[0].charAt(0) + words[1].charAt(0)
+        : d.name.slice(0, 2)).toUpperCase();
+      ctx.fillStyle = d.color;
+      ctx.fillText(glyph, x + S / 2, Y + S / 2 - 2);
+      const frac = clamp01(b.dur > 0 ? b.time / b.dur : 0);
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillRect(x + 2, Y + S - 4, (S - 4) * frac, 2);
+      x -= S + GAP;
+    }
+    ctx.restore();
+  }
+
+  // [[id, secondsRemaining], ...]
+  function serializeBuffs() {
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      out.push([list[i].id, Math.round(list[i].time * 10) / 10]);
+    }
+    return out;
+  }
+
+  function deserializeBuffs(data) {
+    list.length = 0;                          // replace-wholesale: stale session state dies here
+    if (!Array.isArray(data)) return false;
+    for (let i = 0; i < data.length && i < MAX_ACTIVE; i++) {
+      const e = data[i];
+      if (!Array.isArray(e) || !BUFF_DEFS[e[0]]) continue;
+      const defDur = BUFF_DEFS[e[0]].dur || 30;
+      const t = (typeof e[1] === 'number' && isFinite(e[1]))
+        ? Math.min(Math.max(e[1], 0.1), 600) : defDur;
+      list.push({ id: e[0], time: t, dur: t, pool: 0 });
+    }
+    return true;
+  }
 
   // Damage-over-time bypasses player.damage() on purpose: that path grants
   // iframes, so a poison tick would shield the player from real enemy hits.
@@ -536,32 +578,77 @@
   }
 
   // ====================================================================
-  // Potion consumables (kind:'potion'), intercepted in Player.useHeld
+  // Per-frame upkeep — lead calls TC.Accessories.update(dt) from step()
+  // (absorbs the old Player.update wrap's work beyond stat windows, which
+  // moved into TC.Stats consumers)
   // ====================================================================
 
+  // Buffs are module-global but belong to "the current player". A player
+  // instance that was just created (newGame, failed-load fallback) starts
+  // clean; one that received saved state via attachToPlayer/restoreLegacy
+  // keeps exactly what was loaded. Respawn reuses the same instance, so
+  // mid-session deaths are untouched.
+  let curPlayer;                                // undefined until first update()
+  const restored = new WeakSet();
+
+  function markRestored(p) {
+    if (p && typeof p === 'object') { try { restored.add(p); } catch (e) {} }
+  }
+
+  function update(dt) {
+    const p = TC.player || null;
+    if (p !== curPlayer) {
+      curPlayer = p;
+      if (!p || !restored.has(p)) list.length = 0;   // fresh session: drop stale buffs
+    }
+    if (!p) return;
+    if (typeof p._potionCd === 'number' && p._potionCd > 0) p._potionCd -= dt;
+    tickBuffs(dt, p);
+  }
+
+  // ====================================================================
+  // Potion consumables (kind:'potion') — lead calls onUseHeld from
+  // Player.useHeld before its kind switch (absorbs the old useHeld wrap)
+  // ====================================================================
+
+  // Returns true when the potion was actually drunk.
   function drinkPotion(p, def, itemId) {
-    if ((p._potionCd || 0) > 0) return;
-    if (!consumeSelected(p, itemId, 1)) return;
+    if ((p._potionCd || 0) > 0) return false;
+    if (!consumeSelected(p, itemId, 1)) return false;
     p._potionCd = 0.8;
-    Buffs.apply(def.buff, def.time, p);
+    applyBuff(def.buff, def.time, p);
     sfx('pickup');
     burst(p.x + p.w / 2, p.y + p.h / 2, 8, [def.color || '#ffffff', '#ffffff'], 80);
     p.swingSeq = (p.swingSeq || 0) + 1;
     p.swing = { item: def, timer: 0.45, dur: 0.45, swung: true, loop: false, bow: false,
                 id: p.swingSeq };
+    return true;
   }
 
-  // Keep p.maxHp in sync with gear bonuses (vital amulet), clamping overflow.
-  function syncMaxHp(p, C, bonus) {
-    const want = (C.PLAYER_HP || p.maxHp) + bonus;
-    if (want !== p.maxHp) {
-      p.maxHp = want;
-      if (p.hp > want) p.hp = want;
-    }
+  // Handle the held item if it is a potion; report so the caller can skip
+  // its own kind switch. dt unused: sips are click-paced.
+  function onUseHeld(player, def, dt) {
+    if (!player || !def || def.kind !== 'potion') return false;
+    const sel = (typeof player.selectedSlot === 'function') ? player.selectedSlot() : null;
+    const itemId = (sel && TC.ITEM_DEFS && TC.ITEM_DEFS[sel.id] === def) ? sel.id : null;
+    if (!itemId) return false;
+    return drinkPotion(player, def, itemId);
   }
 
   // ====================================================================
-  // Item icons for the defs added above (items.js owns all others)
+  // HUD — lead calls TC.Accessories.drawHud(ctx) screen-space after UI.draw
+  // (absorbs the old UI.draw wrap part)
+  // ====================================================================
+
+  function drawHud(ctx) {
+    if (!ctx || !list.length) return;
+    const cv = ctx.canvas;
+    drawBuffIcons(ctx, cv ? cv.width : 0, cv ? cv.height : 0);
+  }
+
+  // ====================================================================
+  // Item icons for the defs added above (items.js owns all others; the lead
+  // consults TC.Accessories.iconFor alongside its other icon hooks)
   // ====================================================================
 
   function shadeHex(hex, amt) {
@@ -686,184 +773,138 @@
     return cv;
   }
 
+  function iconFor(id) {
+    return (id != null) ? myIcon(String(id)) : null;
+  }
+
   // ====================================================================
-  // Runtime wraps — installed as each target module becomes available
+  // Persistence — SaveCore provider + explicit attach/capture pair
+  // (absorbs the old Player.serialize / static deserialize wraps; data
+  // shapes are byte-compatible with the old player-blob sub-keys
+  // `accessories` / `buffs`)
   // ====================================================================
 
-  function mark(fn) { try { fn.__accWrap = true; } catch (e) {} return fn; }
+  function attachAcc(player, data) {
+    const ok = deserializeAcc(player, data);
+    markRestored(player);
+    return ok;
+  }
+  function captureAcc(player) {
+    return serializeAcc(player);
+  }
+  function attachBuffs(player, data) {
+    const ok = deserializeBuffs(data);
+    markRestored(player);
+    return ok;
+  }
+  function captureBuffs() {
+    return serializeBuffs();
+  }
 
-  function wrapFn(owner, name, make) {
-    if (!owner || typeof owner[name] !== 'function') return false;
-    const cur = owner[name];
-    if (cur.__accWrap) return true;           // already ours
-    owner[name] = mark(make(cur));
+  // Apply accessories + buffs from an old v1 player blob onto the live
+  // TC.player (mirrors the removed Player.deserialize wrap, including the
+  // clear-when-buffs-absent branch). Lead calls it in continueGame() right
+  // after player creation.
+  function restoreLegacy(playerData) {
+    const p = TC.player || null;
+    if (!p || !playerData || typeof playerData !== 'object') return false;
+    attachAcc(p, playerData.accessories);
+    if (playerData.buffs) attachBuffs(p, playerData.buffs);
+    else list.length = 0;
+    markRestored(p);
     return true;
   }
 
-  function hookPlayer(P) {
-    let ok = true;
-
-    // Defense from accessories/buffs joins the armor sum; ui.js HUD and
-    // Combat.hurtPlayer both read totalDefense(), so this propagates.
-    if (!wrapFn(P.prototype, 'totalDefense', (orig) => function () {
-      const base = orig.apply(this, arguments);
-      return base + Math.round(combinedMods(this).defense);
-    })) ok = false;
-
-    // Buff upkeep + physics-tuning window: movement/regen constants are
-    // adjusted around the synchronous original call, then restored.
-    if (!wrapFn(P.prototype, 'update', (orig) => function (dt) {
-      const p = this;
-      if (typeof p._potionCd === 'number' && p._potionCd > 0) p._potionCd -= dt;
-      Buffs.tick(dt, p);
-      if (p.dead) return orig.call(p, dt);
-      const m = combinedMods(p);
-      const C = TC.CONST;
-      let sv = null;
-      if (C) {
-        sv = [C.RUN_MAX, C.RUN_ACCEL, C.REGEN_RATE];
-        C.RUN_MAX *= m.moveSpeed;
-        C.RUN_ACCEL *= m.moveSpeed;
-        C.REGEN_RATE += m.regen;
-        syncMaxHp(p, C, m.maxHp);
-      }
-      try { return orig.call(p, dt); }
-      finally {
-        if (sv) { C.RUN_MAX = sv[0]; C.RUN_ACCEL = sv[1]; C.REGEN_RATE = sv[2]; }
-      }
-    })) ok = false;
-
-    // Potions short-circuit the normal use switch.
-    if (!wrapFn(P.prototype, 'useHeld', (orig) => function (dt) {
-      const p = this;
-      const sel = (typeof p.selectedSlot === 'function') ? p.selectedSlot() : null;
-      const def = (sel && TC.ITEM_DEFS) ? TC.ITEM_DEFS[sel.id] : null;
-      if (def && def.kind === 'potion') { drinkPotion(p, def, sel.id); return; }
-      return orig.call(p, dt);
-    })) ok = false;
-
-    // Persistence rides the existing save blob (save.js stores it verbatim).
-    if (!wrapFn(P.prototype, 'serialize', (orig) => function () {
-      const data = orig.apply(this, arguments);
-      if (data && typeof data === 'object') {
-        data.accessories = Acc.serialize(this);
-        data.buffs = Buffs.serialize();
-      }
-      return data;
-    })) ok = false;
-
-    if (!wrapFn(P, 'deserialize', (orig) => function (data) {
-      const p = orig.call(this, data);
-      if (p) {
-        Acc.deserialize(p, data && data.accessories);
-        if (data && data.buffs) Buffs.deserialize(data.buffs);
-        else Buffs.clear();
-      }
-      return p;
-    })) ok = false;
-
-    return ok;
-  }
-
-  function hookCombat(Cb) {
-    let ok = true;
-
-    // Melee: scale the strike's base damage; crit bonus rides the roll window.
-    if (!wrapFn(Cb, 'meleeStrike', (orig) => function () {
-      const p = TC.player;
-      const m = p ? combinedMods(p) : null;
-      if (m && (m.meleeDmg !== 1 || m.critChance !== 0)) {
-        const args = Array.prototype.slice.call(arguments);
-        args[5] = Math.round((args[5] || 0) * m.meleeDmg);
-        const C = TC.CONST;
-        let sv = null;
-        if (C) { sv = C.CRIT_CHANCE; C.CRIT_CHANCE = sv + m.critChance; }
-        try { return orig.apply(this, args); }
-        finally { if (sv !== null && C) C.CRIT_CHANCE = sv; }
-      }
-      return orig.apply(this, arguments);
-    })) ok = false;
-
-    // Bow: scale arrow damage (impact-time crit roll is Combat's own).
-    if (!wrapFn(Cb, 'shootArrow', (orig) => function () {
-      const p = TC.player;
-      const m = p ? combinedMods(p) : null;
-      if (m && m.rangedDmg !== 1) {
-        const args = Array.prototype.slice.call(arguments);
-        args[4] = Math.round((args[4] || 0) * m.rangedDmg);
-        return orig.apply(this, args);
-      }
-      return orig.apply(this, arguments);
-    })) ok = false;
-
-    // Environmental hook: lava burns apply the Burning debuff. Defense
-    // reduction already flows through the wrapped totalDefense().
-    if (!wrapFn(Cb, 'hurtPlayer', (orig) => function (dmg, kbx, kby, src) {
-      if (src === 'lava') Buffs.apply('burning', 4);
-      return orig.call(this, dmg, kbx, kby, src);
-    })) ok = false;
-
-    return ok;
-  }
-
-  function hookUI(UI) {
-    return wrapFn(UI, 'draw', (orig) => function () {
-      const r = orig.apply(this, arguments);
-      try { Buffs.drawIcons(arguments[0], arguments[1], arguments[2]); } catch (e) {}
-      return r;
-    });
-  }
-
-  function hookItems(Items) {
-    if (!Items || typeof Items.iconFor !== 'function') return false;
-    if (Items.iconFor.__accWrap) return true;
-    const orig = Items.iconFor;
-    Items.iconFor = mark(function (id) {
-      const cv = myIcon(String(id));
-      return cv || orig.apply(this, arguments);
-    });
-    return true;
-  }
-
-  function hookGlobals() {
-    let ok = true;
-    if (!wrapFn(TC, 'newGame', (orig) => function () {
-      const r = orig.apply(this, arguments);
-      Buffs.clear();
-      return r;
-    })) ok = false;
-    if (!wrapFn(TC, 'continueGame', (orig) => function () {
-      Buffs.clear();               // stale session buffs; deserialize re-adds saved ones
-      return orig.apply(this, arguments);
-    })) ok = false;
-    if (!wrapFn(TC, 'quitToTitle', (orig) => function () {
-      const r = orig.apply(this, arguments);
-      Buffs.clear();
-      return r;
-    })) ok = false;
-    return ok;
-  }
-
-  // Retry loop: each job returns true once installed (or is hopeless), so the
-  // module works no matter where its <script> tag sits relative to siblings.
-  const jobs = [
-    () => installDefs(),
-    () => (TC.Player ? hookPlayer(TC.Player) : false),
-    () => (TC.Combat ? hookCombat(TC.Combat) : false),
-    () => (TC.UI ? hookUI(TC.UI) : false),
-    () => (TC.Items ? hookItems(TC.Items) : false),
-    () => hookGlobals()
-  ];
-  let tries = 0;
-  function pump() {
-    for (let i = jobs.length - 1; i >= 0; i--) {
-      let done = false;
-      try { done = !!jobs[i](); } catch (e) { done = true; }
-      if (done) jobs.splice(i, 1);
-    }
-    if (jobs.length && ++tries < 600 && typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(pump);
+  if (TC.SaveCore && typeof TC.SaveCore.register === 'function') {
+    try {
+      TC.SaveCore.register('character.core.accessories', {
+        version: 1,
+        serialize(ctx) {
+          const p = ctx ? ctx.player : null;
+          return { accessories: captureAcc(p), buffs: captureBuffs() };
+        },
+        deserialize(data, ctx) {
+          const p = ctx ? ctx.player : null;
+          const d = (data && typeof data === 'object') ? data : {};
+          attachAcc(p, d.accessories);
+          if (d.buffs) attachBuffs(p, d.buffs);
+          else list.length = 0;               // mirrors the old else-clear branch
+        }
+      });
+    } catch (e) {
+      console.warn('[TC.Accessories] SaveCore provider refused:', e && e.message);
     }
   }
-  pump();
+
+  // ====================================================================
+  // Boot: shared-table extension + stable registry ids (guarded, once —
+  // script order in index.html puts this file after constants/registry/
+  // savecore/events, so no retry pump is needed)
+  // ====================================================================
+
+  installDefs();
+
+  const ACC_ITEM_IDS = Object.keys(ACCESSORY_DEFS).concat(Object.keys(POTION_DEFS));
+  if (TC.Registry && typeof TC.Registry.define === 'function') {
+    for (let i = 0; i < ACC_ITEM_IDS.length; i++) {
+      const d = TC.ITEM_DEFS ? TC.ITEM_DEFS[ACC_ITEM_IDS[i]] : null;
+      if (!d) continue;
+      try { TC.Registry.define('item', 'acc:' + ACC_ITEM_IDS[i], d); }
+      catch (e) { /* duplicate or rejected: content still ships via tables */ }
+    }
+  }
+
+  // ====================================================================
+  // Public API
+  // ====================================================================
+
+  TC.Accessories = {
+    SLOT_COUNT: SLOT_COUNT,
+    PREFIX_DEFS: PREFIX_DEFS,
+
+    slotsOf: slotsOf,
+    equip: equip,
+    unequip: unequip,
+
+    // Pure stat-mod aggregation (folded in by TC.Stats 'gear.accessories')
+    modsOf: modsOf,
+    prefixMods: prefixMods,
+    rollPrefix: rollPrefix,
+
+    // Per-player persistence shapes (legacy player-blob sub-key compatible)
+    serialize: serializeAcc,
+    deserialize: deserializeAcc,
+
+    // Loop-facing hooks
+    update: update,
+    onUseHeld: onUseHeld,
+    drawHud: drawHud,
+    iconFor: iconFor,
+
+    // SaveCore-era persistence pair + legacy v1 blob adapter
+    attachToPlayer: attachAcc,
+    captureOf: captureAcc,
+    restoreLegacy: restoreLegacy
+  };
+
+  TC.Buffs = {
+    DEFS: BUFF_DEFS,
+    list: list,
+
+    apply: applyBuff,
+    remove: removeBuff,
+    has: hasBuff,
+    clear() { list.length = 0; },
+
+    // Pure stat-mod aggregation (folded in by TC.Stats 'status.buffs')
+    modsOf: modsOfBuffs,
+
+    tick: tickBuffs,
+    drawIcons: drawBuffIcons,
+
+    serialize: serializeBuffs,
+    deserialize: deserializeBuffs,
+    attachToPlayer: attachBuffs,
+    captureOf: captureBuffs
+  };
 })();

@@ -1,13 +1,19 @@
 /* fishing.js — TC.Fishing: rods, bobber casting, bite rolls + reel timing,
    per-zone loot tables, crates, daily quest fish.
-   Self-integrates without touching lead-owned files:
+   Contract-driven module (no monkey patching):
    - extends TC.ITEM_DEFS / TC.RECIPES at load (rods, bait, fish, crates)
-   - decorates TC.Player.prototype (useHeld intercepts rods/crates; update
-     drives the sim; draw renders line + bobber in world space)
-   - wraps TC.Items.iconFor for fishing-item icons (falls back to items.js)
-   Load order: after player.js/items.js/ui.js, before main.js (see index.html).
-   Save integration: TC.Fishing.serialize()/load(data) are provided but not
-   yet wired into save.js's fixed data blob; quest/catch stats reset on reload. */
+   - player.useHeld calls TC.Fishing.onUseHeld(player,def,dt) -> bool: casts /
+     hooks / opens crates on fresh clicks and returns true for fishing gear so
+     the player's default handling stays out
+   - the lead loop calls TC.Fishing.update(dt) (bobber flight, bite/reel
+     timers, safety recalls) and TC.Fishing.draw(ctx, cam) (line + float,
+     world space under the camera transform)
+   - items.js iconFor consults TC.Fishing.iconFor(id) for fishing-item icons
+   - persistence via TC.SaveCore provider 'systems.core.fishing'; old v1
+     saves can be restored through TC.Fishing.restoreLegacy(blob)
+   - state resets on TC.Events EVENT.WorldLoaded; update() also self-heals
+     when the world pointer changes
+   Load order: after items.js/player.js, before main.js (see index.html). */
 'use strict';
 (function () {
   const TC = window.TC = window.TC || {};
@@ -192,7 +198,7 @@
     rollT: 0,           // accumulator toward the next bite roll
     biteT: 0,           // seconds left in the reel window
     windowT: 1,         // full reel-window length (for the perfect fraction)
-    prevDown: false,    // own mouse-edge tracking (survives multi-step frames)
+    prevDown: false,    // mouse-edge tracker; owned by update(), read by onUseHeld
     clock: 0,           // visual time for bob/line animation
     quest: null,        // {day, fish, done}
     catches: {}         // fish id -> lifetime count
@@ -482,7 +488,7 @@
       (TC.CONST.COLORS && TC.CONST.COLORS.heal) || '#7dff7d');
   }
 
-  // Entry point used by the useHeld decorator (and callable directly).
+  // Entry point used by onUseHeld (and callable directly).
   function onUseItem(player, def, itemId) {
     if (!player || player.dead || !def) return;
     if (def.kind === 'fishing_rod') {
@@ -493,7 +499,26 @@
     }
   }
 
-  // ---- per-frame simulation (driven by the Player.update decorator) ----
+  // Lead-facing use hook: player.useHeld calls this before its kind switch.
+  // Returns true for fishing gear (rod/crate) so the default handling stays
+  // out — what the old prototype wrap did. Actions fire on fresh clicks only;
+  // the edge tracker (S.prevDown) is sampled by update() every frame, so the
+  // edge stays correct wherever update sits relative to player.update, and
+  // switching items mid-hold never fires a phantom cast.
+  function onUseHeld(player, def, dt) {        // dt unused: actions are click-paced
+    if (!def || (def.kind !== 'fishing_rod' && def.kind !== 'crate')) return false;
+    if (!player || player.dead) return true;   // ours: never fall through
+    const inp = TC.Input;
+    const down = !!(inp && inp.mouse && inp.mouse.down);
+    if (down && !S.prevDown && !(inp && inp.uiHover)) {
+      const sel = (typeof player.selectedSlot === 'function') ? player.selectedSlot() : null;
+      const itemId = (sel && iDef(sel.id) === def) ? sel.id : null;
+      onUseItem(player, def, itemId);
+    }
+    return true;
+  }
+
+  // ---- per-frame simulation (lead calls TC.Fishing.update from the loop) ----
   function stepFlying(dt) {
     const b = S.bobber;
     const TS = TC.CONST.TS;
@@ -533,8 +558,6 @@
 
   function update(dt) {
     S.clock += dt;
-    decorate();                                // cheap no-op once wrapped
-    mergeItems();                              // no-op once merged
 
     const w = TC.world;
     if (w !== S.world) hardReset(w);
@@ -542,21 +565,11 @@
     ensureRng();
     ensureQuest();
 
-    const p = TC.player;
-
-    // own click-edge tracking: one press = one action even across sub-steps
+    // own the click-edge sample every frame: onUseHeld only runs while the
+    // button is held (player.useHeld gating), so this re-arms the edge on
+    // release and keeps item swaps mid-hold from reading a stale edge
     const inp = TC.Input;
-    const down = !!(inp && inp.mouse && inp.mouse.down);
-    const clicked = down && !S.prevDown && !(inp && inp.uiHover);
-    S.prevDown = down;
-
-    const sel = (typeof p.selectedSlot === 'function') ? p.selectedSlot() : null;
-    const def = sel ? iDef(sel.id) : null;
-
-    if (clicked && !p.dead && def &&
-        (def.kind === 'fishing_rod' || def.kind === 'crate')) {
-      onUseItem(p, def, sel.id);
-    }
+    S.prevDown = !!(inp && inp.mouse && inp.mouse.down);
 
     if (S.mode === 'flying') stepFlying(dt);
     else if (S.mode === 'waiting') stepWaiting(dt);
@@ -564,6 +577,8 @@
 
     // safety recalls: death, line stretched too far, or rod unselected
     if (S.mode !== 'idle') {
+      const p = TC.player;
+      const sel = (typeof p.selectedSlot === 'function') ? p.selectedSlot() : null;
       const dx = p.x + p.w / 2 - S.bobber.x, dy = p.y + p.h / 2 - S.bobber.y;
       if (p.dead || sel == null || sel.id !== S.rodId ||
           dx * dx + dy * dy > F.MAX_LINE_LEN * F.MAX_LINE_LEN) {
@@ -573,7 +588,7 @@
   }
 
   // ---- world-space rendering (camera transform already applied) ----
-  function draw(ctx) {
+  function draw(ctx, cam) {                    // cam unused: world-space draw
     if (!ctx || TC.state !== 'playing') return;
     const p = TC.player;
     if (!p || p.dead || !S.bobber) return;
@@ -612,31 +627,7 @@
     ctx.restore();
   }
 
-  // ---- persistence API (ready for save.js wiring; not auto-called) ----
-  function serialize() {
-    return {
-      quest: S.quest ? { day: S.quest.day, fish: S.quest.fish, done: !!S.quest.done } : null,
-      catches: Object.assign({}, S.catches)
-    };
-  }
-  function load(data) {
-    if (!data || typeof data !== 'object') return false;
-    S.catches = {};
-    if (data.catches && typeof data.catches === 'object') {
-      for (const k in data.catches) {
-        const n = data.catches[k] | 0;
-        if (n > 0 && iDef(k)) S.catches[k] = n;
-      }
-    }
-    S.quest = null;
-    const q = data.quest;
-    if (q && typeof q === 'object' && typeof q.day === 'number' && iDef(q.fish)) {
-      S.quest = { day: q.day, fish: q.fish, done: !!q.done };
-    }
-    return true;
-  }
-
-  // ---- icons for fishing items (decorates TC.Items.iconFor) ----
+  // ---- icons for fishing items (items.js consults TC.Fishing.iconFor) ----
   const ICON_CACHE = new Map();
   function px(g, c, x, y, w, h) { g.fillStyle = c; g.fillRect(x, y, w, h); }
   function paintMyIcon(g, id) {
@@ -705,8 +696,12 @@
     ICON_CACHE.set(id, cv);
     return cv;
   }
+  // Canvas for a fishing item id, or null when the id is not ours.
+  function iconFor(id) {
+    return FISH_ITEMS[id] ? myIcon(id) : null;
+  }
 
-  // ---- load-time merges + prototype decoration (all idempotent) ----
+  // ---- load-time data merges (idempotent) ----
   let itemsMerged = false;
   function mergeItems() {
     if (itemsMerged || !TC.ITEM_DEFS) return;
@@ -723,60 +718,62 @@
       if (!have[FISH_RECIPES[i].out]) TC.RECIPES.push(FISH_RECIPES[i]);
     }
   }
+  mergeItems();
+  mergeRecipes();
 
-  let decorated = false;
-  function decorate() {
-    if (decorated || !TC.Player || !TC.Player.prototype) return;
-    const proto = TC.Player.prototype;
-    decorated = true;
-
-    const origUseHeld = proto.useHeld;
-    proto.useHeld = function (dt) {
-      const sel = (typeof this.selectedSlot === 'function') ? this.selectedSlot() : null;
-      const def = sel ? iDef(sel.id) : null;
-      if (def && (def.kind === 'fishing_rod' || def.kind === 'crate')) {
-        return;                    // handled by TC.Fishing.update click edges
+  // ---- persistence API ----
+  function serialize() {
+    return {
+      quest: S.quest ? { day: S.quest.day, fish: S.quest.fish, done: !!S.quest.done } : null,
+      catches: Object.assign({}, S.catches)
+    };
+  }
+  function load(data) {
+    if (!data || typeof data !== 'object') return false;
+    S.catches = {};
+    if (data.catches && typeof data.catches === 'object') {
+      for (const k in data.catches) {
+        const n = data.catches[k] | 0;
+        if (n > 0 && iDef(k)) S.catches[k] = n;
       }
-      return origUseHeld.call(this, dt);
-    };
+    }
+    S.quest = null;
+    const q = data.quest;
+    if (q && typeof q === 'object' && typeof q.day === 'number' && iDef(q.fish)) {
+      S.quest = { day: q.day, fish: q.fish, done: !!q.done };
+    }
+    return true;
+  }
+  // Old-save compatibility: accepts the legacy v1 shapes — the whole
+  // tc_save_v1 blob ({fishing: {...}}) or the bare fishing state object —
+  // and feeds the inner state to load(). Thin alias, no side effects.
+  function restoreLegacy(blob) {
+    if (!blob || typeof blob !== 'object') return false;
+    const inner = (blob.fishing && typeof blob.fishing === 'object') ? blob.fishing : blob;
+    return load(inner);
+  }
 
-    const origUpdate = proto.update;
-    proto.update = function (dt) {
-      const r = origUpdate.apply(this, arguments);
-      try { update(dt); } catch (e) {}
-      return r;
-    };
-
-    const origDraw = proto.draw;
-    proto.draw = function (ctx, cam) {
-      const r = origDraw.call(this, ctx, cam);
-      try { draw(ctx); } catch (e) {}
-      return r;
-    };
-
-    if (TC.Items && typeof TC.Items.iconFor === 'function' && !TC.Items.__fishingIcons) {
-      const origIcon = TC.Items.iconFor;
-      TC.Items.iconFor = function (id) {
-        if (FISH_ITEMS[id]) {
-          try { return myIcon(id); } catch (e) {}
-        }
-        return origIcon(id);
-      };
-      TC.Items.__fishingIcons = true;
+  // SaveCore provider (was the TC.Save.save localStorage splice): quest +
+  // lifetime catches ride the versioned envelope instead of rewriting the
+  // fixed v1 record behind save.js's back.
+  if (TC.SaveCore && typeof TC.SaveCore.register === 'function') {
+    try {
+      TC.SaveCore.register('systems.core.fishing', {
+        version: 1,
+        serialize: function () { return serialize(); },
+        deserialize: function (data) { return load(data); }
+      });
+    } catch (e) {
+      console.warn('[TC.Fishing] SaveCore provider refused:', e && e.message);
     }
   }
 
-  mergeItems();
-  mergeRecipes();
-  decorate();
-  // If player.js somehow loads after this module, keep retrying briefly
-  // (the normal index.html order decorates immediately above).
-  if (!decorated) {
-    let tries = 0;
-    const t = setInterval(function () {
-      decorate();
-      if (decorated || ++tries > 50) clearInterval(t);
-    }, 200);
+  // Fresh world: fresh quest/catch state (public for direct calls too).
+  function reset() { hardReset(TC.world); }
+
+  // Event wiring — reactions only, installed once at load (guarded).
+  if (TC.Events && TC.Events.EVENT && typeof TC.Events.on === 'function') {
+    TC.Events.on(TC.Events.EVENT.WorldLoaded, function () { reset(); });
   }
 
   // ---- public surface ----
@@ -784,6 +781,8 @@
     update: update,
     draw: draw,
     onUseItem: onUseItem,
+    onUseHeld: onUseHeld,
+    iconFor: iconFor,
     reelIn: function () { recall(true); },
     zoneFor: zoneFor,
     powerFor: powerFor,
@@ -791,7 +790,8 @@
     questPool: QUEST_POOL.slice(),
     serialize: serialize,
     load: load,
-    reset: function () { hardReset(TC.world); },
+    restoreLegacy: restoreLegacy,
+    reset: reset,
     _debug: function () {                     // test/inspection aid, not a contract
       return {
         mode: S.mode, power: S.power, rodId: S.rodId,
@@ -799,69 +799,4 @@
       };
     }
   };
-
-  // ---- save integration ----
-  // Splice the fishing blob into the stored record (same pattern as wiring.js):
-  // placements persist via tile diffs; this carries quest/catch state only.
-  // KEY must stay in sync with save.js ('tc_save_v1').
-  const SAVE_KEY = 'tc_save_v1';
-
-  function spliceStored(mutate) {
-    try {
-      const raw = window.localStorage.getItem(SAVE_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      if (!data || typeof data !== 'object') return;
-      mutate(data);
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify(data));
-    } catch (e) { /* best-effort, like save.js */ }
-  }
-
-  function readStoredFishing() {
-    try {
-      const raw = window.localStorage.getItem(SAVE_KEY);
-      if (!raw) return null;
-      const data = JSON.parse(raw);
-      return (data && typeof data === 'object') ? data.fishing || null : null;
-    } catch (e) { return null; }
-  }
-
-  function patchSaveFlow() {
-    if (TC.__fishingSavePatched) return;
-    if (TC.Save && typeof TC.Save.save === 'function') {
-      TC.__fishingSavePatched = true;
-      const origSave = TC.Save.save;
-      TC.Save.save = function () {
-        const ok = origSave ? !!origSave.call(TC.Save) : false;
-        if (ok && TC.Fishing && typeof TC.Fishing.serialize === 'function') {
-          const blob = TC.Fishing.serialize();
-          const hasAny = blob && Object.keys(blob).length > 0;
-          if (hasAny) spliceStored((data) => { data.fishing = blob; });
-          else spliceStored((data) => { delete data.fishing; });
-        }
-        return ok;
-      };
-    }
-    if (typeof TC.continueGame === 'function') {
-      TC.__fishingContinuePatched = true;
-      const origCont = TC.continueGame;
-      TC.continueGame = function () {
-        const r = origCont.call(TC);
-        if (TC.Fishing && typeof TC.Fishing.load === 'function') {
-          try { TC.Fishing.load(readStoredFishing()); } catch (e) {}
-        }
-        return r;
-      };
-    }
-    if (typeof TC.newGame === 'function') {
-      TC.__fishingNewPatched = true;
-      const origNew = TC.newGame;
-      TC.newGame = function (seed) {
-        const r = origNew.call(TC, seed);
-        if (TC.Fishing && typeof TC.Fishing.reset === 'function') TC.Fishing.reset();
-        return r;
-      };
-    }
-  }
-  patchSaveFlow();
 })();

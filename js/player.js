@@ -185,8 +185,11 @@
       return Math.floor(this.walkPhase * 4) % 4;
     }
 
-    // Sum of equipped armor defense (ITEM_DEFS kind 'armor').
+    // Total defense via the stat resolver (armor + accessories + buffs).
     totalDefense() {
+      if (TC.Stats && typeof TC.Stats.resolve === 'function') {
+        return TC.Stats.resolve(this).defense;
+      }
       const eq = this.equipment;
       if (!eq) return 0;
       const slots = (CONST.EQUIP_SLOTS && CONST.EQUIP_SLOTS.length)
@@ -265,10 +268,20 @@
         if (this.breath >= 1) this.drownPool = 0;
       }
 
+      // resolved stats: max health sync, movement, regen (accessories/buffs/armor)
+      const st = (TC.Stats && typeof TC.Stats.resolve === 'function') ? TC.Stats.resolve(this) : null;
+      if (st && st.maxHealth > 0) {
+        const prevMax = this.maxHp;
+        this.maxHp = st.maxHealth;
+        if (this.maxHp > prevMax) this.hp += this.maxHp - prevMax;
+        if (this.hp > this.maxHp) this.hp = this.maxHp;
+      }
+
       // horizontal
       const wm = this.inWater ? CONST.SWIM_MOVE_MULT : 1;
-      const maxSp = CONST.RUN_MAX * wm;
-      const accel = CONST.RUN_ACCEL * wm;
+      const spdMul = st ? st.moveSpeed : 1;
+      const maxSp = CONST.RUN_MAX * spdMul * wm;
+      const accel = CONST.RUN_ACCEL * spdMul * wm;
       if (ix !== 0) {
         this.vx += ix * accel * dt;
         if (this.vx > maxSp) this.vx = maxSp;
@@ -325,9 +338,10 @@
       this.advanceSwing(dt);
 
       // natural regen
+      const regenRate = st ? st.healthRegen : CONST.REGEN_RATE;
       this.regenTimer -= dt;
       if (this.regenTimer <= 0 && this.hp < this.maxHp) {
-        this.hp = Math.min(this.maxHp, this.hp + CONST.REGEN_RATE * dt);
+        this.hp = Math.min(this.maxHp, this.hp + regenRate * dt);
       }
 
       this.walkPhase += (Math.abs(this.vx) * dt) / 48;
@@ -409,6 +423,8 @@
       if (!def) { this.mineTarget = null; return; }
       if (TC.Gear && TC.Gear.onUseHeld(this, def, dt)) return;
       if (TC.Loot && TC.Loot.onUseHeld(this, def, dt)) return;
+      if (TC.Fishing && typeof TC.Fishing.onUseHeld === 'function' && TC.Fishing.onUseHeld(this, def, dt)) return;
+      if (TC.Accessories && typeof TC.Accessories.onUseHeld === 'function' && TC.Accessories.onUseHeld(this, def, dt)) return;
       switch (def.kind) {
         case 'tool': this.doMine(def, m, dt); break;
         case 'block': this.mineTarget = null; this.doPlace(def, sel.id, m); break;
@@ -427,6 +443,9 @@
       const TS = CONST.TS;
       const tx = Math.floor(m.worldX / TS), ty = Math.floor(m.worldY / TS);
       if (!this.inReach(tx, ty)) return;
+      if (TC.Wiring && typeof TC.Wiring.interact === 'function') {
+        try { if (TC.Wiring.interact(this, m)) return; } catch (w) {}
+      }
       const id = world.get(tx, ty);
       if (id === TILE.DOOR_CLOSED || id === TILE.DOOR_OPEN) {
         const next = id === TILE.DOOR_CLOSED ? TILE.DOOR_OPEN : TILE.DOOR_CLOSED;
@@ -494,6 +513,11 @@
         sfx('break');
         if (id === TILE.CHEST && TC.Chests && typeof TC.Chests.spill === 'function') {
           try { TC.Chests.spill(tx, ty); } catch (e) {}   // scatter stored items first
+        }
+        // canonical break completion: exactly one tile write + one TileBroken
+        try { world.set(tx, ty, TILE.AIR); } catch (e) {}
+        if (TC.Events) {
+          try { TC.Events.emit(TC.Events.EVENT.TileBroken, { tx: tx, ty: ty, id: id }); } catch (eb) {}
         }
         if (td.drop && TC.Items && typeof TC.Items.spawnDrop === 'function') {
           try { TC.Items.spawnDrop(tcx, tcy, td.drop, 1); } catch (e) {}
@@ -615,6 +639,11 @@
     }
 
     doPlace(def, itemId, m) {
+      if (typeof itemId === 'string' && itemId === 'actuator' && TC.Wiring &&
+          typeof TC.Wiring.attachActuatorAt === 'function') {
+        try { TC.Wiring.attachActuatorAt(this, m); } catch (w) {}
+        return;
+      }
       if (def.tile == null) return;
       const world = TC.world;
       if (!world || typeof world.get !== 'function' || typeof world.set !== 'function') return;
@@ -835,12 +864,13 @@
       this.respawnTimer = 0;
       this.swing = null;
       this.mineTarget = null;
+      if (TC.Magic && typeof TC.Magic.onRespawn === 'function') TC.Magic.onRespawn(this);
     }
 
     // ---- persistence ----
 
     serialize() {
-      return {
+      const d = {
         x: this.x, y: this.y, vx: this.vx, vy: this.vy,
         hp: this.hp, hotbarIndex: this.hotbarIndex,
         sx: this.sx, sy: this.sy,
@@ -851,6 +881,17 @@
           feet: this.equipment.feet || null
         }
       };
+      // v1-blob parity for systems that used to ride prototype wraps
+      if (TC.Magic && typeof TC.Magic.captureOf === 'function') {
+        try { Object.assign(d, TC.Magic.captureOf(this)); } catch (e) {}
+      }
+      if (TC.Accessories && typeof TC.Accessories.captureOf === 'function') {
+        try { d.accessories = TC.Accessories.captureOf(this); } catch (e2) {}
+      }
+      if (TC.Buffs && typeof TC.Buffs.captureOf === 'function') {
+        try { d.buffs = TC.Buffs.captureOf(); } catch (e3) {}
+      }
+      return d;
     }
 
     static deserialize(data) {
@@ -889,6 +930,14 @@
           p.equipment[k] = (d && d.kind === 'armor' && d.slot === k) ? eq[k] : null;
         }
       }
+      // restore system state that used to arrive via prototype wraps (v1 blobs)
+      if (TC.Magic && typeof TC.Magic.restoreLegacy === 'function') {
+        try { TC.Magic.restoreLegacy(data, p); } catch (e) {}
+      }
+      if (TC.Accessories && typeof TC.Accessories.restoreLegacy === 'function') {
+        try { TC.Accessories.restoreLegacy(data); } catch (e2) {}
+      }
+      if (data.lifeCrystals != null) p.lifeCrystals = data.lifeCrystals;
       return p;
     }
 

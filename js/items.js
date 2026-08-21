@@ -632,7 +632,11 @@
     let cv = iconCache.get(key);
     if (cv) return cv;
     const gic = (TC.Gear && TC.Gear.iconFor && TC.Gear.iconFor(key)) ||
-                (TC.Loot && TC.Loot.iconFor && TC.Loot.iconFor(key));
+                (TC.Loot && TC.Loot.iconFor && TC.Loot.iconFor(key)) ||
+                (TC.Wiring && typeof TC.Wiring.iconFor === 'function' && TC.Wiring.iconFor(key)) ||
+                (TC.Magic && typeof TC.Magic.iconFor === 'function' && TC.Magic.iconFor(key)) ||
+                (TC.Accessories && typeof TC.Accessories.iconFor === 'function' && TC.Accessories.iconFor(key)) ||
+                (TC.Fishing && typeof TC.Fishing.iconFor === 'function' && TC.Fishing.iconFor(key));
     if (gic) { iconCache.set(key, gic); return gic; }
     cv = document.createElement('canvas');
     cv.width = ICON;

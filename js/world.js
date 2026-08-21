@@ -71,7 +71,10 @@
     idx(x, y) { return y * this.width + x; }
     inB(x, y) { return x >= 0 && y >= 0 && x < this.width && y < this.height; }
     get(x, y) { return this.inB(x, y) ? this.tiles[this.idx(x, y)] : TC.TILE.BEDROCK; }
-    isSolid(x, y) { return TC.TILE_DEFS[this.get(x, y)].solid; }
+    isSolid(x, y) {
+      if (!TC.TILE_DEFS[this.get(x, y)].solid) return false;
+      return !(TC.Wiring && typeof TC.Wiring.isGhost === 'function' && TC.Wiring.isGhost(x, y));
+    }
     solidAtPixel(px, py) { return this.isSolid(Math.floor(px / TS), Math.floor(py / TS)); }
     opaqueAt(x, y) { return TC.TILE_DEFS[this.get(x, y)].opaque; }
 
@@ -89,6 +92,7 @@
       this.markDirtyAt(x, y);
       if (TC.Lighting) TC.Lighting.onTileChanged(x, y);
       this.checkSupport(x, y);
+      if (TC.Events) { try { TC.Events.emit(TC.Events.EVENT.TileChanged, { tx: x, ty: y, id: id }); } catch (e) {} }
     }
 
     // Raw write for save-load and tree felling: no rescan/relight/pops.
@@ -101,6 +105,7 @@
       this.paints.delete(i);
       this.seedWater(i);             // wake water touched by the write
       this.markDirtyAt(x, y);
+      if (TC.Events) { try { TC.Events.emit(TC.Events.EVENT.TileChanged, { tx: x, ty: y, id: id }); } catch (e) {} }
     }
 
     // First solid tile per column (== height when the column is all air).

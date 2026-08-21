@@ -70,6 +70,7 @@
     );
     TC.player.giveStarterKit();
     if (TC.Enemies) TC.Enemies.clear();
+    if (TC.Wiring && typeof TC.Wiring.resetForNewWorld === 'function') TC.Wiring.resetForNewWorld();
     if (TC.NPCs && TC.NPCs.spawnGuide) TC.NPCs.spawnGuide(gen.spawnX * TC.CONST.TS, gen.spawnY * TC.CONST.TS);
     if (TC.Items) TC.Items.clearDrops();
     if (TC.Combat) TC.Combat.clear();
@@ -99,6 +100,10 @@
     if (TC.Particles) TC.Particles.clear();
     if (TC.Sky && typeof data.time === 'number') TC.Sky.time = data.time;
     if (TC.Chests && typeof TC.Chests.load === 'function') TC.Chests.load(data.chests);
+    if (TC.Fishing && typeof TC.Fishing.restoreLegacy === 'function' && data.fishing != null) {
+      try { TC.Fishing.restoreLegacy(data.fishing); } catch (e) {}
+    }
+    if (TC.Wiring && typeof TC.Wiring.resetForNewWorld === 'function') TC.Wiring.resetForNewWorld();
     centerCamera(true);
     TC.state = 'playing';
     if (TC.Events) { try { TC.Events.emit(TC.Events.EVENT.WorldLoaded, { seed: data.seed }); } catch (e) {} }
@@ -139,13 +144,17 @@
     if (TC.Biomes) TC.Biomes.update(dt);
     if (TC.player) TC.player.update(dt);
     if (TC.Loot && TC.player) TC.Loot.update(TC.player, dt);
+    if (TC.Accessories && typeof TC.Accessories.update === 'function') TC.Accessories.update(dt);
+    if (TC.Fishing && typeof TC.Fishing.update === 'function') TC.Fishing.update(dt);
     if (TC.Enemies) { TC.Enemies.spawnDirector(dt); TC.Enemies.update(dt); }
     if (TC.NPCs) TC.NPCs.update(dt);
     if (TC.Items) TC.Items.update(dt, TC.player);
     if (TC.Combat) TC.Combat.update(dt);
     if (TC.Gear) TC.Gear.update(dt);
+    if (TC.Magic && typeof TC.Magic.update === 'function') TC.Magic.update(dt);
     if (TC.Particles) TC.Particles.update(dt);
     if (TC.world) TC.world.update(dt);
+    if (TC.Wiring && typeof TC.Wiring.update === 'function') TC.Wiring.update(dt);
     if (TC.Lighting) TC.Lighting.update(dt, cam);
     if (TC.Music) TC.Music.update(dt);
     if (TC.MiniMap) TC.MiniMap.update(dt);
@@ -166,12 +175,15 @@
       TC.applyCam(ctx);
       TC.world.draw(ctx, cam);
       if (TC.Loot) TC.Loot.drawTiles(ctx, cam, TC.world);
+      if (TC.Wiring && typeof TC.Wiring.draw === 'function') TC.Wiring.draw(ctx, cam);
       if (TC.Items) TC.Items.draw(ctx, cam);
       if (TC.Enemies) TC.Enemies.draw(ctx, cam);
       if (TC.NPCs) TC.NPCs.draw(ctx, cam);
       if (TC.player) TC.player.draw(ctx, cam);
+      if (TC.Fishing && typeof TC.Fishing.draw === 'function') TC.Fishing.draw(ctx, cam);
       if (TC.Combat) TC.Combat.draw(ctx, cam);
       if (TC.Gear) TC.Gear.draw(ctx, cam);
+      if (TC.Magic && typeof TC.Magic.drawWorld === 'function') TC.Magic.drawWorld(ctx, cam);
       if (TC.Particles) TC.Particles.draw(ctx, cam);
       TC.clearCam(ctx);
 
@@ -182,6 +194,8 @@
     }
 
     if (TC.UI) TC.UI.draw(ctx, viewW, viewH);
+    if (TC.Magic && typeof TC.Magic.drawHud === 'function') TC.Magic.drawHud(ctx, viewW, viewH);
+    if (TC.Accessories && typeof TC.Accessories.drawHud === 'function') TC.Accessories.drawHud(ctx);
     drawDebug(ctx);
   }
 

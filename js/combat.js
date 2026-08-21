@@ -42,13 +42,35 @@
 
   // ---- helpers ----
 
-  // Apply DMG_VARIANCE (uniform +/-v) then CRIT_CHANCE double-damage roll.
-  function rollDamage(base) {
+  // Apply DMG_VARIANCE (uniform +/-v) then a crit double-damage roll.
+  // Crit chance = CONST.CRIT_CHANCE + resolved player critChance contributions.
+  // classMul scales by the resolver's damage-class multiplier (melee/ranged).
+  function rollDamage(base, classMul) {
     const v = TC.CONST.DMG_VARIANCE || 0;
-    let d = base * (1 - v + Math.random() * 2 * v);
-    const crit = Math.random() < (TC.CONST.CRIT_CHANCE || 0);
+    let critChance = TC.CONST.CRIT_CHANCE || 0;
+    let mul = (typeof classMul === 'number') ? classMul : 1;
+    if (TC.Stats && typeof TC.Stats.resolve === 'function' && TC.player) {
+      try {
+        const st = TC.Stats.resolve(TC.player);
+        if (st) {
+          critChance += st.critChance || 0;
+          mul *= 1;
+        }
+      } catch (e) {}
+    }
+    let d = base * mul * (1 - v + Math.random() * 2 * v);
+    const crit = Math.random() < critChance;
     if (crit) d *= 2;
     return { dmg: Math.max(1, Math.round(d)), crit };
+  }
+
+  // Resolved damage-class multiplier for the local player (1 when unknown).
+  function classMul(field) {
+    if (!TC.Stats || typeof TC.Stats.resolve !== 'function' || !TC.player) return 1;
+    try {
+      const st = TC.Stats.resolve(TC.player);
+      return (st && typeof st[field] === 'number' && st[field] > 0) ? st[field] : 1;
+    } catch (e) { return 1; }
   }
 
   // Normalize an angle into [0, TAU).
@@ -96,7 +118,7 @@
         if (off > span) continue;
       }
       if (swingId != null) e.lastHitSwing = swingId;
-      const roll = rollDamage(dmg);
+      const roll = rollDamage(dmg, classMul('meleeDamage'));
       TC.Enemies.damageEnemy(e, roll.dmg, dx >= 0 ? 1 : -1, kb, roll.crit);
       hits++;
     }
@@ -105,15 +127,16 @@
   };
 
   Combat.shootArrow = function (x, y, angle, speed, dmg) {
+    const eff = Math.round(dmg * classMul('rangedDamage'));
     if (TC.Projectiles && typeof TC.Projectiles.spawn === 'function') {
-      TC.Projectiles.spawn('arrow', x, y, angle, { speed: speed, dmg: dmg });
+      TC.Projectiles.spawn('arrow', x, y, angle, { speed: speed, dmg: eff });
     } else {
       legacyArrows.push({
         x: x, y: y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         age: 0,
-        dmg: dmg
+        dmg: eff
       });
     }
     if (TC.Audio) TC.Audio.play('swing'); // bow release shares the whoosh recipe
@@ -223,6 +246,9 @@
       final = Math.max(1, final - defense);
     }
     TC.player.damage(final, kbx, kby, src);
+    if (src === 'lava' && TC.Buffs && typeof TC.Buffs.apply === 'function') {
+      try { TC.Buffs.apply('burning', 4); } catch (e) {}
+    }
     if (TC.Audio) TC.Audio.play('hurt');
     return { finalDamage: final, defenseApplied: defenseApplied, crit: false };
   };

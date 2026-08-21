@@ -1,21 +1,57 @@
 /* magic.js — TC.Magic: player mana pool + regen stars, potion sickness,
-   magic weapons (kind 'magic') with projectile logic alongside TC.Combat,
+   magic weapons (kind 'magic') fired onto the shared TC.Projectiles pool,
    mana potions / mana crystals, and the HUD mana-star bar.
 
-   Integration (this module is self-installing; no lead-owned edits needed):
-   - Adds its item defs to TC.ITEM_DEFS and recipes to TC.RECIPES at load time
-     (constants.js stays untouched; see MAGIC_ITEMS / MAGIC_RECIPES below).
-   - Wraps TC.Combat.update/draw/clear to tick and render projectiles, wraps
-     TC.Player.prototype serialize/respawn (+ static deserialize) for mana
-     persistence, wraps TC.UI.draw for the mana bar, and extends
-     TC.Items.iconFor with custom icons for its own ids only.
-   - REQUIRES a script tag in index.html AFTER ui.js and BEFORE main.js:
-       <script src="js/magic.js"></script>
-     (index.html is lead-owned, so the lead must add it.)
-   - Suggested AGENTS.md contract row (lead-owned doc, not edited here):
-     magic.js | TC.Magic: update(dt), drawWorld(ctx), clear(), ensureMana(p),
-     spendMana(p,n)→bool, restoreMana(p,n), fire(def,x,y,ang),
-     bolts[], stars[], MANA_BASE/MANA_CAP/POTION_SICKNESS
+   Foundation-contract edition: NO monkey patching. Every former runtime wrap
+   is now a plain exported function or a contract registration:
+
+     was Combat.update wrap   -> TC.Magic.update(dt)          (lead: main step)
+     was Combat.draw wrap     -> TC.Magic.drawWorld(ctx,cam)  (lead: main draw)
+     was Combat.clear wrap    -> WorldLoaded subscription + manual clear()
+     was Player.serialize wrap   -> captureOf + SaveCore provider below
+     was Player.deserialize wrap -> attachToPlayer / restoreLegacy
+     was Player.respawn wrap  -> TC.Magic.onRespawn(player)
+     was UI.draw wrap         -> TC.Magic.drawHud(ctx,w,h)    (lead: ui draw)
+     was Items.iconFor wrap   -> TC.Magic.iconFor(id)         (lead: items chain)
+
+   INTEGRATION (one line each, lead-owned files):
+     main.js step(), directly after `if (TC.Combat) TC.Combat.update(dt);`:
+       if (TC.Magic) TC.Magic.update(dt);
+     main.js draw(), directly after `if (TC.Combat) TC.Combat.draw(ctx, cam);`:
+       if (TC.Magic) TC.Magic.drawWorld(ctx, cam);
+     player.js respawn(), on its last line:
+       if (TC.Magic) TC.Magic.onRespawn(this);
+     player.js serialize(), before `return {`:
+       (optional legacy-v1 parity) Object.assign(d, TC.Magic.captureOf(this));
+     player.js static deserialize(), before `return p;`:
+       if (TC.Magic) TC.Magic.restoreLegacy(data, p);
+     ui.js UI.draw, last statement:
+       if (TC.Magic) TC.Magic.drawHud(ctx, w, h);
+     items.js iconFor(), extend the existing gic chain:
+       || (TC.Magic && TC.Magic.iconFor && TC.Magic.iconFor(key))
+
+   Persistence: SaveCore provider 'character.core.magic' mirrors the live
+   player fields (mana/maxMana/potionSickness stay ON the player instance).
+   restoreLegacy applies the same fields from an old v1 player blob.
+
+   Bolts: fire() delegates to TC.Projectiles.spawn('magic_bolt', ...) with
+   each weapon def mapped onto the pool's opt names (speed/dmg/kb/pierce/
+   bounce/gravity/crit/accel/maxSpeed/life/hitRadius/colors). The shared
+   magic_bolt type is aligned once at load with classic staff ballistics
+   (see TYPES ALIGNMENT below) — flagged for the lead to bake into
+   projectiles.js. Per-spawn visual styles (spark streak / scythe crescent /
+   orb) are NOT pooled yet (documented projectiles.js limitation): pooled
+   bolts render with the standard tinted bolt painter + glow; weapon identity
+   survives through color and icons. A death watcher restores impact bursts.
+   If TC.Projectiles is absent, a local bolts[] fallback reproduces the old
+   private simulation (ticked by update, drawn by drawWorld).
+
+   Regen stars stay module-local: the pool's 'falling_star' is a damaging
+   ballistic projectile, nothing like these homing mana pickups.
+
+   Damage: castWeapon passes flat def.damage (today's formula). Stats-based
+   scaling (Math.round(def.damage * st.magicDamage)) is available via
+   TC.Stats but intentionally NOT applied — it would change current numbers.
 
    Tuning constants that would ideally live in constants.js (kept here since
    constants.js is lead-owned): MANA_BASE 20, MANA_CAP 200, CRYSTAL_GAIN 20,
@@ -38,6 +74,7 @@
   const STAR_PAYLOAD = 10;       // mana carried by one regen star
   const REGEN_DELAY = 1.0;       // s after spending before regen resumes
   const POTION_SICKNESS = 60;    // s between mana potion drinks
+  const WATCH_CAP = 32;          // pooled bolts tracked for impact bursts
 
   // ---- guarded cross-module helpers ----
   function sfx(name) {
@@ -73,6 +110,7 @@
 
   // Same roll shape as combat.js melee/arrows: +/-DMG_VARIANCE then a crit
   // chance of CRIT_CHANCE plus any per-weapon bonus; crits deal double.
+  // (Fallback path only — pooled bolts roll inside TC.Projectiles.)
   function rollDamage(base, critBonus) {
     const v = CONST.DMG_VARIANCE || 0;
     let d = base * (1 - v + Math.random() * 2 * v);
@@ -123,14 +161,130 @@
   function regenRate(maxMana) { return 3 + maxMana * 0.05; }
 
   // ====================================================================
-  // Projectiles ("bolts") — updated here, drawn in world space through the
-  // wrapped TC.Combat.draw pass so they sit under particles/lighting.
+  // Persistence — plain data in/out around the live player fields (was
+  // Player.serialize/deserialize wraps). Numbers match the old wraps
+  // exactly: rounded mana/sickness out, clamped values back in.
   // ====================================================================
-  const bolts = [];             // live weapon projectiles
-  const stars = [];             // mana regen stars homing to the player
-  let noManaMsgT = 0;           // throttle for "not enough mana" style texts
+  function captureOf(p) {
+    if (!p || typeof p !== 'object') {
+      return { mana: MANA_BASE, maxMana: MANA_BASE, potionSickness: 0 };
+    }
+    ensureMana(p);
+    return {
+      mana: Math.round(p.mana),
+      maxMana: p.maxMana | 0,
+      potionSickness: Math.round(p.potionSickness || 0)
+    };
+  }
 
-  function fireBolt(def, x, y, ang) {
+  function attachToPlayer(p, data) {
+    if (!p || typeof p !== 'object') return p;
+    ensureMana(p);
+    const num = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
+    const mm = num(data && data.maxMana);
+    if (mm !== null) p.maxMana = clamp(Math.round(mm), MANA_BASE, MANA_CAP);
+    const mn = num(data && data.mana);
+    p.mana = clamp(mn !== null ? mn : p.maxMana, 0, p.maxMana);
+    const ps = num(data && data.potionSickness);
+    p.potionSickness = ps !== null ? clamp(ps, 0, POTION_SICKNESS) : 0;
+    return p;
+  }
+
+  // Legacy v1 player blobs carried mana/maxMana/potionSickness inline (the
+  // old serialize wrap). Lead calls this after building the player.
+  function restoreLegacy(data, player) {
+    return attachToPlayer(player || TC.player, data);
+  }
+
+  // Death refill (was the Player.respawn wrap body).
+  function onRespawn(p) {
+    if (!p || typeof p !== 'object') return;
+    ensureMana(p);
+    p.mana = p.maxMana;        // death refills the pool
+    p.potionSickness = 0;
+    p.manaRegenDelay = 0;
+  }
+
+  if (TC.SaveCore && typeof TC.SaveCore.register === 'function') {
+    try {
+      TC.SaveCore.register('character.core.magic', {
+        version: 1,
+        serialize(ctx) { return captureOf(ctx ? ctx.player : null); },
+        deserialize(data, ctx) { attachToPlayer(ctx ? ctx.player : null, data); }
+      });
+    } catch (e) {
+      console.warn('[TC.Magic] SaveCore provider refused:', e && e.message);
+    }
+  }
+
+  // ====================================================================
+  // Weapon projectiles — delegated to the shared TC.Projectiles pool.
+  // ====================================================================
+
+  // TYPES ALIGNMENT: the shared magic_bolt def ships homing 5.5 / bounce 1 /
+  // restitution 0.85; classic staffs fired straight, non-bouncing bolts that
+  // shattered on walls (restitution 0.95), and per-spawn opts cannot express
+  // "none" (bounce <= 0 falls back to the type default; homing and
+  // restitution have no per-spawn override). Water Bolt keeps its 4 bounces
+  // via per-spawn opts. Flagged for the lead to bake into projectiles.js.
+  if (TC.Projectiles && TC.Projectiles.TYPES && TC.Projectiles.TYPES.magic_bolt) {
+    const mb = TC.Projectiles.TYPES.magic_bolt;
+    mb.homing = 0;
+    mb.bounce = 0;
+    mb.restitution = 0.95;
+  }
+
+  // Impact-burst watchers: pooled slots are recycled, so each fired bolt's
+  // last live position is mirrored here and the burst fires when it dies
+  // (wall shatter, final pierce hit, or expiry — indistinguishable, so the
+  // mid-strength 0.8 burst stands in for the old per-cause sizes).
+  const watched = [];
+  function watchBolt(p, colors) {
+    if (watched.length >= WATCH_CAP) return;
+    watched.push({ p: p, lx: p.x, ly: p.y, colors: colors || ['#ffffff'] });
+  }
+  function sweepWatched() {
+    for (let i = watched.length - 1; i >= 0; i--) {
+      const w = watched[i];
+      if (w.p.active) { w.lx = w.p.x; w.ly = w.p.y; continue; }
+      watched.splice(i, 1);
+      impactFxAt(w.lx, w.ly, w.colors, 0.8);
+    }
+  }
+
+  function impactFxAt(x, y, colors, k) {
+    pBurst(x, y, Math.max(2, Math.round(5 * k)), colors, 90 * k + 40, 260);
+  }
+
+  // Fire one weapon projectile. Returns the pooled projectile (or a local
+  // fallback bolt when TC.Projectiles is absent), or null.
+  function fire(def, x, y, ang) {
+    if (TC.Projectiles && typeof TC.Projectiles.spawn === 'function') {
+      const colors = def.colors || ['#ffffff'];
+      const p = TC.Projectiles.spawn('magic_bolt', x, y, ang, {
+        speed: def.speed || 400,
+        dmg: def.damage || 5,
+        kb: def.knockback != null ? def.knockback : 3,
+        pierce: def.pierce || 0,          // extra enemies after the first hit
+        bounce: def.bounce || 0,          // wall bounces before shattering
+        gravity: def.gravity || 0,
+        crit: def.crit || 0,
+        accel: def.accel || 0,
+        maxSpeed: def.maxSpeed || 0,
+        life: def.life || 1.2,
+        hitRadius: (def.size || 4) + 3,   // old circle-vs-rect test radius
+        colors: colors
+      });
+      if (p) watchBolt(p, colors);
+      return p;
+    }
+    return fireFallbackBolt(def, x, y, ang);
+  }
+
+  // ---- fallback local sim (ONLY while TC.Projectiles is absent) ----
+  const bolts = [];             // legacy fallback projectiles
+
+  function fireFallbackBolt(def, x, y, ang) {
     bolts.push({
       x: x, y: y,
       vx: Math.cos(ang) * (def.speed || 400),
@@ -149,10 +303,7 @@
       trailT: 0,
       hits: new Set()                   // enemies already struck (pierce bookkeeping)
     });
-  }
-
-  function impactFx(b, k) {
-    pBurst(b.x, b.y, Math.max(2, Math.round(5 * k)), b.colors, 90 * k + 40, 260);
+    return bolts[bolts.length - 1];
   }
 
   function trailParticle(b) {
@@ -167,11 +318,12 @@
     });
   }
 
-  function updateBolts(dt) {
+  function updateLocalBolts(dt) {
+    if (!bolts.length) return;
     for (let i = bolts.length - 1; i >= 0; i--) {
       const b = bolts[i];
       b.age += dt;
-      if (b.age > b.life) { impactFx(b, 0.4); bolts.splice(i, 1); continue; }
+      if (b.age > b.life) { impactFxAt(b.x, b.y, b.colors, 0.4); bolts.splice(i, 1); continue; }
 
       // scythe-style acceleration along the current heading
       if (b.accel) {
@@ -190,14 +342,14 @@
       let dead = false;
       const nx = b.x + b.vx * dt;
       if (b.vx !== 0 && solidPx(nx, b.y)) {
-        if (b.bounces > 0) { b.bounces--; b.vx = -b.vx * 0.95; b.x += Math.sign(b.vx) * 1; impactFx(b, 0.5); }
-        else { impactFx(b, 1); dead = true; }
+        if (b.bounces > 0) { b.bounces--; b.vx = -b.vx * 0.95; b.x += Math.sign(b.vx) * 1; impactFxAt(b.x, b.y, b.colors, 0.5); }
+        else { impactFxAt(b.x, b.y, b.colors, 1); dead = true; }
       } else b.x = nx;
       if (!dead) {
         const ny = b.y + b.vy * dt;
         if (b.vy !== 0 && solidPx(b.x, ny)) {
-          if (b.bounces > 0) { b.bounces--; b.vy = -b.vy * 0.95; b.y += Math.sign(b.vy) * 1; impactFx(b, 0.5); }
-          else { impactFx(b, 1); dead = true; }
+          if (b.bounces > 0) { b.bounces--; b.vy = -b.vy * 0.95; b.y += Math.sign(b.vy) * 1; impactFxAt(b.x, b.y, b.colors, 0.5); }
+          else { impactFxAt(b.x, b.y, b.colors, 1); dead = true; }
         } else b.y = ny;
       }
 
@@ -212,7 +364,7 @@
           b.hits.add(e);
           const roll = rollDamage(b.dmg, b.crit);
           try { TC.Enemies.damageEnemy(e, roll.dmg, b.vx >= 0 ? 1 : -1, b.kb, roll.crit); } catch (e2) {}
-          impactFx(b, 0.8);
+          impactFxAt(b.x, b.y, b.colors, 0.8);
           if (b.pierce > 0) b.pierce--;
           else { dead = true; break; }
         }
@@ -224,8 +376,13 @@
 
   // ====================================================================
   // Mana regen stars — regen accrues into payloads that fly home as small
-  // blue stars (Terraria-style); mana lands when the star does.
+  // blue stars (Terraria-style); mana lands when the star does. These are
+  // pickups, not weapons: the pool's 'falling_star' type (damaging
+  // ballistic) does not cover them, so they stay module-local.
   // ====================================================================
+  const stars = [];             // mana regen stars homing to the player
+  let noManaMsgT = 0;           // throttle for "not enough mana" style texts
+
   function spawnRegenStar(p, payload) {
     const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
     const a = Math.random() * TAU;                 // visual-only randomness
@@ -279,7 +436,8 @@
   // ====================================================================
   // Item use — kind 'magic' fires while LMB is held; potions and mana
   // crystals trigger on the click edge. player.js's useHeld() ignores
-  // unknown kinds, so these never double-fire.
+  // unknown kinds, so these never double-fire. Damage stays FLAT
+  // (def.damage) — see the header note before adding Stats scaling.
   // ====================================================================
   function handleUse(dt, p) {
     const inp = TC.Input;
@@ -307,7 +465,7 @@
     }
     p.magicCd = def.useTime || 0.3;
     p.manaRegenDelay = REGEN_DELAY;
-    fireBolt(def, cx + Math.cos(ang) * 10, cy + Math.sin(ang) * 10, ang);
+    fire(def, cx + Math.cos(ang) * 10, cy + Math.sin(ang) * 10, ang);
     pBurst(cx + Math.cos(ang) * 12, cy + Math.sin(ang) * 12, 3, def.colors || ['#ffffff'], 70, 0);
     p.aimAng = ang;
     p.swingSeq = (p.swingSeq || 0) + 1;
@@ -351,40 +509,46 @@
     sfx('pickup');
   }
 
-  // ---- public API ----
-  const Magic = {
-    bolts: bolts,
-    stars: stars,
-    MANA_BASE: MANA_BASE,
-    MANA_CAP: MANA_CAP,
-    POTION_SICKNESS: POTION_SICKNESS,
-    ensureMana: ensureMana,
-    spendMana: spendMana,
-    restoreMana: restoreMana,
-    fire: fireBolt,
-    clear: function () { bolts.length = 0; stars.length = 0; noManaMsgT = 0; },
-    update: function (dt) {
-      const p = TC.player;
-      if (!p) return;
-      ensureMana(p);
-      if (noManaMsgT > 0) noManaMsgT -= dt;
-      if (p.potionSickness > 0) p.potionSickness = Math.max(0, p.potionSickness - dt);
-      if (p.magicCd > 0) p.magicCd -= dt;
-      if (TC.state !== 'playing' || p.dead) { updateBolts(dt); updateStars(dt); return; }
-      handleUse(dt, p);
-      updateRegen(dt, p);
-      updateBolts(dt);
-      updateStars(dt);
-    },
-    drawWorld: drawWorld
-  };
-  TC.Magic = Magic;
+  // ====================================================================
+  // Per-frame tick (was the Combat.update wrap; lead calls it directly
+  // after TC.Combat.update). Also ticks the fallback bolts and stars.
+  // ====================================================================
+  function update(dt) {
+    const p = TC.player;
+    if (!p) return;
+    ensureMana(p);
+    if (noManaMsgT > 0) noManaMsgT -= dt;
+    if (p.potionSickness > 0) p.potionSickness = Math.max(0, p.potionSickness - dt);
+    if (p.magicCd > 0) p.magicCd -= dt;
+    if (TC.state !== 'playing' || p.dead) {
+      sweepWatched(); updateLocalBolts(dt); updateStars(dt);
+      return;
+    }
+    handleUse(dt, p);
+    updateRegen(dt, p);
+    sweepWatched(); updateLocalBolts(dt); updateStars(dt);
+  }
 
-  // World-space rendering, called from the wrapped TC.Combat.draw pass.
-  function drawWorld(ctx) {
+  // Wipe transient state (world transitions). Called automatically on
+  // WorldLoaded below; also safe to call manually anytime.
+  function clear() {
+    bolts.length = 0;
+    stars.length = 0;
+    watched.length = 0;
+    noManaMsgT = 0;
+  }
+
+  // ====================================================================
+  // World-space rendering (was the Combat.draw wrap; lead calls it
+  // directly after TC.Combat.draw). Pooled bolts paint themselves inside
+  // TC.Projectiles.draw; this pass covers the fallback bolts and the
+  // regen stars.
+  // ====================================================================
+  function drawWorld(ctx, cam) {
     if (!ctx || (!bolts.length && !stars.length)) return;
-    if (typeof TC.applyCam !== 'function') return;
-    TC.applyCam(ctx);
+    ctx.save();
+    if (typeof TC.applyCam === 'function') TC.applyCam(ctx);
+    else if (cam) ctx.setTransform(cam.zoom, 0, 0, cam.zoom, -cam.x * cam.zoom, -cam.y * cam.zoom);
 
     for (let i = 0; i < bolts.length; i++) {
       const b = bolts[i];
@@ -442,7 +606,7 @@
       ctx.fill();
     }
 
-    TC.clearCam(ctx);
+    ctx.restore();
   }
 
   // Four-point twinkle star path centered at (cx,cy).
@@ -455,6 +619,59 @@
     ctx.quadraticCurveTo(cx - k, cy + k, cx - r, cy);
     ctx.quadraticCurveTo(cx - k, cy - k, cx, cy - r);
     ctx.closePath();
+  }
+
+  // Screen-space HUD (was the UI.draw wrap; lead calls it from UI.draw):
+  // column of mana stars under the hearts/breath row, plus the
+  // potion-sickness countdown while it lasts.
+  function drawHud(ctx, w) {
+    if (TC.state !== 'playing') return;
+    const p = TC.player;
+    if (!p) return;
+    ensureMana(p);
+
+    const starN = Math.ceil(p.maxMana / 20);
+    const r = 7, step = r * 2 + 3;
+    let x = w - 16 - r, y = 58 + r;
+    for (let i = 0; i < starN; i++) {
+      const frac = clamp((p.mana - i * 20) / 20, 0, 1);
+      starPath(ctx, x, y, r);                          // empty socket
+      ctx.fillStyle = 'rgba(26,42,66,0.72)';
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(120,170,220,0.45)';
+      ctx.stroke();
+      if (frac > 0) {                                  // bottom-up partial fill
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x - r - 1, y - r + (1 - frac) * r * 2, r * 2 + 2, r * 2 * frac + 1);
+        ctx.clip();
+        starPath(ctx, x, y, r);
+        ctx.fillStyle = '#4a9fe8';
+        ctx.fill();
+        starPath(ctx, x, y, r * 0.45);
+        ctx.fillStyle = '#bfe4ff';
+        ctx.fill();
+        ctx.restore();
+      }
+      y += step;
+    }
+
+    const sick = p.potionSickness || 0;
+    if (sick > 0) {                                    // tiny flask + seconds left
+      const ly = y + 2;
+      ctx.fillStyle = '#b07ae8';
+      ctx.fillRect(x - 3, ly, 6, 8);
+      ctx.fillStyle = '#e8d8ff';
+      ctx.fillRect(x - 2, ly + 4, 4, 3);
+      ctx.font = 'bold 12px monospace';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx.fillText(Math.ceil(sick) + 's', x - 7, ly + 5);
+      ctx.fillStyle = '#c9a0f0';
+      ctx.fillText(Math.ceil(sick) + 's', x - 8, ly + 4);
+    }
   }
 
   // ====================================================================
@@ -520,11 +737,19 @@
         if (!dup) TC.RECIPES.push(r);
       }
     }
+    // Stable content ids under this module's own namespace (the shared-table
+    // auto-mirror separately records them as core:* — both may coexist).
+    if (TC.Registry && typeof TC.Registry.define === 'function') {
+      for (const id in MAGIC_ITEMS) {
+        try { TC.Registry.define('item', 'magic:' + id, MAGIC_ITEMS[id]); }
+        catch (e) { /* duplicate or rejected: content still ships via tables */ }
+      }
+    }
   }
 
   // ====================================================================
-  // Icons — extend TC.Items.iconFor for our ids only; everything else
-  // delegates to the original factory untouched.
+  // Icons — hand-painted 16px canvases for our ids only, exposed for the
+  // lead's items.js iconFor chain (was an Items.iconFor wrap).
   // ====================================================================
   const GEMS = {
     amethyst_staff: '#a25ad8', topaz_staff: '#e8c84a', emerald_staff: '#3fc86a',
@@ -672,166 +897,53 @@
     g.fillRect(3, 3, 10, 10);
   }
 
-  function installIcons() {
-    if (!TC.Items || typeof TC.Items.iconFor !== 'function') return;
-    const origIcon = TC.Items.iconFor;
-    const cache = new Map();
-    TC.Items.iconFor = function (id) {
-      const key = String(id);
-      if (!Object.prototype.hasOwnProperty.call(MAGIC_ITEMS, key)) return origIcon(key);
-      let cv = cache.get(key);
-      if (cv) return cv;
-      cv = document.createElement('canvas');
-      cv.width = 16;
-      cv.height = 16;
-      const g = cv.getContext('2d');
-      try { paintMagicIcon(g, key); } catch (e) { /* leave blank rather than crash */ }
-      cache.set(key, cv);
-      return cv;
-    };
+  const iconCache = new Map();
+
+  // Canvas for a magic item id, or null when the id is not ours.
+  function iconFor(id) {
+    const key = String(id);
+    if (!Object.prototype.hasOwnProperty.call(MAGIC_ITEMS, key)) return null;
+    let cv = iconCache.get(key);
+    if (cv) return cv;
+    cv = document.createElement('canvas');
+    cv.width = 16;
+    cv.height = 16;
+    const g = cv.getContext('2d');
+    try { paintMagicIcon(g, key); } catch (e) { /* leave blank rather than crash */ }
+    iconCache.set(key, cv);
+    return cv;
   }
 
   // ====================================================================
-  // Hooks — per-frame ticking and drawing ride on TC.Combat (main.js calls
-  // Combat.update/draw every playing frame); persistence rides on TC.Player;
-  // the mana bar rides on TC.UI.draw. All wraps compose and are marked.
+  // Event wiring — reactions only, installed once at load (guarded).
   // ====================================================================
-  function wrap(obj, name, maker) {
-    if (!obj || typeof obj[name] !== 'function' || obj[name].__magicWrapped) return false;
-    const fn = maker(obj[name]);
-    fn.__magicWrapped = true;
-    obj[name] = fn;
-    return true;
+  if (TC.Events && TC.Events.EVENT && typeof TC.Events.on === 'function') {
+    // Fresh world: no stray bolts/stars/watchers (clear() stays public).
+    TC.Events.on(TC.Events.EVENT.WorldLoaded, function () { clear(); });
   }
 
-  // Screen-space HUD: column of mana stars under the hearts/breath row, plus
-  // the potion-sickness countdown while it lasts.
-  function drawHud(ctx, w) {
-    if (TC.state !== 'playing') return;
-    const p = TC.player;
-    if (!p) return;
-    ensureMana(p);
-
-    const starN = Math.ceil(p.maxMana / 20);
-    const r = 7, step = r * 2 + 3;
-    let x = w - 16 - r, y = 58 + r;
-    for (let i = 0; i < starN; i++) {
-      const frac = clamp((p.mana - i * 20) / 20, 0, 1);
-      starPath(ctx, x, y, r);                          // empty socket
-      ctx.fillStyle = 'rgba(26,42,66,0.72)';
-      ctx.fill();
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = 'rgba(120,170,220,0.45)';
-      ctx.stroke();
-      if (frac > 0) {                                  // bottom-up partial fill
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(x - r - 1, y - r + (1 - frac) * r * 2, r * 2 + 2, r * 2 * frac + 1);
-        ctx.clip();
-        starPath(ctx, x, y, r);
-        ctx.fillStyle = '#4a9fe8';
-        ctx.fill();
-        starPath(ctx, x, y, r * 0.45);
-        ctx.fillStyle = '#bfe4ff';
-        ctx.fill();
-        ctx.restore();
-      }
-      y += step;
-    }
-
-    const sick = p.potionSickness || 0;
-    if (sick > 0) {                                    // tiny flask + seconds left
-      const ly = y + 2;
-      ctx.fillStyle = '#b07ae8';
-      ctx.fillRect(x - 3, ly, 6, 8);
-      ctx.fillStyle = '#e8d8ff';
-      ctx.fillRect(x - 2, ly + 4, 4, 3);
-      ctx.font = 'bold 12px monospace';
-      ctx.textAlign = 'right';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(0,0,0,0.75)';
-      ctx.fillText(Math.ceil(sick) + 's', x - 7, ly + 5);
-      ctx.fillStyle = '#c9a0f0';
-      ctx.fillText(Math.ceil(sick) + 's', x - 8, ly + 4);
-    }
-  }
-
-  function installHooks() {
-    if (TC.Combat) {
-      wrap(TC.Combat, 'update', function (orig) {
-        return function (dt) {
-          const r = orig.call(this, dt);
-          Magic.update(dt);
-          return r;
-        };
-      });
-      wrap(TC.Combat, 'draw', function (orig) {
-        return function (ctx, cam) {
-          orig.call(this, ctx, cam);
-          drawWorld(ctx);
-        };
-      });
-      wrap(TC.Combat, 'clear', function (orig) {
-        return function () {
-          Magic.clear();
-          return orig.call(this);
-        };
-      });
-    }
-
-    if (TC.Player) {
-      wrap(TC.Player.prototype, 'serialize', function (orig) {
-        return function () {
-          const d = orig.call(this);
-          if (d && typeof this.mana === 'number') {
-            ensureMana(this);
-            d.mana = Math.round(this.mana);
-            d.maxMana = this.maxMana | 0;
-            d.potionSickness = Math.round(this.potionSickness || 0);
-          }
-          return d;
-        };
-      });
-      if (typeof TC.Player.deserialize === 'function') {
-        const origDeser = TC.Player.deserialize;
-        TC.Player.deserialize = function (data) {
-          const p = origDeser.call(this, data);
-          if (p) {
-            ensureMana(p);
-            const num = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
-            const mm = num(data && data.maxMana);
-            if (mm !== null) p.maxMana = clamp(Math.round(mm), MANA_BASE, MANA_CAP);
-            const mn = num(data && data.mana);
-            p.mana = clamp(mn !== null ? mn : p.maxMana, 0, p.maxMana);
-            const ps = num(data && data.potionSickness);
-            p.potionSickness = ps !== null ? clamp(ps, 0, POTION_SICKNESS) : 0;
-          }
-          return p;
-        };
-      }
-      wrap(TC.Player.prototype, 'respawn', function (orig) {
-        return function () {
-          const r = orig.call(this);
-          ensureMana(this);
-          this.mana = this.maxMana;        // death refills the pool
-          this.potionSickness = 0;
-          this.manaRegenDelay = 0;
-          return r;
-        };
-      });
-    }
-
-    if (TC.UI && typeof TC.UI.draw === 'function') {
-      wrap(TC.UI, 'draw', function (orig) {
-        return function (ctx, w, h) {
-          orig.call(this, ctx, w, h);
-          drawHud(ctx, w);
-        };
-      });
-    }
-  }
-
+  // ---- load-time installation ----
   registerData();
-  installIcons();
-  installHooks();
+
+  // ---- public API ----
+  TC.Magic = {
+    bolts: bolts,                  // fallback sim only (empty while TC.Projectiles exists)
+    stars: stars,
+    MANA_BASE: MANA_BASE,
+    MANA_CAP: MANA_CAP,
+    POTION_SICKNESS: POTION_SICKNESS,
+    ensureMana: ensureMana,
+    spendMana: spendMana,
+    restoreMana: restoreMana,
+    fire: fire,
+    clear: clear,
+    update: update,
+    drawWorld: drawWorld,
+    drawHud: drawHud,
+    captureOf: captureOf,
+    attachToPlayer: attachToPlayer,
+    restoreLegacy: restoreLegacy,
+    onRespawn: onRespawn,
+    iconFor: iconFor
+  };
 })();

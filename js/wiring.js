@@ -3,43 +3,46 @@
    WIRE tiles from a source cell; receivers (doors, dart traps, actuators)
    react once per pulse.
 
-   Owns exactly this file. constants.js / main.js / index.html are lead-owned,
-   so this module EXTENDS the shared tables at load time and PATCHES existing
-   prototypes/functions at runtime instead of editing them:
+   Owns exactly this file. Migrated off monkey-patching onto the foundation
+   contracts: this module EXTENDS the shared tables at load time (legitimate
+   content registration), subscribes to TC.Events for reactions, registers a
+   TC.SaveCore provider for persistence, and exposes plain update/draw/hook
+   functions for the lead's game loop. It NEVER patches another module.
 
-   - Table extensions (promote into constants.js when convenient):
+   Table extensions (promote into constants.js when convenient):
      TC.TILE:      WIRE, SWITCH_OFF, SWITCH_ON, LEVER_OFF, LEVER_ON,
                    PRESSURE_PLATE, TIMER, DART_TRAP  (ids after LAVA)
      TC.TILE_DEFS: matching defs appended
      TC.ITEM_DEFS: wire, switch, lever, pressure_plate, timer, dart_trap,
                    actuator
      TC.RECIPES:   workbench/anvil recipes for all of the above
-   - Runtime hooks (all guarded + idempotent):
-     World.prototype.set/setRaw        -> registry maintenance notifications
-     World.prototype.applyMineDamage   -> completes the break by writing AIR
-                                          (the vanilla mine path drops the item
-                                          but never clears the tile; remove
-                                          this shim if player.js is fixed to
-                                          call world.set(tx,ty,AIR) itself)
-     World.prototype.isSolid           -> actuator "ghost" cells pass through
-     World.prototype.update/draw       -> per-frame tick + wire overlay render
-     Player.prototype.interact         -> right-click toggles devices /
-                                          attaches & detaches actuators
-     Player.prototype.doPlace          -> actuator placement onto solid blocks
-     Items.iconFor                     -> procedural icons for wiring items
-     Save.save                         -> splices a `wiring` blob into the
-                                          stored record (timer run-state +
-                                          actuator attachments; placements
-                                          themselves persist via tile diffs)
-     newGame / continueGame            -> reset / restore wiring state
+     TC.Registry:  the same tiles/items also defined under 'wiring:*'
+                   (guarded, non-fatal on duplicate)
 
-   REQUIRES one line in index.html (lead-owned, not added here), AFTER main.js
-   so the flow wrappers can bind:
-     <script src="js/main.js"></script>
-     <script src="js/wiring.js"></script>
+   Lead integration hooks (one line each, see docs/ARCHITECTURE.md):
+     - World.set / World.setRaw: emit TC.Events.EVENT.TileChanged {tx,ty,id}
+       (optionally `before`) — wiring keeps its plate/timer/actuator
+       registries fresh from that event alone.
+     - World.isSolid: consult TC.Wiring.isGhost(tx,ty) so actuated cells
+       pass through while ghosted.
+     - player.doMine: when world.applyMineDamage returns true, write
+       world.set(tx,ty,AIR) — the old in-patch AIR shim is gone.
+     - Player.interact: try TC.Wiring.interact(this, m) first; vanilla
+       doors/chests otherwise.
+     - Player.doPlace: route itemId 'actuator' to TC.Wiring.attachActuatorAt.
+     - Items.iconFor: consult TC.Wiring.iconFor(id) before painting blanks.
+     - Game loop: call TC.Wiring.update(dt) after World.update and
+       TC.Wiring.draw(ctx,cam) inside the camera transform — OR rely on the
+       TC.Systems ('liquidsWiring') + TC.RenderLayers ('worldOverlays')
+       registrations made here; never both for update (double tick).
+     - New world / continue: call TC.Wiring.resetForNewWorld() after the
+       grid exists; SaveCore.restore() re-applies timer run-state +
+       actuators via the 'systems.core.wiring' provider.
 
-   Exposed API: TC.Wiring.{init,update,draw,pulse,toggleDevice,placeWire,
-   removeWire,interact,onTileChanged,serialize,load,reset}. */
+   Exposed API:
+     TC.Wiring.{init,update,draw,pulse,toggleDevice,toggleTimer,placeWire,
+     removeWire,interact,onTileChanged,isGhost,attachActuatorAt,iconFor,
+     serialize,load,reset,resetForNewWorld}. */
 'use strict';
 (function () {
   const TC = window.TC = window.TC || {};
@@ -90,7 +93,7 @@
       TC.ITEM_DEFS.timer = I('Timer', 'block', { tile: T.TIMER });
       TC.ITEM_DEFS.dart_trap = I('Dart Trap', 'block', { tile: T.DART_TRAP });
       // Actuators attach onto existing solid blocks (metadata layer), so the
-      // item has no tile of its own; placement is intercepted in doPlace.
+      // item has no tile of its own; placement routes through attachActuatorAt.
       TC.ITEM_DEFS.actuator = I('Actuator', 'block', { tile: null });
     }
     if (TC.RECIPES && !TC.RECIPES.some((r) => r && r.out === 'wire')) {
@@ -117,8 +120,9 @@
   const PULSE_CAP = 4096;        // max wire cells flooded per signal
   const FLASH_TIME = 0.22;       // seconds a powered wire stays lit
   const TIMER_PERIOD = 1;        // seconds between timer pulses (fixed v1)
-  const DART_SPEED = 340;        // px/s
-  const DART_LIFE = 3;           // seconds before despawn
+  const DART_SPEED = 340;        // px/s (local fallback darts)
+  const DART_SPEED_POOLED = 620; // px/s; matches Projectiles TYPES.wire_dart
+  const DART_LIFE = 3;           // seconds before despawn (fallback only)
   const DART_DMG_ENEMY = 14;
   const DART_DMG_PLAYER = 18;
 
@@ -141,7 +145,7 @@
   let actuated = new Set();      // host-cell idx with an actuator attached
   let ghosts = new Set();        // host-cell idx currently pass-through
   let flashes = new Map();       // wire/receiver idx -> seconds of glow left
-  let darts = [];                // { x, y, vx, vy, age }
+  let darts = [];                // fallback darts when TC.Projectiles is absent
 
   function reset() {
     plates = new Map();
@@ -150,6 +154,18 @@
     ghosts = new Set();
     flashes = new Map();
     darts.length = 0;
+  }
+
+  // Fresh-world entry point: clear run-state, then rebuild contact
+  // registries from whatever devices the grid already holds. The lead calls
+  // this from newGame/continueGame instead of this module patching them.
+  function resetForNewWorld() {
+    reset();
+    rescanGrid();
+  }
+
+  function init() {
+    resetForNewWorld();
   }
 
   function inB(world, x, y) {
@@ -183,6 +199,11 @@
       try { TC.Particles.burst(x, y, n, { colors: colors, speed: spd }); } catch (e) {}
     }
   }
+  function emitEvent(name, payload) {
+    if (TC.Events && typeof TC.Events.emit === 'function') {
+      try { TC.Events.emit(name, payload); } catch (e) {}
+    }
+  }
   function hash2(x, y, s) {
     return (TC.Utils && TC.Utils.hash2) ? TC.Utils.hash2(x, y, s) : 0.5;
   }
@@ -196,27 +217,42 @@
   }
 
   // ======================================================================
-  // Registry maintenance — called from the patched World.set/setRaw
+  // Tile-change maintenance — driven by TC.Events.EVENT.TileChanged
   // ======================================================================
 
+  // Registry maintenance for one edited cell. `before` may be null when the
+  // emitter only knows the new id ({tx,ty,id}); maintenance then keys off
+  // membership, which covers every realistic edit.
   function onTileChanged(x, y, before, after) {
     const world = TC.world;
     if (!world) return;
     const i = y * world.width + x;
-    if (before !== after) {
-      if (before === T.PRESSURE_PLATE) plates.delete(i);
-      if (after === T.PRESSURE_PLATE) plates.set(i, { pressed: false });
-      if (before === T.TIMER) timers.delete(i);
-      if (after === T.TIMER) timers.set(i, { t: 0, running: false });
+    if (after === T.PRESSURE_PLATE) {
+      if (!plates.has(i)) plates.set(i, { pressed: false });
+    } else if (plates.has(i)) {
+      plates.delete(i);
+    }
+    if (after === T.TIMER) {
+      if (!timers.has(i)) timers.set(i, { t: 0, running: false });
+    } else if (timers.has(i)) {
+      timers.delete(i);
     }
     flashes.delete(i);
-    // A broken host block releases its actuator.
-    if ((actuated.has(i) || ghosts.has(i)) && after === T.AIR && before !== T.AIR) {
+    // A broken host block releases its actuator. Membership implies the cell
+    // held a solid host at attach time, so no `before` check is needed.
+    if ((actuated.has(i) || ghosts.has(i)) && after === T.AIR) {
       actuated.delete(i);
       ghosts.delete(i);
       spawnDrop((x + 0.5) * TS, (y + 0.5) * TS, 'actuator', 1);
       sfx('break');
     }
+  }
+
+  // Event-bus adapter: payload {tx,ty,id[,before]} from World.set/setRaw.
+  function handleTileChanged(payload) {
+    if (!payload || typeof payload.tx !== 'number' || typeof payload.ty !== 'number') return;
+    const before = (typeof payload.before === 'number') ? payload.before : null;
+    onTileChanged(payload.tx, payload.ty, before, payload.id);
   }
 
   // ======================================================================
@@ -231,6 +267,21 @@
     if (ghosts.has(i)) ghosts.delete(i);
     else ghosts.add(i);
     sfx('place');
+  }
+
+  // Ghosted host cells stop colliding while powered. Core collision lives in
+  // World.isSolid — the lead consults isGhost there; this local view keeps
+  // trap aiming and fallback darts correct even without that hook.
+  function isGhost(tx, ty) {
+    const world = TC.world;
+    if (!inB(world, tx, ty)) return false;
+    return ghosts.has(ty * world.width + tx);
+  }
+
+  function cellSolid(world, tx, ty) {
+    if (!inB(world, tx, ty)) return true;
+    if (ghosts.has(ty * world.width + tx)) return false;
+    return !!world.isSolid(tx, ty);
   }
 
   // Signal-actuated doors mirror player.interact's rule: never shut a door
@@ -248,8 +299,8 @@
   // Fire direction: toward whichever horizontal side is open; ties break
   // deterministically from hash2 (never Math.random). Returns 0 when boxed in.
   function trapFacing(world, tx, ty) {
-    const lOpen = !world.isSolid(tx - 1, ty);
-    const rOpen = !world.isSolid(tx + 1, ty);
+    const lOpen = !cellSolid(world, tx - 1, ty);
+    const rOpen = !cellSolid(world, tx + 1, ty);
     if (lOpen && rOpen) return hash2(tx, ty, 12345) < 0.5 ? -1 : 1;
     if (lOpen) return -1;
     if (rOpen) return 1;
@@ -259,18 +310,24 @@
   function fireDart(tx, ty) {
     const dir = trapFacing(TC.world, tx, ty);
     if (!dir) return;
-    darts.push({
-      x: (tx + 0.5) * TS + dir * (TS / 2 + 2),
-      y: (ty + 0.5) * TS,
-      vx: dir * DART_SPEED,
-      vy: 0,
-      age: 0
-    });
+    const x = (tx + 0.5) * TS + dir * (TS / 2 + 2);
+    const y = (ty + 0.5) * TS;
+    if (TC.Projectiles && typeof TC.Projectiles.spawn === 'function') {
+      // Pool owns flight + enemy damage. owner:null marks it as a trap dart
+      // (never player-owned), pierce 0 mirrors the old die-on-first-hit.
+      TC.Projectiles.spawn('wire_dart', x, y, dir > 0 ? 0 : Math.PI, {
+        speed: DART_SPEED_POOLED, dmg: DART_DMG_ENEMY, kb: 2, pierce: 0,
+        owner: null
+      });
+    } else {
+      darts.push({ x: x, y: y, vx: dir * DART_SPEED, vy: 0, age: 0 });
+    }
     sfx('swing');
   }
 
   function fireReceiver(x, y, id) {
     flashes.set(y * TC.world.width + x, FLASH_TIME);
+    emitEvent(TC.Events && TC.Events.EVENT ? TC.Events.EVENT.WirePulse : 'WirePulse', { x: x, y: y });
     if (id === T.DOOR_CLOSED || id === T.DOOR_OPEN) toggleDoor(x, y, id);
     else if (id === T.DART_TRAP) fireDart(x, y);
   }
@@ -423,17 +480,22 @@
   }
 
   // ======================================================================
-  // Darts
+  // Darts — pooled via TC.Projectiles ('wire_dart'), local array fallback.
+  // The pool deliberately damages enemies only, so trap darts still need
+  // their own player-contact check here (old numbers preserved).
   // ======================================================================
 
   function solidPx(x, y) {
     const w = TC.world;
-    return !!(w && typeof w.solidAtPixel === 'function' && w.solidAtPixel(x, y));
+    if (!w || typeof w.solidAtPixel !== 'function') return false;
+    const tx = Math.floor(x / TS), ty = Math.floor(y / TS);
+    if (!w.inB(tx, ty)) return false;
+    if (ghosts.has(ty * w.width + tx)) return false;   // ghost pass-through
+    return !!w.isSolid(tx, ty);
   }
 
   function updateDarts(dt) {
     if (!darts.length) return;
-    const world = TC.world;
     for (let i = darts.length - 1; i >= 0; i--) {
       const d = darts[i];
       d.age += dt;
@@ -476,6 +538,24 @@
     darts.splice(di, 1);
   }
 
+  // Player contact for pooled trap darts (owner null). Expire the dart via
+  // its own age so the pool's bookkeeping stays authoritative.
+  function pooledDartPlayerHits() {
+    if (!TC.Projectiles || typeof TC.Projectiles.viewOf !== 'function') return;
+    const p = TC.player;
+    if (!p || p.dead || p.iframes > 0) return;
+    if (!TC.Combat || typeof TC.Combat.hurtPlayer !== 'function') return;
+    const view = TC.Projectiles.viewOf('wire_dart');   // scratch: read now
+    for (let k = 0; k < view.length; k++) {
+      const d = view[k];
+      if (!d.active || d.owner != null) continue;      // trap darts only
+      if (!aabb(d.x - 2, d.y - 2, 4, 4, p.x, p.y, p.w, p.h)) continue;
+      try { TC.Combat.hurtPlayer(DART_DMG_PLAYER, d.vx >= 0 ? 3 : -3, -1.5, 'trap'); } catch (e) {}
+      d.age = (d.def && d.def.maxAge ? d.def.maxAge : 1) + 1;  // expire next tick
+      break;
+    }
+  }
+
   // ======================================================================
   // Actuators — metadata attachments on solid host blocks
   // ======================================================================
@@ -483,6 +563,7 @@
   function attachActuator(player, m) {
     const world = TC.world;
     if (!world || typeof world.get !== 'function' || typeof world.set !== 'function') return false;
+    if (!m || !isFinite(m.worldX)) return false;
     const TSv = TS;
     const tx = Math.floor(m.worldX / TSv), ty = Math.floor(m.worldY / TSv);
     if (typeof player.inReach === 'function' && !player.inReach(tx, ty)) return false;
@@ -536,12 +617,24 @@
     return true;
   }
 
-  // Right-click handler layered in front of Player.interact. Returns true
-  // when the click was consumed by a wiring surface.
-  function interact(player, m) {
+  // Right-click device handling. Two accepted forms:
+  //   interact(player, mouseEvent)  — legacy shape, mouse carries worldX/worldY
+  //   interact(tx, ty)              — coordinate form (uses TC.player)
+  // Returns true when the click was consumed by a wiring surface; the lead's
+  // Player.interact falls through to vanilla doors/chests otherwise.
+  function interact(a, b) {
     const world = TC.world;
-    if (!world || typeof world.get !== 'function' || !m || !isFinite(m.worldX)) return false;
-    const tx = Math.floor(m.worldX / TS), ty = Math.floor(m.worldY / TS);
+    if (!world || typeof world.get !== 'function') return false;
+    let player = null, m = null, tx, ty;
+    if (typeof a === 'number' && typeof b === 'number') {
+      tx = a; ty = b;
+      player = TC.player;
+    } else {
+      player = a; m = b;
+      if (!m || !isFinite(m.worldX)) return false;
+      tx = Math.floor(m.worldX / TS); ty = Math.floor(m.worldY / TS);
+    }
+    if (!player) return false;
     if (typeof player.inReach === 'function' && !player.inReach(tx, ty)) return false;
     const id = world.get(tx, ty);
 
@@ -559,32 +652,31 @@
     return false;
   }
 
-  // ---- per-frame tick (driven via patched World.update) ----
+  // ---- per-frame tick (lead game loop or TC.Systems 'liquidsWiring') ----
   function update(dt) {
     const world = TC.world;
     if (!world || TC.state !== 'playing') return;
     updateTimers(dt);
     updatePlates();
     updateDarts(dt);
-    if (flashes.size) {
-      flashes.forEach((t, i) => {
-        const left = t - dt;
-        if (left > 0) flashes.set(i, left);
-        else flashes.delete(i);
-      });
-    }
+    pooledDartPlayerHits();
+    decayFlashes(dt);
   }
 
-  // Bind to whatever world is current; safe to call again (rescans).
-  function init() {
-    reset();
-    rescanGrid();
+  function decayFlashes(dt) {
+    if (!flashes.size) return;
+    flashes.forEach((t, i) => {
+      const left = t - dt;
+      if (left > 0) flashes.set(i, left);
+      else flashes.delete(i);
+    });
   }
 
   // ---- persistence ----
   // Placements persist through the normal tile-diff system; this blob only
   // carries what the grid cannot express: timer run-state, actuator hosts,
-  // and which hosts are currently ghosted.
+  // and which hosts are currently ghosted. Registered with TC.SaveCore as
+  // 'systems.core.wiring'.
   function serialize() {
     const out = {};
     const running = [];
@@ -628,11 +720,9 @@
     return true;
   }
 
-  TC.Wiring = { init, update, draw, pulse, toggleDevice, toggleTimer, placeWire, removeWire, interact, onTileChanged, serialize, load, reset };
-
   // ======================================================================
-  // Rendering — world-space overlay; main.js applies the camera transform
-  // around World.draw, which this is chained onto.
+  // Rendering — world-space overlay drawn under the camera transform by the
+  // lead's loop (or TC.RenderLayers 'worldOverlays', registered below).
   // ======================================================================
 
   function drawWire(ctx, world, tx, ty, px, py) {
@@ -769,6 +859,7 @@
     }
   }
 
+  // Fallback darts only; pooled ones render through TC.Projectiles.draw.
   function drawDarts(ctx) {
     ctx.lineCap = 'round';
     for (let i = 0; i < darts.length; i++) {
@@ -825,8 +916,8 @@
   }
 
   // ======================================================================
-  // Item icons — iconFor paints blanks for unknown tile patterns, so wiring
-  // items get hand-painted 16px canvases here.
+  // Item icons — exposed as a lookup, not a wrap: the lead's Items.iconFor
+  // consults iconFor(id) before falling back to procedural blanks.
   // ======================================================================
 
   function mkIcon(paint) {
@@ -917,110 +1008,97 @@
     }
   };
 
-  function patchIcons() {
-    if (!TC.Items || typeof TC.Items.iconFor !== 'function' || TC.Items.__wiringIcons) return;
-    const orig = TC.Items.iconFor;
-    const cache = new Map();
-    const wrapped = function (id) {
-      const paint = id && ICON_PAINTERS[id];
-      if (paint) {
-        let cv = cache.get(id);
-        if (!cv) { cv = mkIcon(paint); cache.set(id, cv); }
-        return cv;
-      }
-      return orig.call(TC.Items, id);
-    };
-    wrapped.__wiring = true;
-    TC.Items.__wiringIcons = true;
-    TC.Items.iconFor = wrapped;
+  const iconCache = new Map();
+
+  // Returns a cached 16px canvas for wiring items, or null when `id` is not
+  // one of ours (caller falls through to its own painter).
+  function iconFor(id) {
+    const paint = id && ICON_PAINTERS[id];
+    if (!paint) return null;
+    let cv = iconCache.get(id);
+    if (!cv) { cv = mkIcon(paint); iconCache.set(id, cv); }
+    return cv;
   }
 
   // ======================================================================
-  // Runtime patches (guarded, idempotent)
+  // Foundation registrations (all guarded; absence is fine)
   // ======================================================================
 
-  function patchWorld() {
-    const WP = TC.World && TC.World.prototype;
-    if (!WP || WP.__wiringPatched) return;
-    WP.__wiringPatched = true;
-
-    // Registry maintenance on full edits.
-    const origSet = WP.set;
-    WP.set = function (x, y, id) {
-      const before = this.get(x, y);
-      const r = origSet.call(this, x, y, id);
-      if (TC.Wiring) TC.Wiring.onTileChanged(x, y, before, id);
-      return r;
+  // Stable ids for our content alongside the registry's auto-mirror.
+  function defineRegistryContent() {
+    const R = TC.Registry;
+    if (!R || typeof R.define !== 'function') return;
+    const safe = (kind, id, def) => {
+      if (!def) return;
+      try { R.define(kind, id, def); } catch (e) { /* dup or invalid: non-fatal */ }
     };
-
-    // Same maintenance for raw writes (save-load diffs, tree felling).
-    const origSetRaw = WP.setRaw;
-    WP.setRaw = function (x, y, id) {
-      const before = this.get(x, y);
-      const r = origSetRaw.call(this, x, y, id);
-      if (TC.Wiring) TC.Wiring.onTileChanged(x, y, before, id);
-      return r;
-    };
-
-    // Compatibility shim: the vanilla mine path drops the item but never
-    // writes AIR back (applyMineDamage's contract says "the caller can break
-    // it" — it doesn't). Complete the break here so mined tiles, cut wire and
-    // released actuators actually disappear. Remove if player.js is fixed.
-    const origAmd = WP.applyMineDamage;
-    WP.applyMineDamage = function (tx, ty, amt) {
-      const broke = origAmd.call(this, tx, ty, amt);
-      if (broke && this.inB(tx, ty) && this.tiles[this.idx(tx, ty)] !== T.AIR) {
-        this.set(tx, ty, T.AIR);
-      }
-      return broke;
-    };
-
-    // Ghosted (actuated) cells stop colliding while powered.
-    const origIsSolid = WP.isSolid;
-    WP.isSolid = function (x, y) {
-      if (TC.Wiring && ghosts.size && ghosts.has(y * this.width + x)) return false;
-      return origIsSolid.call(this, x, y);
-    };
-
-    // Per-frame tick + overlay render ride on the world's own loop slots.
-    const origUpdate = WP.update;
-    WP.update = function (dt) {
-      origUpdate.call(this, dt);
-      if (TC.Wiring) TC.Wiring.update(dt);
-    };
-    const origDraw = WP.draw;
-    WP.draw = function (ctx, cam) {
-      origDraw.call(this, ctx, cam);
-      if (TC.Wiring) TC.Wiring.draw(ctx, cam);
-    };
+    const defs = TC.TILE_DEFS;
+    if (defs) {
+      safe('tile', 'wiring:wire', defs[T.WIRE]);
+      safe('tile', 'wiring:switch', defs[T.SWITCH_OFF]);
+      safe('tile', 'wiring:switch_on', defs[T.SWITCH_ON]);
+      safe('tile', 'wiring:lever', defs[T.LEVER_OFF]);
+      safe('tile', 'wiring:lever_on', defs[T.LEVER_ON]);
+      safe('tile', 'wiring:pressure_plate', defs[T.PRESSURE_PLATE]);
+      safe('tile', 'wiring:timer', defs[T.TIMER]);
+      safe('tile', 'wiring:dart_trap', defs[T.DART_TRAP]);
+    }
+    const items = TC.ITEM_DEFS;
+    if (items) {
+      safe('item', 'wiring:wire', items.wire);
+      safe('item', 'wiring:switch', items.switch);
+      safe('item', 'wiring:lever', items.lever);
+      safe('item', 'wiring:pressure_plate', items.pressure_plate);
+      safe('item', 'wiring:timer', items.timer);
+      safe('item', 'wiring:dart_trap', items.dart_trap);
+      safe('item', 'wiring:actuator', items.actuator);
+    }
   }
 
-  function patchPlayer() {
-    const PP = TC.Player && TC.Player.prototype;
-    if (!PP || PP.__wiringPatched) return;
-    PP.__wiringPatched = true;
-
-    // Right-click: wiring surfaces first, vanilla doors/chests otherwise.
-    const origInteract = PP.interact;
-    PP.interact = function (m) {
-      if (TC.Wiring && TC.Wiring.interact(this, m)) return;
-      origInteract.call(this, m);
-    };
-
-    // Left-click with an actuator selected attaches it to a solid block
-    // instead of the generic block placement path (which would no-op).
-    const origDoPlace = PP.doPlace;
-    PP.doPlace = function (def, itemId, m) {
-      if (itemId === 'actuator' && TC.Wiring) {
-        TC.Wiring.attachActuatorAt(this, m);
-        return;
-      }
-      origDoPlace.call(this, def, itemId, m);
-    };
+  // Persistence rides the versioned envelope instead of splicing localStorage.
+  function registerSaveProvider() {
+    if (!TC.SaveCore || typeof TC.SaveCore.register !== 'function') return;
+    try {
+      TC.SaveCore.register('systems.core.wiring', {
+        version: 1,
+        serialize: function () { return serialize(); },
+        deserialize: function (data) { return load(data); }
+      });
+    } catch (e) {
+      console.warn('[TC.Wiring] SaveCore provider registration skipped:', e && e.message);
+    }
   }
 
-  // Left-click attach shares the same rules as right-click attach.
-  TC.Wiring.attachActuatorAt = function (player, m) {
+  // Optional scheduler hooks; the lead may instead call update/draw directly
+  // (never both for update — timers would double-tick).
+  function registerSystemHooks() {
+    if (TC.Systems && typeof TC.Systems.register === 'function') {
+      TC.Systems.register('liquidsWiring', 'wiring', {
+        update: function (dt) { update(dt); }
+      });
+    }
+    if (TC.RenderLayers && typeof TC.RenderLayers.register === 'function') {
+      TC.RenderLayers.register('worldOverlays', 'wiring', function (ctx, cam) {
+        draw(ctx, cam);
+      });
+    }
+  }
+
+  // React to tile edits from the bus instead of patched prototypes.
+  function subscribeEvents() {
+    if (!TC.Events || typeof TC.Events.on !== 'function') return;
+    const E = TC.Events.EVENT;
+    if (E && E.TileChanged) TC.Events.on(E.TileChanged, handleTileChanged);
+  }
+
+  defineRegistryContent();
+  registerSaveProvider();
+  registerSystemHooks();
+  subscribeEvents();
+
+  // Left-click attach shares the same rules as right-click attach; the lead's
+  // Player.doPlace routes itemId 'actuator' here. Reusing the cell toggles off.
+  function attachActuatorAt(player, m) {
     const world = TC.world;
     if (!world || !m || !isFinite(m.worldX)) return false;
     const tx = Math.floor(m.worldX / TS), ty = Math.floor(m.worldY / TS);
@@ -1028,93 +1106,11 @@
     const i = ty * world.width + tx;
     if (actuated.has(i)) return detachActuator(tx, ty);   // toggle off on reuse
     return attachActuator(player, m);
+  }
+
+  TC.Wiring = {
+    init, update, draw, pulse, toggleDevice, toggleTimer, placeWire, removeWire,
+    interact, onTileChanged, isGhost, attachActuatorAt, iconFor,
+    serialize, load, reset, resetForNewWorld
   };
-
-  // Save integration: splice the wiring blob into the record Save.save wrote.
-  // KEY must stay in sync with save.js ('tc_save_v1').
-  const SAVE_KEY = 'tc_save_v1';
-
-  function spliceStored(mutate) {
-    try {
-      const raw = window.localStorage.getItem(SAVE_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      if (!data || typeof data !== 'object') return;
-      mutate(data);
-      window.localStorage.setItem(SAVE_KEY, JSON.stringify(data));
-    } catch (e) { /* persistence stays best-effort, like save.js */ }
-  }
-
-  function readStoredWiring() {
-    try {
-      const raw = window.localStorage.getItem(SAVE_KEY);
-      if (!raw) return null;
-      const data = JSON.parse(raw);
-      return (data && typeof data === 'object') ? data.wiring || null : null;
-    } catch (e) { return null; }
-  }
-
-  function patchSave() {
-    if (!TC.Save || TC.Save.__wiringPatched) return;
-    TC.Save.__wiringPatched = true;
-    const origSave = TC.Save.save;
-    TC.Save.save = function () {
-      const ok = origSave ? !!origSave.call(TC.Save) : false;
-      if (ok && TC.Wiring) {
-        const blob = TC.Wiring.serialize();
-        const hasAny = blob.timers || blob.actuators || blob.ghosts;
-        if (hasAny) spliceStored((data) => { data.wiring = blob; });
-        else spliceStored((data) => { delete data.wiring; });   // keep records clean
-      }
-      return ok;
-    };
-  }
-
-  function patchFlow() {
-    if (TC.__wiringFlowPatched) return;
-
-    if (typeof TC.newGame === 'function') {
-      TC.__wiringFlowPatched = true;
-      const origNew = TC.newGame;
-      TC.newGame = function (seed) {
-        const r = origNew.call(TC, seed);
-        if (TC.Wiring) TC.Wiring.reset();              // fresh world: no devices
-        return r;
-      };
-    }
-    if (typeof TC.continueGame === 'function') {
-      TC.__wiringFlowPatchedContinue = true;
-      const origCont = TC.continueGame;
-      TC.continueGame = function () {
-        const r = origCont.call(TC);
-        if (TC.Wiring) {
-          TC.Wiring.init();                            // rescan placed devices
-          TC.Wiring.load(readStoredWiring());          // restore run-state
-        }
-        return r;
-      };
-    }
-  }
-
-  // ======================================================================
-  // Install
-  // ======================================================================
-
-  function install() {
-    patchWorld();
-    patchPlayer();
-    patchIcons();
-    patchSave();
-    patchFlow();
-  }
-
-  // Prototype patches are always safe; the global-flow wrappers need main.js
-  // to have run first. If wiring.js ever loads before main.js, defer until
-  // DOMContentLoaded (sync scripts have all executed by then).
-  if (typeof TC.newGame === 'function' || typeof document === 'undefined' ||
-      document.readyState !== 'loading') {
-    install();
-  } else {
-    document.addEventListener('DOMContentLoaded', install);
-  }
 })();
