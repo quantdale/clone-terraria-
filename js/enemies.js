@@ -146,7 +146,8 @@
   // Active only at night. While up: night spawn attempts are 3x faster and the
   // night table is replaced with blood-moon-only enemies; kills drop extra
   // blood shards. Starts either by using a blood_sigil (intercepted in
-  // spawnBoss) or by a random roll at dusk (~1 in 8 nights).
+  // spawnBoss) or by a random roll at dusk (~1 in 8 nights); ends at dawn,
+  // recording 'event.blood_moon.completed' via TC.Progression.
   let bloodMoon = false;
   let prevDaylight = 1;      // for dusk/dawn edge detection
   let bmRolledTonight = false;
@@ -155,8 +156,14 @@
     bloodMoon = !!v;
     if (bloodMoon) {
       if (TC.UI && typeof TC.UI.toast === 'function') TC.UI.toast('The Blood Moon is rising...');
-    } else if (TC.Sky && typeof TC.Sky.daylight === 'function' && TC.Sky.daylight() >= 0.5) {
-      if (TC.UI && typeof TC.UI.toast === 'function') TC.UI.toast('The Blood Moon has set.');
+    } else {
+      // the event ended (dawn or manual cancel): record it as completed
+      if (TC.Progression && typeof TC.Progression.set === 'function') {
+        try { TC.Progression.set('event.blood_moon.completed'); } catch (err) {}
+      }
+      if (TC.Sky && typeof TC.Sky.daylight === 'function' && TC.Sky.daylight() >= 0.5) {
+        if (TC.UI && typeof TC.UI.toast === 'function') TC.UI.toast('The Blood Moon has set.');
+      }
     }
   }
 
@@ -684,6 +691,21 @@
   }
 
   // ---- damage / death ----
+  // Roll a dead enemy's loot table and scatter the results at (cx,cy).
+  // def.drops is the single loot source: entries {id,min,max,chance} with
+  // chance defaulting to 1; contents and probabilities live in ENEMY_DEFS.
+  function rollDrops(e, cx, cy) {
+    const drops = e.def.drops || [];
+    for (let k = 0; k < drops.length; k++) {
+      const d = drops[k];
+      if (Math.random() >= (d.chance != null ? d.chance : 1)) continue;
+      const n = d.min + Math.floor(Math.random() * (d.max - d.min + 1));
+      if (n > 0 && TC.Items && typeof TC.Items.spawnDrop === 'function') {
+        TC.Items.spawnDrop(cx, cy, d.id, n, true);
+      }
+    }
+  }
+
   function damageEnemy(e, dmg, dir, power, crit) {
     if (!e || e.hp <= 0) return;
     // def.defense absorbs flat damage; Skeletron's skull takes 65% less while
@@ -751,15 +773,7 @@
         }
       }
     }
-    const drops = e.def.drops || [];
-    for (let k = 0; k < drops.length; k++) {
-      const d = drops[k];
-      if (Math.random() >= (d.chance != null ? d.chance : 1)) continue;
-      const n = d.min + Math.floor(Math.random() * (d.max - d.min + 1));
-      if (n > 0 && TC.Items && typeof TC.Items.spawnDrop === 'function') {
-        TC.Items.spawnDrop(cx, cy, d.id, n, true);
-      }
-    }
+    rollDrops(e, cx, cy);
     // blood moon bounty: non-boss kills shed extra blood shards
     if (bloodMoon && !e.def.boss && !e.def.part &&
         Math.random() < (e.def.bloodShard != null ? e.def.bloodShard : 0.4) &&
@@ -819,8 +833,13 @@
     else zone = 'night';
 
     const key = 'attempt' + zone.charAt(0).toUpperCase() + zone.slice(1);
-    // blood moon: night spawn attempts roll 3x as often
-    spawnTimer = (C.SPAWN[key] || 2) / (zone === 'night' && bloodMoon ? 3 : 1);
+    // blood moon: night spawn attempts roll 3x as often; progression adds a
+    // small global rate bonus per defeated boss (default 1x when absent)
+    let rate = zone === 'night' && bloodMoon ? 3 : 1;
+    if (TC.Progression && typeof TC.Progression.spawnMultiplier === 'function') {
+      rate *= TC.Progression.spawnMultiplier();
+    }
+    spawnTimer = (C.SPAWN[key] || 2) / rate;
 
     if (list.length >= C.MAX_ENEMIES) return;
     const table = zoneTable(zone, pcol);

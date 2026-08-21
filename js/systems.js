@@ -57,7 +57,7 @@
   // other-phase ones, are ignored — phases already order those). Duplicate
   // phase/name replaces in place, keeping the original slot. Returns the
   // entry, or null if rejected.
-  function register(phase, name, sys, opts) {
+  function registerSystem(phase, name, sys, opts) {
     if (!byPhase.has(phase)) {
       console.warn('[TC.Systems] unknown phase "' + phase + '" — dropped "' + name + '"');
       return null;
@@ -177,7 +177,7 @@
   }
 
   // Debug snapshot: every system in execution order.
-  function list() {
+  function listSystems() {
     const out = [];
     for (const phase of PHASES) {
       for (const e of resolveCached(phase).order) {
@@ -235,7 +235,7 @@
 
   TC.Systems = {
     PHASES: PHASES.slice(),
-    register, initAll, updateAll, resolveOrder, list,
+    register: registerSystem, initAll, updateAll, resolveOrder, list: listSystems,
     boot, runBoot
   };
 
@@ -259,7 +259,7 @@
   // Register a drawer. World layers get drawFn(ctx, cam) and draw in world
   // pixels; screen layers get drawFn(ctx, view) with view = {w, h, cam}.
   // Duplicate layer/name replaces in place. Returns the entry or null.
-  function register(layer, name, fn) {
+  function registerLayer(layer, name, fn) {
     const bucket = drawers.get(layer);
     if (!bucket) {
       console.warn('[TC.RenderLayers] unknown layer "' + layer + '" — dropped "' + name + '"');
@@ -348,7 +348,7 @@
   }
 
   // Debug snapshot: every drawer in draw order.
-  function list() {
+  function listLayers() {
     const out = [];
     for (const layer of LAYERS) {
       for (const e of drawers.get(layer).values()) {
@@ -362,6 +362,6 @@
     LAYERS: LAYERS.slice(),
     WORLD_LAYERS: WORLD_LAYERS.slice(),
     SCREEN_LAYERS: SCREEN_LAYERS.slice(),
-    register, drawWorld, drawScreen, clear, list
+    register: registerLayer, drawWorld, drawScreen, clear, list: listLayers
   };
 })();

@@ -587,9 +587,8 @@
     if (!TC.Crafting.craft(r, c.inv, c.stations)) {
       throw new Error('craft-failed');             // e.g. output did not fit
     }
-    const n = r.n || 1;
-    emit('CraftCompleted', { out: r.out, n: n });
-    return { out: r.out, n: n };
+    // CraftCompleted is emitted canonically by Crafting.craft — no re-emit here.
+    return { out: r.out, n: r.n || 1 };
   }
 
   // ======================================================================

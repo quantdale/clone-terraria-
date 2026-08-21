@@ -1,5 +1,5 @@
-/* items.js — TC.Inventory (50-slot grid), TC.Items drop registry + icon factory,
-   TC.Chests per-position containers. */
+/* items.js — TC.Inventory (50-slot grid, favorites + sort/quick-move helpers),
+   TC.Items drop registry + icon factory, TC.Chests per-position containers. */
 'use strict';
 (function () {
   const TC = window.TC = window.TC || {};
@@ -20,6 +20,41 @@
     return { id: id, count: Math.min(count, maxStack(id)) };
   }
 
+  // Fire InventoryChanged after a mutation; events.js may be absent early.
+  function emitInvChanged(payload) {
+    try {
+      if (TC.Events && typeof TC.Events.emit === 'function' &&
+          TC.Events.EVENT && TC.Events.EVENT.InventoryChanged) {
+        TC.Events.emit(TC.Events.EVENT.InventoryChanged, payload);
+      }
+    } catch (e) { /* listeners must never break inventory flow */ }
+  }
+
+  // Merge the stack `st` ({id,count}, mutated in place) into a raw slot array:
+  // matching-id stacks first, then the first empty slot. Returns moved count.
+  function moveIntoSlots(st, target) {
+    if (!st || !st.id || !(st.count > 0) || !Array.isArray(target)) return 0;
+    const max = maxStack(st.id);
+    let moved = 0;
+    for (let i = 0; i < target.length && st.count > 0; i++) {
+      const t = target[i];
+      if (t && t.id === st.id && t.count < max) {
+        const m = Math.min(max - t.count, st.count);
+        t.count += m;
+        st.count -= m;
+        moved += m;
+      }
+    }
+    for (let i = 0; i < target.length && st.count > 0; i++) {
+      if (!target[i]) {
+        target[i] = { id: st.id, count: st.count };
+        moved += st.count;
+        st.count = 0;
+      }
+    }
+    return moved;
+  }
+
   // ====================================================================
   // TC.Inventory — SIZE slots; indices 0-9 are the hotbar row.
   // ====================================================================
@@ -27,12 +62,14 @@
     constructor(size) {
       this.size = ((size | 0) > 0) ? (size | 0) : Inventory.SIZE;
       this.slots = new Array(this.size).fill(null);   // null | {id, count}
+      this.favorites = new Set();                     // pinned slot indexes
     }
 
     // Fill existing same-id stacks first, then empty slots. Returns leftover.
     add(id, count) {
       let n = (typeof count === 'number' && isFinite(count)) ? Math.floor(count) : 0;
       if (!id || n <= 0) return 0;
+      const want = n;
       const max = maxStack(id);
       const slots = this.slots;
       for (let i = 0; i < slots.length && n > 0; i++) {
@@ -50,6 +87,8 @@
           n -= put;
         }
       }
+      const placed = want - n;
+      if (placed > 0) emitInvChanged({ reason: 'add', id: String(id), count: placed });
       return n;
     }
 
@@ -68,6 +107,7 @@
       let n = (typeof count === 'number' && isFinite(count)) ? Math.floor(count) : 0;
       if (!id || n <= 0) return false;
       if (this.count(id) < n) return false;
+      const asked = n;
       const slots = this.slots;
       for (let i = 0; i < slots.length && n > 0; i++) {
         const s = slots[i];
@@ -78,6 +118,7 @@
           if (s.count <= 0) slots[i] = null;
         }
       }
+      emitInvChanged({ reason: 'remove', id: String(id), count: asked });
       return true;
     }
 
@@ -100,12 +141,14 @@
       if (!cur) {                       // empty cursor: pick the slot up
         if (!s) return null;
         slots[k] = null;
+        emitInvChanged({ reason: 'move', slot: k });
         return { id: s.id, count: s.count };
       }
       if (!s) {                         // empty slot: place what fits
         const put = Math.min(maxStack(cur.id), cur.count);
         slots[k] = { id: cur.id, count: put };
         cur.count -= put;
+        emitInvChanged({ reason: 'move', slot: k });
         return cur.count > 0 ? cur : null;
       }
       if (s.id === cur.id) {            // same item: merge into the slot
@@ -113,38 +156,160 @@
         if (move > 0) {
           s.count += move;
           cur.count -= move;
+          emitInvChanged({ reason: 'move', slot: k });
         }
         return cur.count > 0 ? cur : null;
       }
       slots[k] = { id: cur.id, count: cur.count };   // different items: swap
+      emitInvChanged({ reason: 'move', slot: k });
       return { id: s.id, count: s.count };
     }
 
-    // Dense array of null | [id, count].
+    // Favorite pin (slot-index meta). Survives save/load; depositAll skips
+    // favorited slots. Returns the new favorite state.
+    toggleFavorite(idx) {
+      const k = idx | 0;
+      if (k !== idx || k < 0 || k >= this.slots.length) return false;
+      const now = !this.favorites.has(k);
+      if (now) this.favorites.add(k);
+      else this.favorites.delete(k);
+      emitInvChanged({ reason: 'favorite', slot: k, favorite: now });
+      return now;
+    }
+
+    isFavorite(idx) {
+      const k = idx | 0;
+      return k === idx && this.favorites.has(k);
+    }
+
+    // Split half of the stack (or n items when given) out of a slot.
+    // Cursor-style return: {id,count} | null; source empties when drained.
+    stackSplit(slot, count) {
+      const k = slot | 0;
+      if (k !== slot || k < 0 || k >= this.slots.length) return null;
+      const s = this.slots[k];
+      if (!s) return null;
+      const take = (typeof count === 'number' && isFinite(count) && count > 0)
+        ? Math.min(s.count, Math.floor(count))
+        : Math.max(1, Math.floor(s.count / 2));
+      const out = { id: s.id, count: take };
+      s.count -= take;
+      if (s.count <= 0) this.slots[k] = null;
+      emitInvChanged({ reason: 'split', slot: k, id: out.id, count: take });
+      return out;
+    }
+
+    // Move the stack at fromSlot into targetContainerSlots (a raw slot array):
+    // matching-id stacks first, then the first empty slot. Clears the source
+    // slot when fully moved. Returns the moved count.
+    quickMove(fromSlot, targetContainerSlots) {
+      const k = fromSlot | 0;
+      if (k !== fromSlot || k < 0 || k >= this.slots.length) return 0;
+      const s = this.slots[k];
+      if (!s || !Array.isArray(targetContainerSlots)) return 0;
+      const st = { id: s.id, count: s.count };
+      const moved = moveIntoSlots(st, targetContainerSlots);
+      if (moved <= 0) return 0;
+      if (st.count <= 0) this.slots[k] = null;
+      else s.count = st.count;
+      emitInvChanged({ reason: 'quickMove', slot: k, id: st.id, count: moved });
+      return moved;
+    }
+
+    // Quick-stack every non-favorited slot into targetSlots. Returns the
+    // total moved count; emits one aggregate InventoryChanged when > 0.
+    depositAll(targetSlots) {
+      if (!Array.isArray(targetSlots)) return 0;
+      let total = 0;
+      for (let i = 0; i < this.slots.length; i++) {
+        if (this.favorites.has(i)) continue;       // pinned slots stay put
+        const s = this.slots[i];
+        if (!s) continue;
+        const st = { id: s.id, count: s.count };
+        const moved = moveIntoSlots(st, targetSlots);
+        if (moved > 0) {
+          total += moved;
+          if (st.count <= 0) this.slots[i] = null;
+          else s.count = st.count;
+        }
+      }
+      if (total > 0) emitInvChanged({ reason: 'depositAll', count: total });
+      return total;
+    }
+
+    // Deterministic tidy: occupied stacks ordered by kind then id (unknown
+    // defs last), compacted toward slot 0; empty slots trail. Stable sort,
+    // so equal keys keep their relative order and stacks never merge.
+    sort() {
+      const order = [];
+      for (let i = 0; i < this.slots.length; i++) {
+        const s = this.slots[i];
+        if (s && s.id && s.count > 0) order.push({ id: s.id, count: s.count });
+      }
+      if (order.length < 2) return order.length;
+      const kindOf = (id) => {
+        const d = def(id);
+        return (d && d.kind) ? String(d.kind) : '\uffff';
+      };
+      const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+      order.sort((a, b) => cmpStr(kindOf(a.id), kindOf(b.id)) || cmpStr(a.id, b.id));
+      let oi = 0;
+      for (let i = 0; i < this.slots.length; i++) {
+        this.slots[i] = (oi < order.length) ? order[oi++] : null;
+      }
+      emitInvChanged({ reason: 'sort', count: order.length });
+      return order.length;
+    }
+
+    // Dense array of null | [id, count]. When favorites are pinned the shape
+    // becomes { slots, favorites } so the pins ride along in the same blob;
+    // classic array saves still load (deserialize tolerates both).
     serialize() {
       const out = new Array(this.slots.length);
       for (let i = 0; i < this.slots.length; i++) {
         const s = this.slots[i];
         out[i] = (s && s.id && s.count > 0) ? [s.id, s.count] : null;
       }
-      return out;
+      if (!this.favorites.size) return out;
+      const favs = [];
+      this.favorites.forEach((k) => {
+        if (k >= 0 && k < this.slots.length) favs.push(k);
+      });
+      favs.sort((a, b) => a - b);
+      return { slots: out, favorites: favs };
     }
 
-    // Load a serialized array; bad entries become empty slots. Returns bool.
-    deserialize(arr) {
+    // Load an array (classic) or a {slots, favorites} envelope; bad entries
+    // become empty slots. Returns bool.
+    deserialize(data) {
       this.slots.fill(null);
+      this.favorites.clear();
+      let arr = data, favs = null;
+      if (data && typeof data === 'object' && !Array.isArray(data) &&
+          Array.isArray(data.slots)) {
+        arr = data.slots;
+        favs = Array.isArray(data.favorites) ? data.favorites : null;
+      }
       if (!Array.isArray(arr)) return false;
       for (let i = 0; i < arr.length && i < this.slots.length; i++) {
         const s = sanitizeStack(arr[i]);
         if (s) this.slots[i] = s;
       }
+      if (favs) {
+        for (let i = 0; i < favs.length; i++) {
+          const k = favs[i] | 0;
+          if (k === favs[i] && k >= 0 && k < this.slots.length) this.favorites.add(k);
+        }
+      }
       return true;
     }
 
-    static deserialize(arr) {
-      if (!Array.isArray(arr)) return null;
+    // Build an Inventory from an array (classic) or a {slots, favorites}
+    // envelope; returns null for unusable input.
+    static deserialize(data) {
+      if (!data || typeof data !== 'object') return null;
       const inv = new Inventory();
-      inv.deserialize(arr);
+      if (!inv.deserialize(data)) return null;
       return inv;
     }
   }

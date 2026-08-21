@@ -1,10 +1,16 @@
-/* save.js — localStorage persistence: full-world diffs + player state. */
+/* save.js — localStorage persistence bridge: SaveCore v2 envelopes with a
+   legacy v1 fallback. Saves route through TC.SaveCore when it is loaded
+   (atomic envelope under 'tc_save_v2', all registered providers ride along);
+   loads prefer the v2 envelope and fall back to the v1 blob with unchanged
+   validation, so old saves keep working with zero data loss. */
 'use strict';
 (function () {
   const TC = window.TC;
   if (!TC.Save) TC.Save = {};
 
   const KEY = 'tc_save_v1';
+  const V2_KEY = 'tc_save_v2';
+  const ALL_KEYS = [KEY, V2_KEY, V2_KEY + '.bak', V2_KEY + '.tmp'];
   const FALLBACK_INTERVAL = 30;
 
   // Pristine baseline for diffing, memoized per seed (generate is deterministic).
@@ -62,11 +68,49 @@
     return true;
   }
 
-  // Gather current game state and persist. Returns true on success.
-  TC.Save.save = function () {
-    if (!TC.world || !TC.world.tiles || TC.worldSeed == null) return false;
+  // Shared field validation for both storage layouts (v1 blob or flattened
+  // envelope): every diff index must fit the current world and every id must
+  // be a known tile/wall.
+  function validateShape(data) {
+    if (typeof data.seed !== 'number' || !isFinite(data.seed)) return false;
+    if (!Array.isArray(data.diffs)) return false;
+
+    const maxIdx = TC.CONST.WORLD_W * TC.CONST.WORLD_H;
+    const maxId = TC.TILE_DEFS.length - 1;
+    for (let i = 0; i < data.diffs.length; i++) {
+      const d = data.diffs[i];
+      if (!Array.isArray(d) || d.length !== 2) return false;
+      const idx = d[0], id = d[1];
+      if (typeof idx !== 'number' || (idx | 0) !== idx || idx < 0 || idx >= maxIdx) return false;
+      if (typeof id !== 'number' || (id | 0) !== id || id < 0 || id > maxId) return false;
+    }
+
+    // Optional wall diffs get the same treatment against the wall table.
+    if (data.wallDiffs != null) {
+      if (!Array.isArray(data.wallDiffs)) return false;
+      const maxWallId = (TC.WALL_DEFS ? TC.WALL_DEFS.length : 0) - 1;
+      for (let i = 0; i < data.wallDiffs.length; i++) {
+        const d = data.wallDiffs[i];
+        if (!Array.isArray(d) || d.length !== 2) return false;
+        const idx = d[0], id = d[1];
+        if (typeof idx !== 'number' || (idx | 0) !== idx || idx < 0 || idx >= maxIdx) return false;
+        if (typeof id !== 'number' || (id | 0) !== id || id < 0 || id > maxWallId) return false;
+      }
+    }
+
+    if (data.time != null && typeof data.time !== 'number') return false;
+    if (data.player != null && typeof data.player !== 'object') return false;
+    if (data.chests != null && !validChests(data.chests)) return false;
+    if (data.npcs != null && !validNpcs(data.npcs)) return false;
+    return true;
+  }
+
+  // Diff live tiles/walls against the pristine baseline for the current seed.
+  // Returns { diffs, wallDiffs } or null when there is no world/baseline yet.
+  TC.Save.computeWorldDiffs = function () {
+    if (!TC.world || !TC.world.tiles || TC.worldSeed == null) return null;
     const base = baseline(TC.worldSeed);
-    if (!base) return false;
+    if (!base) return null;
 
     const tiles = TC.world.tiles;
     const n = Math.min(tiles.length, base.tiles.length);
@@ -76,26 +120,33 @@
     }
     for (let i = n; i < tiles.length; i++) diffs.push([i, tiles[i]]);
 
-    const data = {
-      v: 1,
-      seed: TC.worldSeed,
-      time: (TC.Sky && typeof TC.Sky.time === 'number') ? TC.Sky.time : 0,
-      diffs: diffs,
-      player: (TC.player && typeof TC.player.serialize === 'function')
-        ? TC.player.serialize() : null
-    };
-    // Optional wall-layer diffs, same pair shape as diffs; omitted when the
-    // wall layer is unavailable or nothing changed.
+    // Wall-layer diffs, same pair shape as diffs; empty when the wall layer
+    // is unavailable or nothing changed.
+    const wallDiffs = [];
     const walls = TC.world.walls;
     if (walls && base.walls) {
       const wn = Math.min(walls.length, base.walls.length);
-      const wallDiffs = [];
       for (let i = 0; i < wn; i++) {
         if (walls[i] !== base.walls[i]) wallDiffs.push([i, walls[i]]);
       }
       for (let i = wn; i < walls.length; i++) wallDiffs.push([i, walls[i]]);
-      if (wallDiffs.length > 0) data.wallDiffs = wallDiffs;
     }
+    return { diffs: diffs, wallDiffs: wallDiffs };
+  };
+
+  // Legacy v1 payload builder; also backs exportSave() when SaveCore is absent.
+  function buildLegacyData() {
+    const d = TC.Save.computeWorldDiffs();
+    if (!d) return null;
+    const data = {
+      v: 1,
+      seed: TC.worldSeed,
+      time: (TC.Sky && typeof TC.Sky.time === 'number') ? TC.Sky.time : 0,
+      diffs: d.diffs,
+      player: (TC.player && typeof TC.player.serialize === 'function')
+        ? TC.player.serialize() : null
+    };
+    if (d.wallDiffs.length > 0) data.wallDiffs = d.wallDiffs;
     // Chest contents ride along when the Chests registry exists.
     if (TC.Chests && typeof TC.Chests.serialize === 'function') {
       try { data.chests = TC.Chests.serialize(); } catch (e) {}
@@ -104,57 +155,150 @@
     if (TC.NPCs && typeof TC.NPCs.serialize === 'function') {
       try { data.npcs = TC.NPCs.serialize(); } catch (e) {}
     }
+    return data;
+  }
+
+  // ---- SaveCore providers ----
+  // world.core carries seed/time + tile/wall diffs; character.core carries
+  // player/chests/npcs. deserialize is an identity pass — main.js applies the
+  // pieces to the freshly generated world (see continueGame).
+  if (TC.SaveCore && typeof TC.SaveCore.register === 'function') {
+    try {
+      TC.SaveCore.register('world.core', {
+        serialize: function () {
+          const d = TC.Save.computeWorldDiffs();
+          if (!d) throw new Error('world baseline unavailable');
+          const data = {
+            seed: TC.worldSeed,
+            time: (TC.Sky && typeof TC.Sky.time === 'number') ? TC.Sky.time : 0,
+            diffs: d.diffs
+          };
+          if (d.wallDiffs.length > 0) data.wallDiffs = d.wallDiffs;
+          return data;
+        },
+        deserialize: function (d) { return d; }
+      });
+      TC.SaveCore.register('character.core', {
+        serialize: function (ctx) {
+          let chests = null, npcs = null;
+          if (TC.Chests && typeof TC.Chests.serialize === 'function') {
+            try { chests = TC.Chests.serialize(); } catch (e) {}
+          }
+          if (TC.NPCs && typeof TC.NPCs.serialize === 'function') {
+            try { npcs = TC.NPCs.serialize(); } catch (e) {}
+          }
+          return {
+            player: (ctx.player && typeof ctx.player.serialize === 'function')
+              ? ctx.player.serialize() : null,
+            chests: chests,
+            npcs: npcs
+          };
+        },
+        deserialize: function (d) { return d; }
+      });
+    } catch (e) {
+      console.warn('[TC.Save] SaveCore provider registration skipped:', e && e.message);
+    }
+  }
+
+  // Flatten an envelope back into the legacy-shaped object main.js consumes,
+  // keeping the raw envelope around for provider dispatch. Returns null when
+  // the world section is missing or malformed so the caller can fall back.
+  function flattenEnvelope(env) {
+    if (!env || typeof env !== 'object') return null;
+    if (!env.world || !env.world.core) return null;
+    const w = env.world.core.data;
+    if (!w || typeof w !== 'object' || !Array.isArray(w.diffs)) return null;
+    const c = (env.character && env.character.core) ? env.character.core.data : null;
+
+    const out = {
+      seed: (typeof w.seed === 'number' && isFinite(w.seed)) ? w.seed :
+        ((env.metadata && typeof env.metadata.seed === 'number') ? env.metadata.seed : null),
+      time: (typeof w.time === 'number') ? w.time : 0,
+      diffs: w.diffs,
+      player: (c && c.player != null) ? c.player : null,
+      chests: (c && c.chests != null) ? c.chests : null,
+      npcs: (c && c.npcs != null) ? c.npcs : null
+    };
+    if (Array.isArray(w.wallDiffs) && w.wallDiffs.length > 0) out.wallDiffs = w.wallDiffs;
+    out.__envelope = env;
+    return validateShape(out) ? out : null;
+  }
+
+  // Gather current game state and persist. Returns true on success.
+  TC.Save.save = function () {
+    if (!TC.world || !TC.world.tiles || TC.worldSeed == null) return false;
+    // SaveCore path: atomic v2 envelope including every registered provider.
+    if (TC.SaveCore && typeof TC.SaveCore.saveNow === 'function') {
+      try { return !!TC.SaveCore.saveNow(V2_KEY); } catch (e) { return false; }
+    }
+    const data = buildLegacyData();
+    if (!data) return false;
     return storageSet(KEY, JSON.stringify(data));
   };
 
-  // Parse and validate the stored save. Returns data or null.
-  TC.Save.load = function () {
+  // Read + fully validate the legacy v1 blob. Returns data or null.
+  function loadLegacy() {
     const raw = storageGet(KEY);
     if (!raw) return null;
     let data;
     try { data = JSON.parse(raw); } catch (e) { return null; }
     if (!data || typeof data !== 'object' || data.v !== 1) return null;
-    if (typeof data.seed !== 'number' || !isFinite(data.seed)) return null;
-    if (!Array.isArray(data.diffs)) return null;
+    if (!validateShape(data)) return null;
+    return data;
+  }
 
-    // Dimensions come from CONST (worldgen is deterministic), so validate that
-    // every diff index fits the current world and every id is a known tile.
-    const maxIdx = TC.CONST.WORLD_W * TC.CONST.WORLD_H;
-    const maxId = TC.TILE_DEFS.length - 1;
-    for (let i = 0; i < data.diffs.length; i++) {
-      const d = data.diffs[i];
-      if (!Array.isArray(d) || d.length !== 2) return null;
-      const idx = d[0], id = d[1];
-      if (typeof idx !== 'number' || (idx | 0) !== idx || idx < 0 || idx >= maxIdx) return null;
-      if (typeof id !== 'number' || (id | 0) !== id || id < 0 || id > maxId) return null;
-    }
-
-    // Optional wall diffs get the same treatment against the wall table.
-    if (data.wallDiffs != null) {
-      if (!Array.isArray(data.wallDiffs)) return null;
-      const maxWallId = (TC.WALL_DEFS ? TC.WALL_DEFS.length : 0) - 1;
-      for (let i = 0; i < data.wallDiffs.length; i++) {
-        const d = data.wallDiffs[i];
-        if (!Array.isArray(d) || d.length !== 2) return null;
-        const idx = d[0], id = d[1];
-        if (typeof idx !== 'number' || (idx | 0) !== idx || idx < 0 || idx >= maxIdx) return null;
-        if (typeof id !== 'number' || (id | 0) !== id || id < 0 || id > maxWallId) return null;
+  // Parse and validate the stored save: prefer the v2 envelope, fall back to
+  // the v1 blob. Returns data or null.
+  TC.Save.load = function () {
+    if (TC.SaveCore && typeof TC.SaveCore.loadFrom === 'function') {
+      let env = null;
+      try { env = TC.SaveCore.loadFrom(V2_KEY); } catch (e) { env = null; }
+      if (env) {
+        const flat = flattenEnvelope(env);
+        if (flat) return flat;
       }
     }
-
-    if (data.time != null && typeof data.time !== 'number') return null;
-    if (data.player != null && typeof data.player !== 'object') return null;
-    if (data.chests != null && !validChests(data.chests)) return null;
-    if (data.npcs != null && !validNpcs(data.npcs)) return null;
-    return data;
+    return loadLegacy();
   };
 
   TC.Save.hasSave = function () {
-    return !!storageGet(KEY);
+    for (let i = 0; i < ALL_KEYS.length; i++) {
+      if (storageGet(ALL_KEYS[i])) return true;
+    }
+    return false;
   };
 
   TC.Save.deleteSave = function () {
-    storageRemove(KEY);
+    for (let i = 0; i < ALL_KEYS.length; i++) storageRemove(ALL_KEYS[i]);
+  };
+
+  // Export the live game state as a JSON string (v2 envelope when SaveCore is
+  // available, else the legacy v1 shape). Returns null when unavailable.
+  TC.Save.exportSave = function () {
+    if (TC.SaveCore && typeof TC.SaveCore.exportString === 'function') {
+      try { return TC.SaveCore.exportString(); } catch (e) { return null; }
+    }
+    const data = buildLegacyData();
+    return data ? JSON.stringify(data) : null;
+  };
+
+  // Import a previously exported string and stage it for the next load.
+  // Returns true when the string was accepted and stored.
+  TC.Save.importSave = function (str) {
+    if (typeof str !== 'string' || !str) return false;
+    if (TC.SaveCore && typeof TC.SaveCore.importString === 'function') {
+      try {
+        const env = TC.SaveCore.importString(str);
+        return storageSet(V2_KEY, JSON.stringify(env));
+      } catch (e) { return false; }
+    }
+    // No SaveCore: accept only a well-formed legacy v1 blob.
+    let data;
+    try { data = JSON.parse(str); } catch (e) { return false; }
+    if (!data || typeof data !== 'object' || data.v !== 1) return false;
+    if (!validateShape(data)) return false;
+    return storageSet(KEY, JSON.stringify(data));
   };
 
   // Periodic autosave while a world is live; failures are silent.

@@ -57,6 +57,7 @@
     }
     if (diffs || wallDiffs) TC.world.markAllDirty();
     if (TC.Lighting) TC.Lighting.init(TC.world);
+    if (TC.Liquids && typeof TC.Liquids.reset === 'function') TC.Liquids.reset(TC.world);
     return gen;
   }
 
@@ -70,6 +71,7 @@
     );
     TC.player.giveStarterKit();
     if (TC.Enemies) TC.Enemies.clear();
+    if (TC.Progression && typeof TC.Progression.resetForNewWorld === 'function') TC.Progression.resetForNewWorld();
     if (TC.Wiring && typeof TC.Wiring.resetForNewWorld === 'function') TC.Wiring.resetForNewWorld();
     if (TC.NPCs && TC.NPCs.spawnGuide) TC.NPCs.spawnGuide(gen.spawnX * TC.CONST.TS, gen.spawnY * TC.CONST.TS);
     if (TC.Items) TC.Items.clearDrops();
@@ -79,6 +81,9 @@
     centerCamera(true);
     TC.state = 'playing';
     if (TC.Events) { try { TC.Events.emit(TC.Events.EVENT.WorldLoaded, { seed: seed }); } catch (e) {} }
+    if (TC.NPCs && typeof TC.NPCs.evaluateUnlocks === 'function') {
+      try { TC.NPCs.evaluateUnlocks(); } catch (eu) {}
+    }
   };
 
   TC.continueGame = function () {
@@ -104,6 +109,12 @@
       try { TC.Fishing.restoreLegacy(data.fishing); } catch (e) {}
     }
     if (TC.Wiring && typeof TC.Wiring.resetForNewWorld === 'function') TC.Wiring.resetForNewWorld();
+    if (data.__envelope && TC.SaveCore && typeof TC.SaveCore.restore === 'function') {
+      try { TC.SaveCore.restore(data.__envelope); } catch (e) { console.warn('[TC] save restore:', e); }
+    }
+    if (TC.NPCs && typeof TC.NPCs.evaluateUnlocks === 'function') {
+      try { TC.NPCs.evaluateUnlocks(); } catch (eu) {}
+    }
     centerCamera(true);
     TC.state = 'playing';
     if (TC.Events) { try { TC.Events.emit(TC.Events.EVENT.WorldLoaded, { seed: data.seed }); } catch (e) {} }
@@ -155,6 +166,7 @@
     if (TC.Particles) TC.Particles.update(dt);
     if (TC.world) TC.world.update(dt);
     if (TC.Wiring && typeof TC.Wiring.update === 'function') TC.Wiring.update(dt);
+    if (TC.Liquids && typeof TC.Liquids.update === 'function') TC.Liquids.update(dt);
     if (TC.Lighting) TC.Lighting.update(dt, cam);
     if (TC.Music) TC.Music.update(dt);
     if (TC.MiniMap) TC.MiniMap.update(dt);
@@ -174,6 +186,7 @@
     if (TC.world && TC.state !== 'title') {
       TC.applyCam(ctx);
       TC.world.draw(ctx, cam);
+      if (TC.Liquids && typeof TC.Liquids.draw === 'function') TC.Liquids.draw(ctx, cam, TC.world);
       if (TC.Loot) TC.Loot.drawTiles(ctx, cam, TC.world);
       if (TC.Wiring && typeof TC.Wiring.draw === 'function') TC.Wiring.draw(ctx, cam);
       if (TC.Items) TC.Items.draw(ctx, cam);
