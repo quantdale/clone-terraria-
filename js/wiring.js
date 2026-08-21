@@ -1032,6 +1032,16 @@
       if (!def) return;
       try { R.define(kind, id, def); } catch (e) { /* dup or invalid: non-fatal */ }
     };
+    // Tile defs carry `drop` item keys ("wire", "switch", ...) and items carry
+    // `.tile` numeric indices — register string-key aliases for the items so
+    // Registry.validate() resolves every cross-reference. (Numeric tile
+    // aliases are already created by the auto-mirror; re-adding them here
+    // would conflict.)
+    const safeItem = (key, id) => {
+      if (!items || !items[key]) return;
+      safe('item', id, items[key]);
+      try { if (typeof R.aliasKey === 'function') R.aliasKey('item', id, key); } catch (e2) {}
+    };
     const defs = TC.TILE_DEFS;
     if (defs) {
       safe('tile', 'wiring:wire', defs[T.WIRE]);
@@ -1045,13 +1055,13 @@
     }
     const items = TC.ITEM_DEFS;
     if (items) {
-      safe('item', 'wiring:wire', items.wire);
-      safe('item', 'wiring:switch', items.switch);
-      safe('item', 'wiring:lever', items.lever);
-      safe('item', 'wiring:pressure_plate', items.pressure_plate);
-      safe('item', 'wiring:timer', items.timer);
-      safe('item', 'wiring:dart_trap', items.dart_trap);
-      safe('item', 'wiring:actuator', items.actuator);
+      safeItem('wire', 'wiring:wire');
+      safeItem('switch', 'wiring:switch');
+      safeItem('lever', 'wiring:lever');
+      safeItem('pressure_plate', 'wiring:pressure_plate');
+      safeItem('timer', 'wiring:timer');
+      safeItem('dart_trap', 'wiring:dart_trap');
+      safeItem('actuator', 'wiring:actuator');
     }
   }
 

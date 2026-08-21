@@ -27,12 +27,15 @@ function makeCtx2D(canvas) {
         case 'createRadialGradient': return () => ({ addColorStop() {} });
         case 'createPattern': return () => ({});
         case 'getImageData': return (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h });
+        case 'createImageData': return (w, h) => ({ data: new Uint8ClampedArray((w || 1) * (h || 1) * 4), width: w, height: h });
         case 'putImageData': case 'drawImage': case 'fillRect': case 'strokeRect':
         case 'clearRect': case 'beginPath': case 'closePath': case 'moveTo':
         case 'lineTo': case 'arc': case 'ellipse': case 'rect': case 'fill':
         case 'stroke': case 'clip': case 'save': case 'restore': case 'translate':
         case 'rotate': case 'scale': case 'setTransform': case 'transform':
-        case 'setLineDash': case 'fillText': case 'strokeText': return () => {};
+        case 'setLineDash': case 'fillText': case 'strokeText':
+        case 'quadraticCurveTo': case 'bezierCurveTo': case 'arcTo':
+        case 'roundRect': return () => {};
         default: return undefined;
       }
     },
@@ -78,6 +81,7 @@ function loadGame(opts) {
   const storage = makeStorage();
   const listeners = {};
   let rafCallback = null;
+  let simTime = 0;                               // single synthetic clock (ms)
 
   const mainWindowCanvas = makeCanvas(1280, 720);
   const documentStub = {
@@ -92,7 +96,7 @@ function loadGame(opts) {
 
   const sandbox = {
     console,
-    performance: { now: () => Date.now() },
+    performance: { now: () => simTime },
     Math, Date, JSON, Object, Array, Map, Set, Uint8Array, Uint8ClampedArray,
     Int16Array, Float32Array, Number, String, Boolean, Symbol, Promise, Error,
     isFinite, parseInt, parseFloat, isNaN, encodeURIComponent, decodeURIComponent,
@@ -123,14 +127,15 @@ function loadGame(opts) {
     TC, ctx, storage, listeners,
     scriptOrderRun: names,
     startFrameLoop() {
-      // run frames manually: step the captured rAF callback N times at 60fps dt
-      let t = 0;
+      // run frames manually: step the captured rAF callback N times at 60fps.
+      // Timestamps come from the same synthetic clock as performance.now(),
+      // so main.js's dt math sees clean 1/60 steps from frame one.
       for (let i = 0; i < (opts.frames || 1); i++) {
         if (typeof rafCallback !== 'function') break;
-        t += 1000 / 60;
+        simTime += 1000 / 60;
         const cb = rafCallback;
         rafCallback = null;
-        cb(t);
+        cb(simTime);
       }
       return rafCallback; // non-null => loop wants to continue
     },

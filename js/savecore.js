@@ -288,7 +288,8 @@
 
   // ---- restore ----
   // Dispatch envelope sections back to registered providers. Never throws per
-  // provider; results report restored/failed/missing keys.
+  // provider; results report restored/failed/missing keys. A deserialize that
+  // throws OR returns false (payload rejected) lands in failed[].
   function restore(env, ctx) {
     const res = { restored: [], failed: [], missing: [] };
     if (!isObj(env)) return res;
@@ -301,8 +302,17 @@
         res.failed.push({ key: p.key, error: 'data version ' + entry.v + ' is newer than provider version ' + p.version });
         return;
       }
-      try { p.deserialize(entry.data, ctx); res.restored.push(p.key); } catch (e) {
+      let out;
+      try { out = p.deserialize(entry.data, ctx); } catch (e) {
         res.failed.push({ key: p.key, error: msg(e) });
+        return;
+      }
+      // Providers signal "saved payload rejected" by returning false; count
+      // that as a failure rather than a restore that never happened.
+      if (out === false) {
+        res.failed.push({ key: p.key, error: 'deserialize rejected the saved data' });
+      } else {
+        res.restored.push(p.key);
       }
     });
     return res;

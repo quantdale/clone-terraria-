@@ -645,7 +645,7 @@
         // canonical break completion: exactly one tile write + one TileBroken
         try { world.set(tx, ty, TILE.AIR); } catch (e) {}
         if (TC.Events) {
-          try { TC.Events.emit(TC.Events.EVENT.TileBroken, { tx: tx, ty: ty, id: id }); } catch (eb) {}
+          try { TC.Events.emit(TC.Events.EVENT.TileBroken, { tx: tx, ty: ty, id: id, tile: id }); } catch (eb) {}
         }
         if (td.drop && TC.Items && typeof TC.Items.spawnDrop === 'function') {
           try { TC.Items.spawnDrop(tcx, tcy, td.drop, 1); } catch (e) {}
@@ -953,7 +953,9 @@
     damage(dmg, kbx, kby, src) {
       if (this.dead || this.iframes > 0) return;
       dmg = Math.max(1, Math.round(dmg));
-      dmg -= Math.min(this.totalDefense(), dmg - 1);   // armor softens; at least 1 lands
+      // Defense is owned by Combat.hurtPlayer (which bypasses it for 'fall'/
+      // 'void'); direct callers here are environmental sources that also
+      // bypass defense, so no subtraction at this layer.
       this.hp -= dmg;
       this.vx += (kbx || 0) * 24;            // partial knockback
       this.vy += (kby || 0) * 24;
@@ -1081,7 +1083,7 @@
         try { TC.Magic.restoreLegacy(data, p); } catch (e) {}
       }
       if (TC.Accessories && typeof TC.Accessories.restoreLegacy === 'function') {
-        try { TC.Accessories.restoreLegacy(data); } catch (e2) {}
+        try { TC.Accessories.restoreLegacy(data, p); } catch (e2) {}
       }
       if (data.lifeCrystals != null) p.lifeCrystals = data.lifeCrystals;
       return p;

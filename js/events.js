@@ -90,9 +90,14 @@
     }
   }
 
-  // Named listeners first, then '*' wildcards; each group in registration order.
+  // Named listeners first, then '*' wildcards; each group in registration
+  // order. A direct emit('*') runs the wildcard bucket exactly once.
   function dispatch(event, payload) {
     const named = listeners.get(event);
+    if (event === WILDCARD) {
+      if (named) runList(named.slice(), payload, event);
+      return;
+    }
     const wild = listeners.get(WILDCARD);
     if (named) runList(named.slice(), payload, event);
     if (wild) runList(wild.slice(), payload, event);

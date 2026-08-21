@@ -152,6 +152,9 @@
       this.markDirtyAt(x, y);
       if (TC.Lighting) TC.Lighting.onTileChanged(x, y);
       this.checkSupport(x, y);
+      if (TC.Liquids && typeof TC.Liquids.wake === 'function') {
+        try { TC.Liquids.wake(x, y); } catch (e) {}
+      }
       if (TC.Events) { try { TC.Events.emit(TC.Events.EVENT.TileChanged, { tx: x, ty: y, id: id }); } catch (e) {} }
     }
 
@@ -517,16 +520,28 @@
         return true;
       }
       // Preferred side alternates with index parity so neighbouring cells
-      // don't all shove the same way each step (avoids jitter).
+      // don't all shove the same way each step (avoids jitter). Sideways
+      // flow needs a reason: water pressing from above (column overflow)
+      // or a water neighbour beside the target (pool-surface levelling).
+      // A lone tile on flat ground has neither, so it settles instead of
+      // drifting/ping-ponging across the floor forever.
       const l = x > 0 ? i - 1 : -1;
       const r = x < w - 1 ? i + 1 : -1;
+      const pressed = y > 0 && this.tiles[i - w] === TC.TILE.WATER;
       const first = (i & 1) === 0 ? r : l;
       const second = first === l ? r : l;
-      if (first >= 0 && this.canSpreadInto(first, i)) {
+      const trySide = (t) => {
+        if (t < 0 || !this.canSpreadInto(t, i)) return false;
+        const tx = t % w;
+        const beside = (tx > 0 && t - 1 !== i && this.tiles[t - 1] === TC.TILE.WATER) ||
+                       (tx < w - 1 && t + 1 !== i && this.tiles[t + 1] === TC.TILE.WATER);
+        return pressed || beside;
+      };
+      if (trySide(first)) {
         this.moveWater(i, x, y, first % w, (first / w) | 0);
         return true;
       }
-      if (second >= 0 && this.canSpreadInto(second, i)) {
+      if (trySide(second)) {
         this.moveWater(i, x, y, second % w, (second / w) | 0);
         return true;
       }

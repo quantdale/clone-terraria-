@@ -125,8 +125,15 @@
   }
 
   function hexA(hex, a) {
-    const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
-    return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+    // Accept #rgb shorthand, #rrggbb, and fall back to white for anything
+    // else (named colors etc.) — a NaN channel throws inside addColorStop
+    // and would otherwise fire every rendered frame.
+    let h = String(hex == null ? '#ffffff' : hex).trim();
+    if (h.charCodeAt(0) === 35) h = h.slice(1);
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) return 'rgba(255,255,255,' + a + ')';
+    const n = parseInt(h, 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
   }
 
   function sfx(name) {

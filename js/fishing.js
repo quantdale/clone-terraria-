@@ -560,7 +560,11 @@
     S.clock += dt;
 
     const w = TC.world;
-    if (w !== S.world) hardReset(w);
+    if (w !== S.world) {
+      if (S.restoreHold) { S.world = w; S.restoreHold = false; }
+      else hardReset(w);
+    }
+    if (S.restoreHold) S.restoreHold = false;   // restored state survived WorldLoaded
     if (TC.state !== 'playing' || !w || !TC.player) return;
     ensureRng();
     ensureQuest();
@@ -730,6 +734,11 @@
   }
   function load(data) {
     if (!data || typeof data !== 'object') return false;
+    // Latch: a WorldLoaded fires right after continueGame restores us; the
+    // reset it triggers must NOT wipe the state we just loaded. The latch
+    // clears on the first update tick (a genuinely fresh world never has a
+    // restored payload, so its reset still lands).
+    S.restoreHold = true;
     S.catches = {};
     if (data.catches && typeof data.catches === 'object') {
       for (const k in data.catches) {
@@ -768,8 +777,12 @@
     }
   }
 
-  // Fresh world: fresh quest/catch state (public for direct calls too).
-  function reset() { hardReset(TC.world); }
+  // Fresh world: fresh quest/catch state — unless we just restored saved
+  // state and the trailing WorldLoaded (continueGame) is about to fire.
+  function reset() {
+    if (S.restoreHold) return;
+    hardReset(TC.world);
+  }
 
   // Event wiring — reactions only, installed once at load (guarded).
   if (TC.Events && TC.Events.EVENT && typeof TC.Events.on === 'function') {

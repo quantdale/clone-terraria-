@@ -805,8 +805,11 @@
   // TC.player (mirrors the removed Player.deserialize wrap, including the
   // clear-when-buffs-absent branch). Lead calls it in continueGame() right
   // after player creation.
-  function restoreLegacy(playerData) {
-    const p = TC.player || null;
+  function restoreLegacy(playerData, player) {
+    // During Player.deserialize the rebuilt player is NOT yet on TC.player,
+    // so callers pass it explicitly (v1 blobs would otherwise silently drop
+    // accessories + buffs).
+    const p = player || TC.player || null;
     if (!p || !playerData || typeof playerData !== 'object') return false;
     attachAcc(p, playerData.accessories);
     if (playerData.buffs) attachBuffs(p, playerData.buffs);

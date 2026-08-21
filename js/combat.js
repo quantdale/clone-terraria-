@@ -47,13 +47,17 @@
   // classMul scales by the resolver's damage-class multiplier (melee/ranged).
   function rollDamage(base, classMul) {
     const v = TC.CONST.DMG_VARIANCE || 0;
+    // st.critChance from the resolver ALREADY includes the CONST.CRIT_CHANCE
+    // base (stats.js finalize); adding the base again here inflated melee
+    // crit odds by another absolute CRIT_CHANCE — only fall back to the bare
+    // base when no resolver snapshot is available.
     let critChance = TC.CONST.CRIT_CHANCE || 0;
     let mul = (typeof classMul === 'number') ? classMul : 1;
     if (TC.Stats && typeof TC.Stats.resolve === 'function' && TC.player) {
       try {
         const st = TC.Stats.resolve(TC.player);
         if (st) {
-          critChance += st.critChance || 0;
+          critChance = st.critChance || 0;
           mul *= 1;
         }
       } catch (e) {}

@@ -208,7 +208,7 @@
   // not separately exposed, so routing through the world method IS the hook).
   function completeTileBreak(w, tx, ty, id, td) {
     const cx = (tx + 0.5) * TS, cy = (ty + 0.5) * TS;
-    if (w.get(tx, ty) !== TC.TILE.AIR) w.set(tx, ty, TC.TILE.AIR);
+    if (w.get(tx, ty) !== TC.TILE.AIR) w.set(tx, ty, TC.TILE.AIR);   // set() emits TileChanged
     if (id === TC.TILE.CHEST && TC.Chests && typeof TC.Chests.spill === 'function') {
       try { TC.Chests.spill(tx, ty); } catch (e) {}       // scatter stored items first
     }
@@ -217,8 +217,10 @@
     }
     sfx('break');
     pBurst(cx, cy, 10, td.colors, 120);
-    emit('TileChanged', { tx: tx, ty: ty, tile: TC.TILE.AIR, prev: id });
-    emit('TileBroken', { tx: tx, ty: ty, tile: id, drop: td.drop || null });
+    // Exactly-once: World.set above already emitted TileChanged; here we emit
+    // only TileBroken, with the canonical id field plus the legacy tile field
+    // loot.js reads (player.js's live path emits {tx,ty,id} today).
+    emit('TileBroken', { tx: tx, ty: ty, id: id, tile: id, drop: td.drop || null });
     return { broken: true, tile: id, drop: td.drop || null };
   }
 
@@ -260,11 +262,10 @@
     }
 
     const remove = (rx, ry) => {
-      w.setRaw(rx, ry, T.AIR);
+      w.setRaw(rx, ry, T.AIR);                   // setRaw emits TileChanged
       if (TC.Lighting && typeof TC.Lighting.onTileChanged === 'function') {
         try { TC.Lighting.onTileChanged(rx, ry); } catch (e) {}
       }
-      emit('TileChanged', { tx: rx, ty: ry, tile: T.AIR, prev: T.TRUNK });
     };
     for (let i = 0; i < trunks.length; i++) {
       remove(trunks[i][0], trunks[i][1]);
@@ -356,7 +357,9 @@
     try { w.clearWallDamage(tx, ty); } catch (e) {}
     sfx('break');
     pBurst((tx + 0.5) * TS, (ty + 0.5) * TS, 10, [wd.color], 120);
-    emit('TileChanged', { tx: tx, ty: ty, wall: TC.WALL.NONE, prevWall: wallId });
+    // No TileChanged here: World.setWall intentionally emits nothing and the
+    // live doMineWall path matches — a wall-only payload without `id` would
+    // corrupt wiring.js's plate/timer registry keyed off tile events.
     return { broken: true, wall: wallId };
   }
 
@@ -403,14 +406,12 @@
   function applyPlaceTile(c) {
     const w = getWorld();
     const idef = iDef(c.item);
-    const prev = w.get(c.tx, c.ty);
-    w.set(c.tx, c.ty, idef.tile);
+    w.set(c.tx, c.ty, idef.tile);                // set() emits TileChanged
     if (c.player && c.player.inventory) {
       consumeFromSlot(c.player.inventory, c._placeSlot, c.item, 1);
-      emit('InventoryChanged', { id: c.item, delta: -1 });
+      // Inventory.remove already emitted InventoryChanged — no re-emit.
     }
     sfx('place');
-    emit('TileChanged', { tx: c.tx, ty: c.ty, tile: idef.tile, prev: prev });
     return { placed: true, tile: idef.tile };
   }
 
@@ -451,13 +452,12 @@
   function applyPlaceWall(c) {
     const w = getWorld();
     const wallId = resolveWallId(c);
-    w.setWall(c.tx, c.ty, wallId);
+    w.setWall(c.tx, c.ty, wallId);               // walls ride no tile event (see applyMineWall)
     if (c.player && c.item && c.player.inventory) {
       consumeFromSlot(c.player.inventory, c._placeSlot, c.item, 1);
-      emit('InventoryChanged', { id: c.item, delta: -1 });
+      // Inventory.remove already emitted InventoryChanged — no re-emit.
     }
     sfx('place');
-    emit('TileChanged', { tx: c.tx, ty: c.ty, wall: wallId });
     return { placed: true, wall: wallId };
   }
 
@@ -498,7 +498,7 @@
     p.equipment[slot] = c.item;
     p.equipCd = EQUIP_CD;
     sfx('pickup');
-    emit('InventoryChanged', { id: c.item, delta: -1 });
+    // swapOrPlace already emitted InventoryChanged — no re-emit.
     return { equipped: true, slot: slot, previous: worn ? worn.id : null };
   }
 
@@ -624,9 +624,8 @@
       if (nd && nd.solid && p && !p.dead && overlapsPlayer(p, tx, ty)) {
         return { acted: false, reason: 'blocked' };   // don't shut a door into the player
       }
-      w.set(tx, ty, next);
+      w.set(tx, ty, next);                       // set() emits TileChanged
       sfx('place');
-      emit('TileChanged', { tx: tx, ty: ty, tile: next, prev: id });
       return { acted: true, action: 'door', open: next === T.DOOR_OPEN };
     }
     if (id === T.CHEST && TC.UI && typeof TC.UI.openChest === 'function') {

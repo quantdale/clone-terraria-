@@ -288,6 +288,16 @@
   TC.Save.importSave = function (str) {
     if (typeof str !== 'string' || !str) return false;
     if (TC.SaveCore && typeof TC.SaveCore.importString === 'function') {
+      // Legacy v1 exports stay on the v1 key: converting them here would
+      // park an unloadable {systems.legacy} envelope under the v2 key that
+      // flattenEnvelope cannot read back.
+      let parsed = null;
+      try { parsed = JSON.parse(str); } catch (e) { return false; }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+          TC.SaveCore.isLegacyBlob(parsed)) {
+        if (parsed.v !== 1 || !validateShape(parsed)) return false;
+        return storageSet(KEY, JSON.stringify(parsed));
+      }
       try {
         const env = TC.SaveCore.importString(str);
         return storageSet(V2_KEY, JSON.stringify(env));
