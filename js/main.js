@@ -144,6 +144,7 @@
     if (TC.Music) TC.Music.update(dt);
     if (TC.MiniMap) TC.MiniMap.update(dt);
     if (TC.Save) TC.Save.autosave(dt);
+    if (TC.Events) TC.Events.flush();
     centerCamera(false);
   }
 
@@ -220,5 +221,10 @@
 
   // ---- boot ----
   if (TC.Input) TC.Input.init(canvas);
+  if (TC.Registry) {
+    TC.Registry.syncFromTables();
+    try { TC.Registry.validate(); } catch (e) { console.warn('[TC] registry validation:', e.message); }
+  }
+  if (TC.Systems && TC.Systems.runBoot) TC.Systems.runBoot();
   requestAnimationFrame(frame);
 })();
