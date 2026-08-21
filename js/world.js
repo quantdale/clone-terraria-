@@ -1,0 +1,557 @@
+/* world.js — tile world container: edits, support-pop rules, mining damage
+   (tiles + background walls), hammer shapes + paint slots (parallel state
+   layers), furniture open/close toggling, wire actuation hooks, flowing
+   water (active-set cellular sim), chunked rendering. Owns the authoritative
+   tile and wall grids built by WorldGen. */
+'use strict';
+(function () {
+  const TC = window.TC;
+  const TS = TC.CONST.TS;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+  // ---- flowing water (active-set cellular sim) ----
+  const WATER_TICK = 0.05;        // seconds between sim steps
+  const WATER_BUDGET = 400;       // active cells processed per step
+  const WATER_MAX_ACTIVE = 4000;  // active-set size cap
+  // Tile indices of water cells due for a sim step; insertion order = age
+  // order. Module-level: only one World lives at a time, and the constructor
+  // clears it so indices never leak across worlds.
+  const waterActive = new Set();
+
+  function wakeWater(i) {
+    if (waterActive.has(i)) return;
+    if (waterActive.size >= WATER_MAX_ACTIVE) {
+      // Evict the oldest entries (Sets iterate in insertion order).
+      let excess = waterActive.size - WATER_MAX_ACTIVE + 1;
+      for (const k of waterActive) {
+        waterActive.delete(k);
+        if (--excess <= 0) break;
+      }
+    }
+    waterActive.add(i);
+  }
+
+  // Open/closed furniture pairs: closed tile id -> open tile id and back.
+  // Doors register here; new two-state furniture adds one line each way.
+  let furnPairsCache = null;
+  function furnPairs() {
+    if (furnPairsCache) return furnPairsCache;
+    const m = new Map();
+    const T = TC.TILE;
+    if (T.DOOR_CLOSED != null && T.DOOR_OPEN != null) {
+      m.set(T.DOOR_CLOSED, T.DOOR_OPEN);
+      m.set(T.DOOR_OPEN, T.DOOR_CLOSED);
+    }
+    furnPairsCache = m;
+    return m;
+  }
+
+  class World {
+    constructor(gen) {
+      this.width = gen.width;
+      this.height = gen.height;
+      this.tiles = gen.tiles;        // Uint8Array of tile ids, row-major
+      this.surfaceY = gen.surfaceY;  // Int16Array, first solid tile per column
+      this.walls = gen.walls || new Uint8Array(this.width * this.height); // wall ids, row-major
+      this.damage = new Map();       // tileIndex -> mining progress 0..1
+      this.wallDamage = new Map();   // tileIndex -> wall mining progress 0..1
+      this.shapes = new Uint8Array(this.width * this.height); // hammer shape per tile (TC.Tiles.SHAPE)
+      this.paints = new Map();       // tileIndex -> paint slot (compatibility stub)
+      this.CHUNK = 32;               // chunk size in tiles
+      this.chunksX = Math.ceil(this.width / this.CHUNK);
+      this.chunksY = Math.ceil(this.height / this.CHUNK);
+      this.chunks = new Map();       // chunkKey -> { cv, ctx } canvas cache
+      this.dirty = new Set();        // chunkKeys needing a rebuild
+      this.waterAcc = 0;             // water sim accumulator (seconds)
+      waterActive.clear();           // drop cells left over from an old world
+      this.markAllDirty();
+    }
+
+    // ---- grid helpers ----
+    idx(x, y) { return y * this.width + x; }
+    inB(x, y) { return x >= 0 && y >= 0 && x < this.width && y < this.height; }
+    get(x, y) { return this.inB(x, y) ? this.tiles[this.idx(x, y)] : TC.TILE.BEDROCK; }
+    isSolid(x, y) { return TC.TILE_DEFS[this.get(x, y)].solid; }
+    solidAtPixel(px, py) { return this.isSolid(Math.floor(px / TS), Math.floor(py / TS)); }
+    opaqueAt(x, y) { return TC.TILE_DEFS[this.get(x, y)].opaque; }
+
+    // ---- editing ----
+    // Full edit path: write, rescan surface, dirty chunks, relight, support-pop.
+    set(x, y, id) {
+      if (!this.inB(x, y)) return;
+      const i = this.idx(x, y);
+      this.tiles[i] = id;
+      this.damage.delete(i);         // a rewritten tile loses its crack state
+      this.shapes[i] = 0;            // ...and any hammer shape / paint on it
+      this.paints.delete(i);
+      this.seedWater(i);             // wake water touched by the edit
+      this.rescanSurface(x);
+      this.markDirtyAt(x, y);
+      if (TC.Lighting) TC.Lighting.onTileChanged(x, y);
+      this.checkSupport(x, y);
+    }
+
+    // Raw write for save-load and tree felling: no rescan/relight/pops.
+    setRaw(x, y, id) {
+      if (!this.inB(x, y)) return;
+      const i = this.idx(x, y);
+      this.tiles[i] = id;
+      this.damage.delete(i);
+      this.shapes[i] = 0;            // a rewritten tile loses shape/paint state
+      this.paints.delete(i);
+      this.seedWater(i);             // wake water touched by the write
+      this.markDirtyAt(x, y);
+    }
+
+    // First solid tile per column (== height when the column is all air).
+    rescanSurface(x) {
+      let y = 0;
+      while (y < this.height && !TC.TILE_DEFS[this.tiles[this.idx(x, y)]].solid) y++;
+      this.surfaceY[x] = y;
+    }
+
+    // Pop neighbours that lost their anchor after the tile at (x, y) changed.
+    checkSupport(x, y) {
+      const ay = y - 1;
+      if (this.inB(x, ay) &&
+          TC.TILE_DEFS[this.tiles[this.idx(x, ay)]].needsSupport === 'below' &&
+          !this.isSolid(x, y)) {
+        this.popTile(x, ay);         // set(AIR) inside re-runs this check upward
+      }
+      // Free-standing tiles (torches): need at least one non-air orthogonal
+      // neighbour to hang on.
+      for (let k = 0; k < 4; k++) {
+        const nx = x + DIRS[k][0], ny = y + DIRS[k][1];
+        if (!this.inB(nx, ny)) continue;
+        const def = TC.TILE_DEFS[this.tiles[this.idx(nx, ny)]];
+        if (def.needsSupport === 'any' && !this.hasOrthoTile(nx, ny)) {
+          this.popTile(nx, ny);
+        }
+      }
+    }
+
+    hasOrthoTile(x, y) {
+      return this.get(x + 1, y) !== TC.TILE.AIR || this.get(x - 1, y) !== TC.TILE.AIR ||
+             this.get(x, y + 1) !== TC.TILE.AIR || this.get(x, y - 1) !== TC.TILE.AIR;
+    }
+
+    // Remove a tile, dropping its item; goes through set() so cascades propagate.
+    popTile(x, y) {
+      const def = TC.TILE_DEFS[this.get(x, y)];
+      if (def.drop && TC.Items) {
+        TC.Items.spawnDrop((x + 0.5) * TS, (y + 0.5) * TS, def.drop, 1);
+      }
+      this.set(x, y, TC.TILE.AIR);
+    }
+
+    // ---- mining damage ----
+    // Adds mining progress; returns true once the tile accumulates >= 1
+    // (the entry is cleared so the caller can break it).
+    applyMineDamage(tx, ty, amt) {
+      if (!this.inB(tx, ty)) return false;
+      const i = this.idx(tx, ty);
+      const d = (this.damage.get(i) || 0) + amt;
+      if (d >= 1) {
+        this.damage.delete(i);
+        return true;
+      }
+      this.damage.set(i, d);
+      return false;
+    }
+
+    clearDamage(tx, ty) { this.damage.delete(this.idx(tx, ty)); }
+
+    // ---- background walls ----
+    getWall(x, y) { return this.inB(x, y) ? this.walls[this.idx(x, y)] : TC.WALL.NONE; }
+
+    // Full edit path for walls: write, dirty chunks, relight.
+    setWall(x, y, id) {
+      if (!this.inB(x, y)) return;
+      const i = this.idx(x, y);
+      this.walls[i] = id;
+      this.wallDamage.delete(i);     // a rewritten wall loses its crack state
+      this.markDirtyAt(x, y);
+      if (TC.Lighting) TC.Lighting.onTileChanged(x, y);
+    }
+
+    // Raw write for save-load: write + dirty chunks only.
+    setRawWall(x, y, id) {
+      if (!this.inB(x, y)) return;
+      this.walls[this.idx(x, y)] = id;
+      this.markDirtyAt(x, y);
+    }
+
+    // Adds wall mining progress; returns true once the wall accumulates >= 1
+    // (the entry is cleared so the caller can break it).
+    applyWallDamage(tx, ty, amt) {
+      if (!this.inB(tx, ty)) return false;
+      const i = this.idx(tx, ty);
+      const d = (this.wallDamage.get(i) || 0) + amt;
+      if (d >= 1) {
+        this.wallDamage.delete(i);
+        return true;
+      }
+      this.wallDamage.set(i, d);
+      return false;
+    }
+
+    clearWallDamage(tx, ty) { this.wallDamage.delete(this.idx(tx, ty)); }
+
+    // ---- hammer shapes / paint / actuation ----
+    // Hammer state lives in a parallel layer (this.shapes) rather than in the
+    // tile ids: lighting.js and minimap.js read the raw tiles array, so ids
+    // must stay plain. Shapes are session-only until Save adopts the
+    // serializeShapes/loadShapes hooks below.
+    shapeAt(x, y) {
+      return this.inB(x, y) ? this.shapes[this.idx(x, y)] : 0;
+    }
+
+    setShape(x, y, s) {
+      if (!this.inB(x, y)) return false;
+      const i = this.idx(x, y);
+      s = (s | 0) & 3;
+      if (this.shapes[i] === s) return false;
+      this.shapes[i] = s;
+      this.markDirtyAt(x, y);
+      return true;
+    }
+
+    // Hammer tool hook. Cycles platform states (flat -> "/" -> "\" -> flat),
+    // then slopes/halves on opaque solid blocks (full -> half -> "/" ->
+    // "\" -> full). Returns true when the hit changed something so callers
+    // can fall back to mining when false. Player integration: route held
+    // items whose def.tool === 'hammer' here instead of doMine.
+    hammer(tx, ty) {
+      const id = this.get(tx, ty);
+      const def = TC.TILE_DEFS[id];
+      if (!def) return false;
+      const SH = (TC.Tiles && TC.Tiles.SHAPE) || { FULL: 0, HALF: 1, SLOPE_R: 2, SLOPE_L: 3 };
+      const cur = this.shapeAt(tx, ty);
+      if (def.hammerable) {
+        return this.setShape(tx, ty,
+          cur === SH.FULL ? SH.SLOPE_R : (cur === SH.SLOPE_R ? SH.SLOPE_L : SH.FULL));
+      }
+      if (def.solid && def.opaque) {   // terrain blocks only, never furniture
+        return this.setShape(tx, ty, (cur + 1) & 3);
+      }
+      return false;
+    }
+
+    // Paint compatibility stub: stores a paint slot per position; chunk
+    // rendering forwards it to TC.Tiles.drawTile, whose tint table is empty
+    // until paint items ship. Slot 0 (or <=0) clears.
+    getPaint(x, y) {
+      return this.inB(x, y) ? (this.paints.get(this.idx(x, y)) || 0) : 0;
+    }
+
+    setPaint(x, y, c) {
+      if (!this.inB(x, y)) return false;
+      const i = this.idx(x, y);
+      c = c | 0;
+      if (c > 0) this.paints.set(i, c);
+      else this.paints.delete(i);
+      this.markDirtyAt(x, y);
+      return true;
+    }
+
+    // Flip a two-state furniture tile (doors). Goes through set() so support
+    // pops and relighting run. Returns true when the tile toggled.
+    toggleFurniture(x, y) {
+      const next = furnPairs().get(this.get(x, y));
+      if (next == null) return false;
+      this.set(x, y, next);
+      return true;
+    }
+
+    // Wire-capable actuation entry point for a future wiring module: flips an
+    // actuable tile's state — furniture open/close, platform ramp toggle.
+    // Call from the wire-tick path per powered tile, or use actuateRegion.
+    actuate(x, y) {
+      if (!this.inB(x, y)) return false;
+      if (this.toggleFurniture(x, y)) return true;
+      const def = TC.TILE_DEFS[this.get(x, y)];
+      if (def && def.hammerable) {     // platforms respond to wires too
+        const SH = (TC.Tiles && TC.Tiles.SHAPE) || { FULL: 0, HALF: 1, SLOPE_R: 2, SLOPE_L: 3 };
+        const cur = this.shapeAt(x, y);
+        return this.setShape(x, y, cur === SH.SLOPE_R ? SH.SLOPE_L : SH.SLOPE_R);
+      }
+      return false;
+    }
+
+    actuateRegion(x0, y0, x1, y1) {
+      let n = 0;
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          if (this.actuate(x, y)) n++;
+        }
+      }
+      return n;
+    }
+
+    // Sparse [tileIndex, value] snapshots for save.js to adopt; shapes/paints
+    // are not persisted until that module calls these.
+    serializeShapes() {
+      const out = [];
+      for (let i = 0; i < this.shapes.length; i++) {
+        if (this.shapes[i]) out.push([i, this.shapes[i]]);
+      }
+      return out;
+    }
+
+    loadShapes(list) {
+      if (!Array.isArray(list)) return;
+      for (let k = 0; k < list.length; k++) {
+        const e = list[k];
+        if (Array.isArray(e) && e[0] >= 0 && e[0] < this.shapes.length) {
+          this.shapes[e[0]] = (e[1] | 0) & 3;
+          this.markDirtyAt(e[0] % this.width, (e[0] / this.width) | 0);
+        }
+      }
+    }
+
+    serializePaints() {
+      const out = [];
+      for (const entry of this.paints) out.push([entry[0], entry[1]]);
+      return out;
+    }
+
+    loadPaints(list) {
+      if (!Array.isArray(list)) return;
+      for (let k = 0; k < list.length; k++) {
+        const e = list[k];
+        if (Array.isArray(e) && e[0] >= 0 && e[0] < this.shapes.length && (e[1] | 0) > 0) {
+          this.paints.set(e[0], e[1] | 0);
+          this.markDirtyAt(e[0] % this.width, (e[0] / this.width) | 0);
+        }
+      }
+    }
+
+
+    // ---- flowing water ----
+    // An edit wakes the written cell plus any WATER 4-neighbours so the sim
+    // reacts to holes dug under pools, blocks placed into water, etc.
+    seedWater(i) {
+      const w = this.width;
+      const x = i % w, y = (i / w) | 0;
+      const touch =
+        this.tiles[i] === TC.TILE.WATER ||
+        (y > 0 && this.tiles[i - w] === TC.TILE.WATER) ||
+        (y < this.height - 1 && this.tiles[i + w] === TC.TILE.WATER) ||
+        (x > 0 && this.tiles[i - 1] === TC.TILE.WATER) ||
+        (x < w - 1 && this.tiles[i + 1] === TC.TILE.WATER);
+      if (!touch) return;
+      wakeWater(i);                  // the written cell itself always joins
+      this.wakeAround(i);
+    }
+
+    // Add the WATER 4-neighbours of a cell to the active set.
+    wakeAround(i) {
+      const w = this.width;
+      const x = i % w, y = (i / w) | 0;
+      if (y > 0 && this.tiles[i - w] === TC.TILE.WATER) wakeWater(i - w);
+      if (y < this.height - 1 && this.tiles[i + w] === TC.TILE.WATER) wakeWater(i + w);
+      if (x > 0 && this.tiles[i - 1] === TC.TILE.WATER) wakeWater(i - 1);
+      if (x < w - 1 && this.tiles[i + 1] === TC.TILE.WATER) wakeWater(i + 1);
+    }
+
+    // Water-sim write: dirty chunks only. No rescan/relight/support-pop/drops
+    // and no seeding (the sim wakes cells explicitly). Water and air are both
+    // non-solid and non-opaque, so surfaceY and lighting are unaffected; a
+    // plant stranded over flowed-away water just stays until a player edit
+    // re-runs the support checks.
+    rawSetTile(x, y, id) {
+      const i = this.idx(x, y);
+      this.tiles[i] = id;
+      this.damage.delete(i);
+      this.shapes[i] = 0;            // a rewritten tile loses shape/paint state
+      this.paints.delete(i);
+      this.markDirtyAt(x, y);
+    }
+
+    // Budgeted sim pass, at most every WATER_TICK. Stale (non-water) entries
+    // settle out; water that cannot move is considered settled and leaves the
+    // set until an edit or a neighbour's move wakes it again.
+    stepWater(dt) {
+      this.waterAcc += dt;
+      if (this.waterAcc < WATER_TICK) return;
+      this.waterAcc %= WATER_TICK;
+      if (!waterActive.size) return;
+      let budget = WATER_BUDGET;
+      for (const i of waterActive) {
+        if (budget-- <= 0) break;
+        if (this.tiles[i] !== TC.TILE.WATER) { waterActive.delete(i); continue; }
+        if (!this.flowWater(i)) waterActive.delete(i);
+      }
+    }
+
+    // One cell's rules: fall into AIR below, else spread sideways into AIR
+    // that has floor under it or water beside it. Returns true if it moved.
+    flowWater(i) {
+      const w = this.width;
+      const x = i % w, y = (i / w) | 0;
+      if (y + 1 < this.height && this.tiles[i + w] === TC.TILE.AIR) {
+        this.moveWater(i, x, y, x, y + 1);
+        return true;
+      }
+      // Preferred side alternates with index parity so neighbouring cells
+      // don't all shove the same way each step (avoids jitter).
+      const l = x > 0 ? i - 1 : -1;
+      const r = x < w - 1 ? i + 1 : -1;
+      const first = (i & 1) === 0 ? r : l;
+      const second = first === l ? r : l;
+      if (first >= 0 && this.canSpreadInto(first, i)) {
+        this.moveWater(i, x, y, first % w, (first / w) | 0);
+        return true;
+      }
+      if (second >= 0 && this.canSpreadInto(second, i)) {
+        this.moveWater(i, x, y, second % w, (second / w) | 0);
+        return true;
+      }
+      return false;
+    }
+
+    // A sideways target qualifies when the AIR cell has solid ground under
+    // it, or sits beside other water (spreading along a pool surface).
+    canSpreadInto(t, from) {
+      if (this.tiles[t] !== TC.TILE.AIR) return false;
+      const w = this.width;
+      const tx = t % w, ty = (t / w) | 0;
+      if (ty + 1 < this.height && TC.TILE_DEFS[this.tiles[t + w]].solid) return true;
+      return (tx > 0 && t - 1 !== from && this.tiles[t - 1] === TC.TILE.WATER) ||
+             (tx < w - 1 && t + 1 !== from && this.tiles[t + 1] === TC.TILE.WATER);
+    }
+
+    // Move a water cell: raw writes, then wake the moved cell, its new
+    // neighbourhood, and the one it left (water above the gap follows on the
+    // next step).
+    moveWater(i, x, y, nx, ny) {
+      this.rawSetTile(x, y, TC.TILE.AIR);
+      this.rawSetTile(nx, ny, TC.TILE.WATER);
+      waterActive.delete(i);
+      const j = this.idx(nx, ny);
+      wakeWater(j);
+      this.wakeAround(j);
+      this.wakeAround(i);
+    }
+
+    // ---- chunk rendering ----
+    markAllDirty() {
+      for (let cy = 0; cy < this.chunksY; cy++) {
+        for (let cx = 0; cx < this.chunksX; cx++) {
+          this.dirty.add(cy * this.chunksX + cx);
+        }
+      }
+    }
+
+    // Mark the chunk holding (x, y); border tiles also dirty the adjacent
+    // chunk because tile edge masks read across the boundary.
+    markDirtyAt(x, y) {
+      const cx = (x / this.CHUNK) | 0, cy = (y / this.CHUNK) | 0;
+      this.dirty.add(cy * this.chunksX + cx);
+      const lx = x - cx * this.CHUNK, ly = y - cy * this.CHUNK;
+      if (lx === 0 && cx > 0) this.dirty.add(cy * this.chunksX + cx - 1);
+      if (lx === this.CHUNK - 1 && cx < this.chunksX - 1) this.dirty.add(cy * this.chunksX + cx + 1);
+      if (ly === 0 && cy > 0) this.dirty.add((cy - 1) * this.chunksX + cx);
+      if (ly === this.CHUNK - 1 && cy < this.chunksY - 1) this.dirty.add((cy + 1) * this.chunksX + cx);
+    }
+
+    // Rebuild up to 3 dirty chunks per frame, nearest the camera first.
+    update(dt) {
+      this.stepWater(dt);            // water moves mark chunks dirty, rebuilt below
+      if (!this.dirty.size || !TC.Tiles) return;
+      const span = this.CHUNK * TS;
+      const cam = TC.camera;
+      let order = null;
+      if (cam) {
+        order = [];
+        for (const key of this.dirty) {
+          const cx = key % this.chunksX, cy = (key / this.chunksX) | 0;
+          const dx = (cx + 0.5) * span - cam.x;
+          const dy = (cy + 0.5) * span - cam.y;
+          order.push([dx * dx + dy * dy, key]);
+        }
+        order.sort((a, b) => a[0] - b[0]);
+      }
+      const n = Math.min(3, this.dirty.size);
+      for (let i = 0; i < n; i++) {
+        const key = order ? order[i][1] : this.dirty.values().next().value;
+        this.dirty.delete(key);
+        this.rebuildChunk(key);
+      }
+    }
+
+    rebuildChunk(key) {
+      const cx = key % this.chunksX, cy = (key / this.chunksX) | 0;
+      let rec = this.chunks.get(key);
+      if (!rec) {
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = this.CHUNK * TS;
+        rec = { cv, ctx: cv.getContext('2d') };
+        this.chunks.set(key, rec);
+      }
+      const c = rec.ctx;
+      c.imageSmoothingEnabled = false;
+      c.clearRect(0, 0, rec.cv.width, rec.cv.height);
+      const x0 = cx * this.CHUNK, y0 = cy * this.CHUNK;
+      const x1 = Math.min(x0 + this.CHUNK, this.width);
+      const y1 = Math.min(y0 + this.CHUNK, this.height);
+      for (let ty = y0; ty < y1; ty++) {
+        for (let tx = x0; tx < x1; tx++) {
+          const i = this.idx(tx, ty);
+          const wall = this.walls[i];
+          if (wall !== TC.WALL.NONE && TC.Tiles.drawWall) { // walls render under tiles
+            TC.Tiles.drawWall(c, wall, (tx - x0) * TS, (ty - y0) * TS, TS, tx, ty);
+          }
+          const id = this.tiles[i];
+          if (id === TC.TILE.AIR) continue;
+          const mask = (this.opaqueAt(tx, ty - 1) ? 1 : 0) |
+                       (this.opaqueAt(tx + 1, ty) ? 2 : 0) |
+                       (this.opaqueAt(tx, ty + 1) ? 4 : 0) |
+                       (this.opaqueAt(tx - 1, ty) ? 8 : 0);
+          // extra args (older tiles.js ignores them): hammer shape + paint slot
+          TC.Tiles.drawTile(c, id, (tx - x0) * TS, (ty - y0) * TS, TS, tx, ty, mask,
+            this.shapes[i], this.paints.get(i) || 0);
+        }
+      }
+    }
+
+    // Called with the world-space camera transform already applied (main.js).
+    draw(ctx, cam) {
+      const span = this.CHUNK * TS;
+      ctx.imageSmoothingEnabled = false;
+      const viewW = ctx.canvas.width / cam.zoom;
+      const viewH = ctx.canvas.height / cam.zoom;
+      const cx0 = Math.max(0, Math.floor(cam.x / span));
+      const cy0 = Math.max(0, Math.floor(cam.y / span));
+      const cx1 = Math.min(this.chunksX - 1, Math.floor((cam.x + viewW) / span));
+      const cy1 = Math.min(this.chunksY - 1, Math.floor((cam.y + viewH) / span));
+      for (let cy = cy0; cy <= cy1; cy++) {
+        for (let cx = cx0; cx <= cx1; cx++) {
+          const rec = this.chunks.get(cy * this.chunksX + cx);
+          if (rec) ctx.drawImage(rec.cv, cx * span, cy * span);
+        }
+      }
+      // Crack overlays for tiles and exposed walls currently being mined.
+      if (TC.Tiles && (this.damage.size || this.wallDamage.size)) {
+        const tx0 = Math.floor(cam.x / TS) - 1, ty0 = Math.floor(cam.y / TS) - 1;
+        const tx1 = Math.ceil((cam.x + viewW) / TS) + 1;
+        const ty1 = Math.ceil((cam.y + viewH) / TS) + 1;
+        for (const entry of this.damage) {
+          const i = entry[0], d = entry[1];
+          const tx = i % this.width, ty = (i / this.width) | 0;
+          if (tx < tx0 || tx > tx1 || ty < ty0 || ty > ty1) continue;
+          TC.Tiles.drawCracks(ctx, tx * TS, ty * TS, TS, Math.min(3, Math.floor(d * 4)));
+        }
+        for (const entry of this.wallDamage) {
+          const i = entry[0], d = entry[1];
+          const tx = i % this.width, ty = (i / this.width) | 0;
+          if (tx < tx0 || tx > tx1 || ty < ty0 || ty > ty1) continue;
+          if (this.tiles[i] !== TC.TILE.AIR || !this.walls[i]) continue; // hidden behind a tile
+          TC.Tiles.drawCracks(ctx, tx * TS, ty * TS, TS, Math.min(3, Math.floor(d * 4)));
+        }
+      }
+    }
+  }
+
+  TC.World = World;
+})();
