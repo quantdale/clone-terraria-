@@ -210,6 +210,7 @@
     if (TC.Magic && typeof TC.Magic.drawHud === 'function') TC.Magic.drawHud(ctx, viewW, viewH);
     if (TC.Accessories && typeof TC.Accessories.drawHud === 'function') TC.Accessories.drawHud(ctx);
     drawDebug(ctx);
+    if (TC.Debug && typeof TC.Debug.drawHud === 'function') TC.Debug.drawHud(ctx, viewW, viewH);
   }
 
   function drawDebug(c) {
@@ -250,6 +251,7 @@
 
     acc += dt;
     while (acc >= STEP) { step(STEP); acc -= STEP; }
+    if (TC.Debug && typeof TC.Debug.frame === 'function') TC.Debug.frame(dt);
     draw();
     if (TC.Input) TC.Input.endFrame();
     requestAnimationFrame(frame);
