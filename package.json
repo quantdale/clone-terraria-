@@ -1,0 +1,17 @@
+{
+  "name": "clone-terraria",
+  "version": "0.9.0",
+  "private": true,
+  "description": "Original-assets Terraria-style 2D sandbox. Vanilla JS + Canvas, no build step required to play.",
+  "scripts": {
+    "check": "node tools/check-syntax.js",
+    "test": "node --test tests/",
+    "test:unit": "node --test tests/unit/",
+    "test:sim": "node --test tests/sim/",
+    "test:save": "node --test tests/save/",
+    "test:worldgen": "node --test tests/worldgen/",
+    "validate": "npm run check && npm test",
+    "serve": "python -m http.server 8000"
+  },
+  "comment": "The game itself runs from index.html with plain script tags (file:// or any static server). These scripts only drive validation."
+}

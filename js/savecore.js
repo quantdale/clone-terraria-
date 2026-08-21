@@ -11,7 +11,15 @@
 
   const FORMAT_VERSION = 2;
   const GAME_VERSION = '0.9.0-campaign';
-  const GENERATION_VERSION = 1;
+  // Generation version is owned by js/worldgen.js; resolve it lazily so the
+  // save envelope can never drift from the generator that produced the world.
+  function currentGenerationVersion() {
+    try {
+      const v = TC.WorldGen && TC.WorldGen.GENERATION_VERSION;
+      if (typeof v === 'number' && v >= 1) return v;
+    } catch (e) {}
+    return 1;
+  }
   const DEFAULT_KEY = 'tc_save_v2'; // distinct from save.js 'tc_save_v1'
   const SECTIONS = ['world', 'character', 'systems'];
   const TOP_LEVEL_KEYS = ['formatVersion', 'gameVersion', 'generationVersion',
@@ -106,7 +114,7 @@
     return {
       formatVersion: FORMAT_VERSION,
       gameVersion: GAME_VERSION,
-      generationVersion: GENERATION_VERSION,
+      generationVersion: currentGenerationVersion(),
       registryFingerprint: null,
       metadata: { savedAt: new Date().toISOString(), seed: null },
       world: {},
@@ -325,7 +333,7 @@
 
   TC.SaveCore.FORMAT_VERSION = FORMAT_VERSION;
   TC.SaveCore.GAME_VERSION = GAME_VERSION;
-  TC.SaveCore.GENERATION_VERSION = GENERATION_VERSION;
+  Object.defineProperty(TC.SaveCore, 'GENERATION_VERSION', { get: currentGenerationVersion });
   TC.SaveCore.DEFAULT_KEY = DEFAULT_KEY;
 
   TC.SaveCore.register = register;
