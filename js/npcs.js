@@ -135,6 +135,8 @@
   }
 
   // Scan down from (px,py) for standing room over solid ground; null if none.
+  // Falls back to the column's surface row when the drop point is high in the
+  // sky, so spawns can never be left floating in the air.
   function findGroundSpot(px, py) {
     const w = TC.world;
     if (!w || typeof w.isSolid !== 'function') return null;
@@ -142,16 +144,26 @@
     const tx = clamp(Math.floor(px / ts), 1, w.width - 2);
     const surf = w.surfaceY ? (w.surfaceY[tx] || 0) : 0;
     const start = Math.min(surf, Math.floor(py / ts));
-    const x = tx * ts + (ts - NPC_W) / 2;
-    for (let i = 0; i < 24; i++) {
-      const gy = start + i;                     // candidate ground row
-      if (gy >= w.height) break;
-      if (!solidAt(Math.floor((x + NPC_W / 2) / ts), gy)) continue;
-      const y = gy * ts - NPC_H;                // need rows of headroom above
-      if (rectSolid(x, y, NPC_W, NPC_H)) continue;
-      return { x: x, y: y };
+    // Prefer the EXACT requested x (respawn-at-home fidelity); fall back to
+    // the cell-aligned safe spot only when the exact one is obstructed.
+    const exact = scanDown(tx, start, px);
+    if (exact != null) return exact;
+    const hit = scanDown(tx, start);
+    return hit != null ? hit : (start !== surf ? scanDown(tx, surf) : null);
+
+    function scanDown(tx, start, wantX) {
+      const x = (wantX != null) ? wantX
+        : tx * TC.CONST.TS + (TC.CONST.TS - NPC_W) / 2;
+      for (let i = 0; i < 24; i++) {
+        const gy = start + i;                   // candidate ground row
+        if (gy >= w.height) break;
+        if (!solidAt(Math.floor((x + NPC_W / 2) / TC.CONST.TS), gy)) continue;
+        const y = gy * TC.CONST.TS - NPC_H;     // need rows of headroom above
+        if (rectSolid(x, y, NPC_W, NPC_H)) continue;
+        return { x: x, y: y };
+      }
+      return null;
     }
-    return null;
   }
 
   // Home anchor for a kind: pinned plot when given, else world-spawn surface.
@@ -255,6 +267,7 @@
   }
 
   function killNpc(n) {
+    n.dead = true;                              // corpse refs must read as dead
     const idx = list.indexOf(n);
     if (idx >= 0) list.splice(idx, 1);
     pending.push({ type: n.type, x: n.homeX, y: n.y, timer: RESPAWN_SECONDS });
@@ -631,7 +644,9 @@
     kindDef: (type) => NPC_KINDS[type] || null,
     shopOf: (type) => {
       const def = NPC_KINDS[type];
-      return (def && Array.isArray(def.shop)) ? def.shop.slice() : null;
+      // Copy the entries too: callers must never hold references into the def table.
+      return (def && Array.isArray(def.shop))
+        ? def.shop.map((e) => Object.assign({}, e)) : null;
     },
     spawnGuide, spawn, evaluateUnlocks, validateHome, damage,
     update, draw, clear, serialize, load

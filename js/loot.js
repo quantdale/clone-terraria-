@@ -177,6 +177,7 @@
   function reset() {
     stats.potsBroken = 0;
     stats.crystalsUsed = 0;
+    lastPotIdx = -1;
   }
 
   function sfx(name) {
@@ -323,8 +324,15 @@
   // Lead-facing hook for one broken POT tile. Prefer the built-in TileBroken
   // subscription (below) over calling this directly — exactly one path per
   // break, or the loot scatters twice.
+  // Idempotence guard: a duplicate TileBroken for the same pot cell (two
+  // emitters, or an event replay) must not scatter loot twice.
+  let lastPotIdx = -1;
   function onTileBroken(tx, ty) {
-    breakPot(tx | 0, ty | 0);
+    tx |= 0; ty |= 0;
+    const idx = TC.world ? ty * TC.world.width + tx : tx * 100000 + ty;
+    if (idx === lastPotIdx) return;
+    lastPotIdx = idx;
+    breakPot(tx, ty);
   }
 
   // ======================================================================
@@ -563,6 +571,12 @@
     // it after break completion). Do NOT also call onTileBroken by hand.
     TC.Events.on(TC.Events.EVENT.TileBroken, function (p) {
       if (p && p.tile === T.POT) onTileBroken(p.tx, p.ty);
+    });
+    // A pot re-placed onto a previously broken cell re-arms its scatter.
+    TC.Events.on(TC.Events.EVENT.TileChanged, function (p) {
+      if (p && p.id != null && p.id !== 0 && lastPotIdx === p.ty * (TC.world ? TC.world.width : 0) + p.tx) {
+        lastPotIdx = -1;
+      }
     });
     // Fresh world: fresh loot stats (reset() stays public for direct calls).
     TC.Events.on(TC.Events.EVENT.WorldLoaded, function () { reset(); });

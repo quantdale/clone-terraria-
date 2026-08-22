@@ -134,7 +134,7 @@ test('registry: core content validates cleanly after a full boot', () => {
   }
 });
 
-test('registry: late-module (wiring:*) content should carry legacy aliases', { todo: 'wiring.js defines wiring:* ids without alias/aliasKey — drops like "wire" and tile #40..47 stay unresolvable; needs aliasKey+alias calls in defineRegistryContent' }, () => {
+test('REGRESSION: late-module (wiring:*) content carries legacy aliases so validate() passes', () => {
   const g = boot(13);
   const TC = g.TC;
   TC.Registry.syncFromTables();
