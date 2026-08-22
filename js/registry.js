@@ -285,6 +285,11 @@
     for (let i = 0; i < defs.length; i++) {
       const def = defs[i];
       if (!def || typeof def !== 'object') continue;
+      // A module may have already registered this exact def object under its
+      // own namespace (wiring.js does). Prefer that entry: alias the numeric
+      // index to it instead of minting a parallel core:* duplicate.
+      const owned = findByDef(kind, def);
+      if (owned) { safeAlias(alias, kind, owned.id, i); continue; }
       const id = CORE + ':' + stableName(def, fallbackPrefix + i);
       if (mirrorDefine(kind, id, def)) safeAlias(alias, kind, id, i);
     }
@@ -295,9 +300,21 @@
     for (const key in defs) {
       const def = defs[key];
       if (!def || typeof def !== 'object') continue;
+      const owned = findByDef(kind, def);
+      if (owned) { safeAlias(aliasKey, kind, owned.id, key); continue; }
       const id = CORE + ':' + stableName(def, snakeCase(key));
       if (mirrorDefine(kind, id, def)) safeAlias(aliasKey, kind, id, key);
     }
+  }
+
+  // Identity lookup: the entry whose registered def IS this object. O(n) per
+  // miss but mirror walks are rare (load/boot/explicit sync only).
+  function findByDef(kind, def) {
+    const list = bucket(kind).list;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].def === def) return list[i];
+    }
+    return null;
   }
 
   // Recipes have no natural name: derive from the output item, disambiguating
@@ -469,6 +486,7 @@
     KINDS: KINDS,
     define: define,
     alias: alias,
+    aliasKey: aliasKey,
     stableToIndex: stableToIndex,
     byIndex: byIndex,
     stableOfIndex: stableOfIndex,

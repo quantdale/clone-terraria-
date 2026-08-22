@@ -5,13 +5,21 @@
   "description": "Original-assets Terraria-style 2D sandbox. Vanilla JS + Canvas, no build step required to play.",
   "scripts": {
     "check": "node tools/check-syntax.js",
-    "test": "node --test tests/",
-    "test:unit": "node --test tests/unit/",
-    "test:sim": "node --test tests/sim/",
-    "test:save": "node --test tests/save/",
-    "test:worldgen": "node --test tests/worldgen/",
-    "validate": "npm run check && npm test",
+    "test": "node --test \"tests/unit/**/*.test.js\" \"tests/core/**/*.test.js\" \"tests/save/**/*.test.js\" \"tests/combat/**/*.test.js\" \"tests/player/**/*.test.js\" \"tests/npc/**/*.test.js\" \"tests/world/**/*.test.js\"",
+    "test:unit": "node --test \"tests/unit/**/*.test.js\"",
+    "test:core": "node --test \"tests/core/**/*.test.js\"",
+    "test:save": "node --test \"tests/save/**/*.test.js\"",
+    "test:combat": "node --test \"tests/combat/**/*.test.js\"",
+    "test:player": "node --test \"tests/player/**/*.test.js\"",
+    "test:npc": "node --test \"tests/npc/**/*.test.js\"",
+    "test:world": "node --test \"tests/world/**/*.test.js\"",
+    "test:browser": "playwright test",
+    "build": "node tools/release-build.js",
+    "validate": "npm run check && npm test && npm run build && npm run test:browser",
     "serve": "python -m http.server 8000"
   },
-  "comment": "The game itself runs from index.html with plain script tags (file:// or any static server). These scripts only drive validation."
+  "comment": "The game itself runs from index.html with plain script tags (file:// or any static server). These scripts only drive validation. All --test arguments use globs because bare directory args are unreliable across supported Node versions/platforms.",
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
 }

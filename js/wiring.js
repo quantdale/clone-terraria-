@@ -1033,10 +1033,12 @@
       try { R.define(kind, id, def); } catch (e) { /* dup or invalid: non-fatal */ }
     };
     // Tile defs carry `drop` item keys ("wire", "switch", ...) and items carry
-    // `.tile` numeric indices — register string-key aliases for the items so
-    // Registry.validate() resolves every cross-reference. (Numeric tile
-    // aliases are already created by the auto-mirror; re-adding them here
-    // would conflict.)
+    // `.tile` numeric indices — register both alias forms so
+    // Registry.validate() resolves every cross-reference. wiring.js loads
+    // AFTER main.js's boot-time syncFromTables(), so the auto-mirror has NOT
+    // seen this module's appended TILE_DEFS entries; numeric aliases must be
+    // made here. Re-aliasing an existing identical mapping is a no-op, so
+    // this stays safe if a future sync order also mirrors them.
     const safeItem = (key, id) => {
       if (!items || !items[key]) return;
       safe('item', id, items[key]);
@@ -1044,14 +1046,18 @@
     };
     const defs = TC.TILE_DEFS;
     if (defs) {
-      safe('tile', 'wiring:wire', defs[T.WIRE]);
-      safe('tile', 'wiring:switch', defs[T.SWITCH_OFF]);
-      safe('tile', 'wiring:switch_on', defs[T.SWITCH_ON]);
-      safe('tile', 'wiring:lever', defs[T.LEVER_OFF]);
-      safe('tile', 'wiring:lever_on', defs[T.LEVER_ON]);
-      safe('tile', 'wiring:pressure_plate', defs[T.PRESSURE_PLATE]);
-      safe('tile', 'wiring:timer', defs[T.TIMER]);
-      safe('tile', 'wiring:dart_trap', defs[T.DART_TRAP]);
+      const tileRef = (key, stableId) => {
+        safe('tile', stableId, defs[T[key]]);
+        try { R.alias('tile', stableId, T[key]); } catch (e3) {}
+      };
+      tileRef('WIRE', 'wiring:wire');
+      tileRef('SWITCH_OFF', 'wiring:switch');
+      tileRef('SWITCH_ON', 'wiring:switch_on');
+      tileRef('LEVER_OFF', 'wiring:lever');
+      tileRef('LEVER_ON', 'wiring:lever_on');
+      tileRef('PRESSURE_PLATE', 'wiring:pressure_plate');
+      tileRef('TIMER', 'wiring:timer');
+      tileRef('DART_TRAP', 'wiring:dart_trap');
     }
     const items = TC.ITEM_DEFS;
     if (items) {

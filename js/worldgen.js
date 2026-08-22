@@ -2,9 +2,9 @@
    Expands the classic pipeline with edge oceans (beach slope + water volume),
    overhauled deserts (cactus scrub + buried pyramids), a corruption/crimson
    evil strip (ebonstone/shadewood), a surface dungeon, and furnished hell
-   temples. Extension tile/wall/item ids are appended to the shared tables at
-   load time (see extendTables below) — promote them into constants.js if
-   those ids are ever formalized there. */
+   temples. Its extension tiles/walls/items now live in constants.js (promoted
+   from the former load-time extendTables append, ids and order unchanged), so
+   this module no longer mutates shared tables at script-load time. */
 'use strict';
 (function () {
   const TC = window.TC;
@@ -13,57 +13,12 @@
   var PASSES = ['terrain','surface-biomes','caves','ores','structures','decor','validation'];
 
   // ------------------------------------------------------------------
-  // Extension tables. New ids continue the lead-owned constants.js
-  // numbering. Every consumer (tiles.js, lighting.js, minimap.js,
-  // items.js, save.js) is data-driven from these tables, so appended
-  // entries render, mine, light and save exactly like native ones.
-  // Guards make this idempotent and forward-compatible: if constants.js
-  // later defines a key, its id wins and nothing is duplicated here.
+  // The extension tables this module once appended at load time
+  // (CACTUS..SANDSTONE_BRICK tiles, SAND/EBON/DUNGEON/HELL walls and their
+  // items) were promoted verbatim into constants.js: same keys, same numeric
+  // ids, same order. No module may mutate shared content tables at script
+  // load — new content belongs in constants.js or an explicit Registry.define.
   // ------------------------------------------------------------------
-  (function extendTables() {
-    if (!TC.TILE || !TC.TILE_DEFS) return;   // constants.js missing; bail out
-    let nextTile = TC.TILE_DEFS.length;
-    const addTile = (key, def) => {
-      if (TC.TILE[key] == null) {
-        TC.TILE[key] = nextTile++;
-        TC.TILE_DEFS.push(def);
-      }
-    };
-    addTile('CACTUS',          { name: 'cactus',           hardness: 0.3,  tool: 'any',  drop: 'cactus',          pattern: 'leafy',  needsSupport: 'below', colors: ['#3f8f43', '#35793a', '#4da04f'] });
-    addTile('EBONSTONE',       { name: 'ebonstone',        solid: true, opaque: true, hardness: 0.6,  tool: 'pick', drop: 'ebonstone',       pattern: 'speckle', colors: ['#565064', '#484254', '#645e72'] });
-    addTile('CRIMSTONE',       { name: 'crimstone',        solid: true, opaque: true, hardness: 0.6,  tool: 'pick', drop: 'crimstone',       pattern: 'speckle', colors: ['#6e4646', '#5e3a3a', '#7e5252'] });
-    addTile('EBONGRASS',       { name: 'corrupt grass',    solid: true, opaque: true, hardness: 0.3,  tool: 'pick', drop: 'dirt',            pattern: 'grass',   colors: ['#4e4254', '#8a5cba'] });
-    addTile('SHADEWOOD',       { name: 'shadewood',        solid: true, opaque: true, hardness: 0.35, tool: 'any',  drop: 'shadewood',       pattern: 'plank',   colors: ['#4a3550', '#372740'] });
-    addTile('DUNGEON_BRICK',   { name: 'dungeon brick',    solid: true, opaque: true, hardness: 0.55, tool: 'pick', drop: 'dungeon_brick',   pattern: 'plank',   colors: ['#4e5f7d', '#3c4a63'] });
-    addTile('HELL_BRICK',      { name: 'hell brick',       solid: true, opaque: true, hardness: 0.55, tool: 'pick', drop: 'hell_brick',      pattern: 'plank',   colors: ['#66302a', '#4e241f'] });
-    addTile('SANDSTONE_BRICK', { name: 'sandstone brick',  solid: true, opaque: true, hardness: 0.4,  tool: 'pick', drop: 'sandstone_brick', pattern: 'plank',   colors: ['#c9ae6e', '#ad9257'] });
-
-    if (TC.WALL && TC.WALL_DEFS) {
-      let nextWall = TC.WALL_DEFS.length;
-      const addWall = (key, def) => {
-        if (TC.WALL[key] == null) {
-          TC.WALL[key] = nextWall++;
-          TC.WALL_DEFS.push(def);
-        }
-      };
-      addWall('SAND',    { name: 'sand wall',       color: '#b09a58', hardness: 0.25 });
-      addWall('EBON',    { name: 'ebonstone wall',  color: '#3a3444', hardness: 0.4 });
-      addWall('DUNGEON', { name: 'dungeon wall',    color: '#333f54', hardness: 0.45 });
-      addWall('HELL',    { name: 'hell brick wall', color: '#401d18', hardness: 0.45 });
-    }
-
-    if (!TC.ITEM_DEFS) TC.ITEM_DEFS = {};
-    const addItem = (id, name, tile) => {
-      if (!TC.ITEM_DEFS[id]) TC.ITEM_DEFS[id] = { name: name, kind: 'block', maxStack: 999, tile: tile };
-    };
-    addItem('cactus', 'Cactus', TC.TILE.CACTUS);
-    addItem('ebonstone', 'Ebonstone Block', TC.TILE.EBONSTONE);
-    addItem('crimstone', 'Crimstone Block', TC.TILE.CRIMSTONE);
-    addItem('shadewood', 'Shadewood Block', TC.TILE.SHADEWOOD);
-    addItem('dungeon_brick', 'Dungeon Brick', TC.TILE.DUNGEON_BRICK);
-    addItem('hell_brick', 'Hell Brick', TC.TILE.HELL_BRICK);
-    addItem('sandstone_brick', 'Sandstone Brick', TC.TILE.SANDSTONE_BRICK);
-  })();
 
   // Expansion tuning (candidates for CONST.GEN; kept here to avoid edits
   // to lead-owned constants.js). Seed-independent, shared by all passes.
