@@ -1,48 +1,66 @@
 /* liquids.js — independent liquid layer foundation (ARCHITECTURE campaign).
-   Parallel to the tile-water sim in world.js and NOT yet replacing it: liquid
-   lives in two typed arrays (type + amount 0..255 per cell) layered over the
-   tile grid. Provides a budgeted volume-based settle sim (fall / spread /
-   equalize / evaporate, water+lava -> stone contact), immersion queries for
-   breath/buoyancy consumers, wave rendering, sparse SaveCore persistence, and
-   a one-time bridge import from WATER/LAVA tiles for future migration.
-   Existing water tile behaviour in world.js is untouched. The lead wires the
-   update/draw calls (see report hooks); nothing here self-registers. */
-'use strict';
-(function () {
+   Liquid lives in two typed arrays (type + amount 0..255 per cell) layered
+   over the tile grid. Provides a budgeted volume-based settle sim (fall /
+   spread / equalize / evaporate, water+lava -> stone contact), immersion
+   queries for breath/buoyancy consumers, wave rendering, sparse SaveCore
+   persistence, and a CONSUMING bridge import from WATER/LAVA tiles.
+   Authority model (one-directional compatibility boundary):
+     - mode 'tiles' (default): legacy WATER/LAVA tile ids own all liquid;
+       world.stepWater() simulates them and this layer stays empty unless a
+       caller explicitly writes it.
+     - mode 'layer': entered by importFromWorld() or provider restore. All
+       imported liquid was CLAIMED out of the tile grid (tiles -> AIR),
+       world.stepWater() is frozen, and this layer is the single authority.
+   Invariant: no cell ever holds BOTH a legacy liquid tile AND layer liquid.
+   Enforced by claim-on-set, consuming import, restore filtering, and the
+   settle sim refusing to enter legacy-liquid cells. */
+
+(() => {
   const TC = window.TC;
   const TS = (TC.CONST && TC.CONST.TS) || 16;
 
   // ---- tuning (TC.CONST.LIQUIDS overrides when present) ----
   const LC = (TC.CONST && TC.CONST.LIQUIDS) || {};
-  const TICK = LC.tick || 0.05;          // seconds between settle steps
-  const BUDGET = LC.budget || 400;       // active cells processed per step
+  const TICK = LC.tick || 0.05; // seconds between settle steps
+  const BUDGET = LC.budget || 400; // active cells processed per step
   const MAX_ACTIVE = LC.maxActive || 4000;
-  const MIN_VOLUME = LC.minVolume || 8;  // settled cells below this evaporate
-  const EVENT_CAP = 32;                  // LiquidChanged entries queued per frame
+  const MIN_VOLUME = LC.minVolume || 8; // settled cells below this evaporate
+  const EVENT_CAP = 32; // LiquidChanged entries queued per frame
 
   const TYPE = { NONE: 0, WATER: 1, LAVA: 2, HONEY: 3 };
-  const FULL = 255;                      // one completely full cell
-  const VISC = [1, 1, 1, 4];             // transfer divisor per type (honey crawls)
+  const FULL = 255; // one completely full cell
+  const VISC = [1, 1, 1, 4]; // transfer divisor per type (honey crawls)
 
-  const COLORS = { 1: '#3a6ea8', 2: '#e85a1a', 3: '#d18a1f' };
+  const COLORS = { 1: "#3a6ea8", 2: "#e85a1a", 3: "#d18a1f" };
   const ALPHA = { 1: 0.72, 2: 0.96, 3: 0.85 };
 
   // ---- state (module-level: only one World lives at a time) ----
   let worldRef = null;
-  let liquidType = null;           // Uint8Array width*height, TYPE.*
-  let liquidAmount = null;         // Uint8Array width*height, 0..255
+  let liquidType = null; // Uint8Array width*height, TYPE.*
+  let liquidAmount = null; // Uint8Array width*height, 0..255
   let ready = false;
-  let acc = 0;                     // settle-step accumulator (seconds)
-  const active = new Set();        // cell indices due for a settle visit
-  let frameChanges = [];           // [[x,y,type,amount]] recorded this frame
-  let frameContacts = [];          // [[x,y]] water+lava -> stone this frame
+  let acc = 0; // settle-step accumulator (seconds)
+  let mode = "tiles"; // 'tiles' | 'layer' (authority, see header)
+  const active = new Set(); // cell indices due for a settle visit
+  let frameChanges = []; // [[x,y,type,amount]] recorded this frame
+  let frameContacts = []; // [[x,y]] water+lava -> stone this frame
 
-  function clampType(t) { t = t | 0; return t >= TYPE.WATER && t <= TYPE.HONEY ? t : 0; }
-  function clampAmt(a) { a = a | 0; return a < 0 ? 0 : (a > FULL ? FULL : a); }
+  function clampType(t) {
+    t = t | 0;
+    return t >= TYPE.WATER && t <= TYPE.HONEY ? t : 0;
+  }
+  function clampAmt(a) {
+    a = a | 0;
+    return a < 0 ? 0 : a > FULL ? FULL : a;
+  }
 
+  // Legacy liquid tiles are impassable terrain for THIS layer's sim so flow
+  // can never violate the dual-authority invariant from the layer side.
   function solidAt(w, x, y) {
-    if (typeof w.isSolid === 'function') return w.isSolid(x, y);
-    return !!TC.TILE_DEFS[w.tiles[y * w.width + x]].solid;
+    const id = w.tiles[y * w.width + x];
+    if (id === TC.TILE.WATER || id === TC.TILE.LAVA) return true;
+    if (typeof w.isSolid === "function") return w.isSolid(x, y);
+    return !!TC.TILE_DEFS[id].solid;
   }
 
   // ---- active set ----
@@ -62,7 +80,9 @@
   function wakeAroundIdx(i) {
     const w = worldRef;
     if (!w) return;
-    const width = w.width, x = i % width, y = (i / width) | 0;
+    const width = w.width,
+      x = i % width,
+      y = (i / width) | 0;
     if (x > 0) wakeIdx(i - 1);
     if (x < width - 1) wakeIdx(i + 1);
     if (y > 0) wakeIdx(i - width);
@@ -78,23 +98,31 @@
   }
 
   function noteChange(i) {
-    if (frameChanges.length >= 128) return;     // hard cap; payload trims to 32
+    if (frameChanges.length >= 128) return; // hard cap; payload trims to 32
     const w = worldRef;
-    frameChanges.push([i % w.width, (i / w.width) | 0, liquidType[i], liquidAmount[i]]);
+    frameChanges.push([
+      i % w.width,
+      (i / w.width) | 0,
+      liquidType[i],
+      liquidAmount[i],
+    ]);
   }
 
   // ---- settle sim ----
   // Volume actually handed over per visit: viscosity stretches honey out.
-  function pour(type, want) { return Math.ceil(want / VISC[type]); }
+  function pour(type, want) {
+    return Math.ceil(want / VISC[type]);
+  }
 
   // Push volume from cell i into side cell s. Returns units moved.
   function spreadInto(i, s, t) {
     const w = worldRef;
-    if (liquidType[i] !== t) return 0;          // spent by the first spread
+    if (liquidType[i] !== t) return 0; // spent by the first spread
     if (solidAt(w, s % w.width, (s / w.width) | 0)) return 0;
     const st = liquidType[s];
     const a = liquidAmount[i];
-    if (st === t) {                             // equalize toward the lower side
+    if (st === t) {
+      // equalize toward the lower side
       const d = a - liquidAmount[s];
       if (d < 2) return 0;
       const m = Math.min(a, pour(t, d >> 1));
@@ -104,8 +132,8 @@
       noteChange(i);
       return m;
     }
-    if (st !== TYPE.NONE) return 0;             // immiscible; contact is vertical-only
-    const m = Math.min(a, pour(t, a >> 1));     // spill: split roughly half
+    if (st !== TYPE.NONE) return 0; // immiscible; contact is vertical-only
+    const m = Math.min(a, pour(t, a >> 1)); // spill: split roughly half
     // Viability guard: never spill when either side would land below the
     // evaporation floor — unguarded halving thins pools away to nothing.
     if (m < MIN_VOLUME || a - m < MIN_VOLUME) return 0;
@@ -132,8 +160,12 @@
     noteChange(dst);
     if (frameContacts.length < EVENT_CAP) frameContacts.push([dx, dy]);
     const w = worldRef;
-    if (w && typeof w.setRaw === 'function') {
-      try { w.setRaw(dx, dy, TC.TILE.STONE); } catch (e) { /* headless worlds */ }
+    if (w && typeof w.setRaw === "function") {
+      try {
+        w.setRaw(dx, dy, TC.TILE.STONE);
+      } catch (e) {
+        /* headless worlds */
+      }
     }
     wakeAroundIdx(src);
     wakeAroundIdx(dst);
@@ -144,11 +176,13 @@
   // stay active for another visit.
   function settleCell(i) {
     const w = worldRef;
-    const width = w.width, height = w.height;
-    const x = i % width, y = (i / width) | 0;
+    const width = w.width,
+      height = w.height;
+    const x = i % width,
+      y = (i / width) | 0;
     const t = liquidType[i];
     let a = liquidAmount[i];
-    if (t === TYPE.NONE || a === 0) return false;   // stale entry
+    if (t === TYPE.NONE || a === 0) return false; // stale entry
 
     // 1) gravity: free-fall into an empty cell below, pour into a partial
     //    one, react when the liquid below is a different type
@@ -164,8 +198,8 @@
         noteChange(i);
         wakeIdx(below);
         wakeAroundIdx(below);
-        wakeAroundIdx(i);                           // the column above follows
-        return false;                               // source is spent
+        wakeAroundIdx(i); // the column above follows
+        return false; // source is spent
       }
       if (bt === t && liquidAmount[below] < FULL) {
         const want = Math.min(a, FULL - liquidAmount[below]);
@@ -209,19 +243,23 @@
       }
       return false;
     }
-    return true;                                    // more to give next visit
+    return true; // more to give next visit
   }
 
   // Batched LiquidChanged emission: one queued event per settling frame, at
   // most EVENT_CAP change entries (overflow reported via payload.more).
   function flushEvents() {
     if (!frameChanges.length && !frameContacts.length) return;
-    if (TC.Events && typeof TC.Events.queue === 'function' && TC.Events.EVENT &&
-        TC.Events.EVENT.LiquidChanged) {
+    if (
+      TC.Events &&
+      typeof TC.Events.queue === "function" &&
+      TC.Events.EVENT &&
+      TC.Events.EVENT.LiquidChanged
+    ) {
       TC.Events.queue(TC.Events.EVENT.LiquidChanged, {
         changes: frameChanges.slice(0, EVENT_CAP),
         more: Math.max(0, frameChanges.length - EVENT_CAP),
-        contacts: frameContacts.slice(0, EVENT_CAP)
+        contacts: frameContacts.slice(0, EVENT_CAP),
       });
     }
     frameChanges.length = 0;
@@ -232,14 +270,23 @@
   // Lazy allocation for the live world; keeps existing arrays when reused.
   function init(w) {
     if (!w) return false;
-    if (ready && worldRef === w && liquidType && liquidType.length === w.width * w.height) return true;
+    if (
+      ready &&
+      worldRef === w &&
+      liquidType &&
+      liquidType.length === w.width * w.height
+    )
+      return true;
     return reset(w);
   }
 
-  // Hard clear + (re)allocation for a new/loaded world.
+  // Hard clear + (re)allocation for a new/loaded world. A fresh world starts
+  // in 'tiles' mode: worldgen liquid arrives as WATER/LAVA tile ids owned by
+  // the legacy sim until an explicit import claims it into the layer.
   function reset(w) {
     worldRef = w || null;
     ready = false;
+    mode = "tiles";
     active.clear();
     acc = 0;
     frameChanges = [];
@@ -275,7 +322,8 @@
     if (!ready || !w || !isFinite(px) || !isFinite(py)) {
       return { type: TYPE.NONE, amount: 0, percent: 0 };
     }
-    const tx = Math.floor(px / TS), ty = Math.floor(py / TS);
+    const tx = Math.floor(px / TS),
+      ty = Math.floor(py / TS);
     if (!w.inB(tx, ty)) return { type: TYPE.NONE, amount: 0, percent: 0 };
     const i = ty * w.width + tx;
     const a = liquidAmount[i];
@@ -297,23 +345,42 @@
   function averageColumnSurface(tx0, tx1) {
     const w = worldRef;
     if (!ready || !w) return -1;
-    const a = Math.max(0, tx0 | 0), b = Math.min(w.width - 1, tx1 | 0);
-    let sum = 0, n = 0;
+    const a = Math.max(0, tx0 | 0),
+      b = Math.min(w.width - 1, tx1 | 0);
+    let sum = 0,
+      n = 0;
     for (let tx = a; tx <= b; tx++) {
       const s = columnSurface(tx);
-      if (s >= 0) { sum += s; n++; }
+      if (s >= 0) {
+        sum += s;
+        n++;
+      }
     }
     return n ? sum / n : -1;
   }
 
   // Direct layer write for future spigots/migration tooling. Wakes the cell.
+  // CLAIMS the cell first: writing liquid over a legacy WATER/LAVA tile clears
+  // that tile (setRaw keeps chunk rebuild + TileChanged correct) so the two
+  // representations can never hold the same conceptual liquid.
   function set(tx, ty, type, amount) {
     const w = worldRef;
     if (!ready || !w || !w.inB(tx, ty)) return false;
     const i = ty * w.width + tx;
-    const t = clampType(type), a = clampAmt(amount);
-    liquidType[i] = (t && a) ? t : TYPE.NONE;
-    liquidAmount[i] = (t && a) ? a : 0;
+    const t = clampType(type),
+      a = clampAmt(amount);
+    if (t && a) {
+      const id = w.tiles[i];
+      if (id === TC.TILE.WATER || id === TC.TILE.LAVA) {
+        try {
+          w.setRaw(tx, ty, TC.TILE.AIR);
+        } catch (e) {
+          /* headless worlds */
+        }
+      }
+    }
+    liquidType[i] = t && a ? t : TYPE.NONE;
+    liquidAmount[i] = t && a ? a : 0;
     wake(tx, ty);
     return true;
   }
@@ -328,18 +395,45 @@
     return { cells: cells, active: active.size };
   }
 
-  // ---- bridge: one-time tile -> layer conversion (future migration) ----
-  // Deterministic row-major scan; WATER/LAVA tiles become full layer cells.
-  // Tile ids are left untouched (the layers run in parallel until the lead
-  // flips migration). Surface cells are woken so pools resettle.
+  // ---- bridge: CONSUMING tile -> layer conversion (the migration act) ----
+  // Deterministic row-major scan; every WATER/LAVA tile becomes a FULL layer
+  // cell and its tile is claimed to AIR via setRaw (chunk rebuild + TileChanged
+  // stay correct). This is the one-way boundary: afterwards the layer is the
+  // sole liquid authority (mode 'layer') and world.stepWater() freezes.
+  // Surface cells are woken so pools resettle.
   function importFromWorld(w) {
-    if (!w || !reset(w)) return 0;
-    const T = TC.TILE, n = w.width * w.height;
+    if (!w) return 0;
+    // Reset only when switching worlds or resizing; a repeat import on the
+    // SAME world must be a non-destructive no-op (it finds no liquid tiles
+    // left to claim), never a wipe of already-imported layer data.
+    const sized = worldRef === w && liquidType && liquidType.length === w.width * w.height;
+    if (!sized && !reset(w)) return 0;
+    const T = TC.TILE,
+      n = w.width * w.height;
     let count = 0;
+    const claimed = [];
     for (let i = 0; i < n; i++) {
       const id = w.tiles[i];
-      if (id === T.WATER) { liquidType[i] = TYPE.WATER; liquidAmount[i] = FULL; count++; }
-      else if (id === T.LAVA) { liquidType[i] = TYPE.LAVA; liquidAmount[i] = FULL; count++; }
+      if (id === T.WATER) {
+        liquidType[i] = TYPE.WATER;
+        liquidAmount[i] = FULL;
+        count++;
+        claimed.push(i);
+      } else if (id === T.LAVA) {
+        liquidType[i] = TYPE.LAVA;
+        liquidAmount[i] = FULL;
+        count++;
+        claimed.push(i);
+      }
+    }
+    // Claim AFTER the scan so seedWater()'s neighbour wakeups see final state.
+    for (let k = 0; k < claimed.length; k++) {
+      const i = claimed[k];
+      try {
+        w.setRaw(i % w.width, (i / w.width) | 0, T.AIR);
+      } catch (e) {
+        /* headless worlds */
+      }
     }
     for (let i = 0; i < n; i++) {
       const t = liquidType[i];
@@ -347,6 +441,7 @@
       const above = i >= w.width ? i - w.width : -1;
       if (above < 0 || liquidType[above] !== t) wakeIdx(i);
     }
+    mode = "layer";
     return count;
   }
 
@@ -357,7 +452,7 @@
   // edge. Alpha scales with volume so shallow liquid reads as shallow.
   function draw(ctx, cam, w) {
     if (!ready || !liquidType || !cam || !cam.zoom || !ctx.canvas) return;
-    const wr = (w && w.width * w.height === liquidType.length) ? w : worldRef;
+    const wr = w && w.width * w.height === liquidType.length ? w : worldRef;
     if (!wr) return;
     const width = wr.width;
     const viewW = ctx.canvas.width / cam.zoom;
@@ -370,7 +465,8 @@
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
         const i = ty * width + tx;
-        const t = liquidType[i], a = liquidAmount[i];
+        const t = liquidType[i],
+          a = liquidAmount[i];
         if (t === TYPE.NONE || a === 0) continue;
         const pct = a / FULL;
         const above = ty > 0 ? i - width : -1;
@@ -393,34 +489,47 @@
   // surface cells (no same-type liquid above) so saved pools resettle;
   // buried cells stay dormant until an edit wakes them.
   function registerSaveProvider() {
-    if (!TC.SaveCore || typeof TC.SaveCore.register !== 'function') return;
+    if (!TC.SaveCore || typeof TC.SaveCore.register !== "function") return;
     try {
-      TC.SaveCore.register('world.core.liquids', {
+      TC.SaveCore.register("world.core.liquids", {
         version: 1,
-        serialize: function (ctx) {
+        serialize: (ctx) => {
           const w = (ctx && ctx.world) || worldRef;
-          if (!ready || !w || !liquidType || liquidType.length !== w.width * w.height) return null;
+          if (
+            !ready ||
+            !w ||
+            !liquidType ||
+            liquidType.length !== w.width * w.height
+          )
+            return null;
           const n = liquidType.length;
           const out = [];
-          let prev = -2, pt = 0, pa = 0;
+          let prev = -2,
+            pt = 0,
+            pa = 0;
           for (let i = 0; i < n; i++) {
-            const t = liquidType[i], a = liquidAmount[i];
+            const t = liquidType[i],
+              a = liquidAmount[i];
             if (t === TYPE.NONE || a === 0) continue;
             if (i === prev + 1 && t === pt && a === pa) {
               const e = out[out.length - 1];
-              if (e.length === 3) e.push(2); else e[3]++;
+              if (e.length === 3) e.push(2);
+              else e[3]++;
             } else {
               out.push([i, t, a]);
             }
-            prev = i; pt = t; pa = a;
+            prev = i;
+            pt = t;
+            pa = a;
           }
           return out.length ? out : null;
         },
-        deserialize: function (data, ctx) {
+        deserialize: (data, ctx) => {
           const w = (ctx && ctx.world) || TC.world || null;
           if (!w) return;
           reset(w);
           if (!Array.isArray(data)) return;
+          mode = "layer"; // restored data is layer-owned liquid
           const n = w.width * w.height;
           for (let k = 0; k < data.length; k++) {
             const e = data[k];
@@ -432,27 +541,46 @@
             const len = e.length > 3 ? Math.max(1, e[3] | 0) : 1;
             for (let j = 0; j < len && start + j < n; j++) {
               const i = start + j;
+              // Invariant guard: never restore layer liquid into a cell that
+              // still holds a legacy liquid tile.
+              const id = w.tiles[i];
+              if (id === TC.TILE.WATER || id === TC.TILE.LAVA) continue;
               liquidType[i] = t;
               liquidAmount[i] = a;
               const above = i >= w.width ? i - w.width : -1;
               if (above < 0 || liquidType[above] !== t) wakeIdx(i);
             }
           }
-        }
+        },
       });
     } catch (e) {
-      console.warn('[TC.Liquids] SaveCore provider registration skipped:', e && e.message);
+      console.warn(
+        "[TC.Liquids] SaveCore provider registration skipped:",
+        e && e.message,
+      );
     }
   }
 
   registerSaveProvider();
 
   TC.Liquids = {
-    TYPE: TYPE, FULL: FULL,
-    init: init, reset: reset, update: update, draw: draw,
-    wake: wake, set: set,
-    sampleAt: sampleAt, columnSurface: columnSurface,
+    TYPE: TYPE,
+    FULL: FULL,
+    init: init,
+    reset: reset,
+    update: update,
+    draw: draw,
+    wake: wake,
+    set: set,
+    sampleAt: sampleAt,
+    columnSurface: columnSurface,
     averageColumnSurface: averageColumnSurface,
-    importFromWorld: importFromWorld, stats: stats
+    importFromWorld: importFromWorld,
+    stats: stats,
+
+    // Authority mode of the current world's liquid: 'tiles' until an explicit
+    // import/restore claims the liquid into this layer, then 'layer'. Read by
+    // world.stepWater() to freeze the legacy sim once the layer owns liquid.
+    mode: () => mode,
   };
 })();

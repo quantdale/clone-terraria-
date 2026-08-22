@@ -5,31 +5,29 @@
    the journey specs in tests/browser/. Traces/screenshots/videos are kept
    on failure only and are git-ignored. */
 
-const { defineConfig, devices } = require('@playwright/test');
+const { defineConfig, devices } = require("@playwright/test");
 
 module.exports = defineConfig({
-  testDir: 'tests/browser',
+  testDir: "tests/browser",
   timeout: 90 * 1000,
   expect: { timeout: 10 * 1000 },
-  fullyParallel: false,        // journeys share nothing, but keep ordering deterministic
+  fullyParallel: false, // journeys share nothing, but keep ordering deterministic
   workers: 1,
-  retries: 0,                  // a flaky pass is a defect signal, not a pass
-  reporter: [['list']],
-  outputDir: 'test-results/',
+  retries: 0, // a flaky pass is a defect signal, not a pass
+  reporter: [["list"]],
+  outputDir: "test-results/",
   use: {
-    baseURL: 'http://127.0.0.1:8123',
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
-    ...devices['Desktop Chrome'],
+    baseURL: "http://127.0.0.1:8123",
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
+    ...devices["Desktop Chrome"],
   },
   webServer: {
-    command: 'node tools/dev-server.js',
+    command: "node tools/dev-server.js",
     port: 8123,
     reuseExistingServer: false,
     timeout: 30 * 1000,
   },
-  projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-  ],
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });

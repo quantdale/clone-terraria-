@@ -219,7 +219,7 @@ test('liquids: persistence round-trip via SaveCore envelope preserves sparse cel
   assert.deepStrictEqual(after, before, 'round-trip changed the liquid state');
 });
 
-test('liquids: importFromWorld counts WATER/LAVA tiles deterministically', () => {
+test('liquids: importFromWorld CONSUMES WATER/LAVA tiles (one-way act)', () => {
   const { TC } = setup({ seed: 21 });
   let tiles = 0;
   for (let i = 0; i < TC.world.tiles.length; i++) {
@@ -229,9 +229,11 @@ test('liquids: importFromWorld counts WATER/LAVA tiles deterministically', () =>
   assert.ok(tiles > 0, 'seeded world has no liquids to import (sanity)');
   const c1 = TC.Liquids.importFromWorld(TC.world);
   const s1 = TC.Liquids.stats();
+  // Authority boundary: the first import CLAIMS every liquid tile into the
+  // layer (tiles -> AIR), so a second import finds nothing left to convert.
   const c2 = TC.Liquids.importFromWorld(TC.world);
   assert.strictEqual(c1, tiles, 'import count != WATER+LAVA tile count');
-  assert.strictEqual(c2, tiles, 'second import differs (non-deterministic)');
+  assert.strictEqual(c2, 0, 're-import found liquid tiles — consumption failed');
   assert.strictEqual(TC.Liquids.stats().cells, s1.cells);
 });
 
