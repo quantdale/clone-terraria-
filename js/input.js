@@ -89,6 +89,25 @@
       updateWorldMouse();
     },
 
+    // Transition barrier for menu -> gameplay ownership (main.js calls this
+    // whenever a state transition enters/exits gameplay). Any pointer/key
+    // event consumed to drive the menu must not ALSO surface as a gameplay
+    // action: held button/key state and every latched edge are dropped here,
+    // so the simulation only reacts to input from a FRESH post-transition
+    // press. This matters because a title click's mouseup can sit queued
+    // behind synchronous worldgen, leaving mouse.down true across several
+    // fixed steps of the first playing frames.
+    barrier() {
+      keys.clear();
+      justPressed.clear();
+      mouse.down = false;
+      mouse.rightDown = false;
+      mouse.clicked = false;
+      mouse.rightClicked = false;
+      input.hotbarScroll = 0;
+      updateWorldMouse();
+    },
+
     // screen-space tile outline; called by main between Lighting and UI
     drawCursor(ctx, cam) {
       const hover = input.uiHover;

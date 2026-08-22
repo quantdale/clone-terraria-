@@ -458,7 +458,14 @@
     const sel = (p && typeof p.selectedSlot === 'function') ? p.selectedSlot() : null;
     const def = (sel && TC.ITEM_DEFS) ? TC.ITEM_DEFS[sel.id] : null;
     if (!def) return;
-    if (def.kind === 'magic') castWeapon(p, def, m);
+    // Contract: kind 'magic' fires while LMB is HELD; potions and mana
+    // crystals trigger on the click edge. Without this gate a selected wand
+    // would auto-fire on cooldown with no input at all (and drain the pool
+    // across menu transitions / saves).
+    if (def.kind === 'magic') {
+      if (!m.down) return;
+      castWeapon(p, def, m);
+    }
     else if (def.kind === 'potion' && m.clicked) drinkPotion(p, sel, def);
     else if (def.kind === 'mana_crystal' && m.clicked) useCrystal(p, sel);
   }

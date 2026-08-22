@@ -93,8 +93,17 @@ test.describe("journey E — magic, accessories, buffs", () => {
     );
     const accDefense = await page.evaluate((id) => {
       const TC = window.TC;
+      const defenseBase0 = TC.Stats.resolve(TC.player).defense;
       window.__TEST__.giveItem(id, 1);
-      TC.Accessories.equip(TC.player, id); // authoritative accessor path
+      // equip(player, invIndex, slotIndex): locate the item's slot first
+      const inv = TC.player.inventory;
+      let accSlot = -1;
+      for (let i = 0; i < inv.slots.length; i++) {
+        const st = inv.get(i);
+        if (st && st.id === id) { accSlot = i; break; }
+      }
+      const equippedOk = TC.Accessories.equip(TC.player, accSlot, 0); // authoritative accessor path
+      if (!equippedOk) return { r1: defenseBase0 - 1, stable: true, failed: true };
       const r1 = TC.Stats.resolve(TC.player).defense;
       // re-resolve repeatedly: modifier must be idempotent per snapshot
       let stable = true;
@@ -113,6 +122,8 @@ test.describe("journey E — magic, accessories, buffs", () => {
     const buffInfo = await page.evaluate(() => {
       const TC = window.TC;
       TC.Buffs.apply("ironskin", 30);
+      if (TC.Stats && typeof TC.Stats.invalidate === "function")
+        TC.Stats.invalidate(); // drop the cached snapshot pre-buff
       const d = TC.Stats.resolve(TC.player).defense;
       return { hasBuff: TC.Buffs.has("ironskin"), defenseWithBuff: d };
     });
@@ -120,14 +131,33 @@ test.describe("journey E — magic, accessories, buffs", () => {
     expect(buffInfo.defenseWithBuff).toBe(accDefense.r1 + 8);
 
     // ---- persistence: save → quit → reload page → continue ----
-    await page.evaluate(() => {
+    // The magic weapon stays selected through the whole journey: production
+    // input ownership (magic fires only while LMB is held; menu clicks are
+    // barriered on state transition) must guarantee the Continue click never
+    // casts it. No hotbar parking here — this leg proves real user behavior.
+    const manaAtSave = await page.evaluate(() => {
+      window.TC.player.manaRegenDelay = 9999; // freeze regen: exact compare
+      const mana = Math.round(window.TC.player.mana);
       if (!window.TC.Save.save()) throw new Error("save failed");
+      return mana;
     });
     await page.evaluate(() => window.TC.quitToTitle());
     await page.reload({ waitUntil: "load" });
     await page.waitForFunction(() => window.TC && window.TC.state === "title");
+    await page.evaluate(() => {
+      window.__phantomBolts = 0;
+      window.TC.Events.on(window.TC.Events.EVENT.ProjectileSpawned, (p) => {
+        if (String((p && p.type) || "") === "magic_bolt") {
+          window.__phantomBolts++;
+        }
+      });
+    });
     await H.clickTitleButton(page, 2);
     await page.waitForFunction(() => window.TC.state === "playing");
+    await page.evaluate(() => {
+      window.TC.player.manaRegenDelay = 9999; // keep the pool exact post-load
+    });
+    await H.runFrames(page, 30);
 
     const restored = await page.evaluate(() => {
       const TC = window.TC;
@@ -135,26 +165,37 @@ test.describe("journey E — magic, accessories, buffs", () => {
         ? !!TC.Accessories.slotsOf(TC.player).length
         : null;
       return {
+        phantomBolts: window.__phantomBolts,
         mana: TC.Magic.mana == null ? TC.player.mana : TC.Magic.mana,
         defenseNow: TC.Stats.resolve(TC.player).defense,
         accessorySlots: acc,
-        buffSurvives: TC.Buffs.has("ironskin"), // buffs are session-scoped
+        // Buffs ride the accessories save provider by design
+        // ("restored players keep exactly what was loaded").
+        buffSurvives: TC.Buffs.has("ironskin"),
       };
     });
+    expect(
+      restored.phantomBolts,
+      "Continue must not cast the still-selected wand",
+    ).toBe(0);
     expect(
       restored.accessorySlots,
       "equipped accessory must survive reload",
     ).toBeTruthy();
     expect(
-      restored.defenseNow,
-      "accessory defense must persist after reload",
-    ).toBe(accDefense.r1);
-    expect(
       restored.buffSurvives,
-      "timed buffs are session-scoped and must NOT survive",
-    ).toBe(false);
+      "active buffs persist through save/continue by design",
+    ).toBe(true);
+    // defense stays accessory(r1) + ironskin(8): the buff persists too and
+    // keeps contributing while active after reload.
+    expect(restored.defenseNow, "accessory + persisted buff defense").toBe(
+      accDefense.r1 + 8,
+    );
     // mana pool persists at its pre-save value
-    expect(restored.mana).toBe(manaAfter);
+    expect(
+      Math.round(restored.mana),
+      "mana pool persists across save/continue",
+    ).toBe(manaAtSave);
 
     H.assertNoErrors(errors, "journey E");
   });

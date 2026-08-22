@@ -19,9 +19,24 @@ test.describe("journey C — save / continue", () => {
     const marker = await page.evaluate(() => {
       const TC = window.TC;
       const TS = TC.CONST.TS;
-      const tx = Math.floor(TC.player.x / TS) + 2;
-      const ty = Math.floor((TC.player.y + TC.player.h) / TS) - 1;
-      return { tx, ty, ok: TC.world.set(tx, ty, TC.TILE.GOLD_ORE) };
+      const baseX = Math.floor(TC.player.x / TS);
+      const gy = Math.floor((TC.player.y + TC.player.h) / TS);
+      for (let dx = 2; dx <= 8; dx++) {
+        for (let dy = -3; dy <= 0; dy++) {
+          const tx = baseX + dx, ty = gy + dy;
+          if (TC.world.get(tx, ty) !== TC.TILE.AIR) continue;
+          const below = TC.TILE_DEFS[TC.world.get(tx, ty + 1)];
+          // World.set returns undefined on success / false on refusal
+          if (
+            below &&
+            below.solid &&
+            TC.world.set(tx, ty, TC.TILE.GOLD_ORE) !== false
+          ) {
+            return { tx, ty, ok: true };
+          }
+        }
+      }
+      return { ok: false };
     });
     expect(marker.ok).toBe(true);
 
@@ -39,7 +54,9 @@ test.describe("journey C — save / continue", () => {
           TC.TILE_DEFS[TC.world.get(tx, ty + 1)] &&
           TC.TILE_DEFS[TC.world.get(tx, ty + 1)].solid
         ) {
-          if (TC.world.set(tx, ty, TC.TILE.CHEST)) {
+          // World.set() returns undefined on success; verify by read-back
+          TC.world.set(tx, ty, TC.TILE.CHEST);
+          if (TC.world.get(tx, ty) === TC.TILE.CHEST) {
             const slots = TC.Chests.get(tx, ty);
             slots[0] = { id: "gold_bar", count: 7 };
             return { tx, ty };
@@ -116,9 +133,9 @@ test.describe("journey C — save / continue", () => {
 
     // ---- verify restoration ----
     const after = await page.evaluate(
-      ({ m }) => {
+      ({ m, c }) => {
         const TC = window.TC;
-        const slots = TC.Chests.get(m.tx, m.ty);
+        const slots = TC.Chests.get(c.tx, c.ty); // chest lives at chestPos
         return {
           seed: TC.worldSeed,
           markerTile: TC.world.get(m.tx, m.ty),
@@ -128,7 +145,7 @@ test.describe("journey C — save / continue", () => {
           skyTime: TC.Sky.time,
         };
       },
-      { m: marker },
+      { m: marker, c: chestPos },
     );
 
     expect(after.seed).toBe(before.seed);
@@ -137,7 +154,12 @@ test.describe("journey C — save / continue", () => {
     );
     expect(after.chestGold).toBe("gold_bar:7");
     expect(after.defense).toBeGreaterThanOrEqual(2);
-    expect(after.skyTime).toBeCloseTo(before.skyTime, 5);
+    // the live clock keeps ticking through the reload; require it to land
+    // within a few seconds of the saved value (and far from a fresh dawn)
+    expect(
+      Math.abs(after.skyTime - before.skyTime),
+      "restored clock continues from the saved time",
+    ).toBeLessThan(5);
 
     H.assertNoErrors(errors, "journey C");
   });

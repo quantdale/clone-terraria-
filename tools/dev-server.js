@@ -6,7 +6,9 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
-const ROOT = path.join(__dirname, "..");
+const ROOT = process.env.DEV_ROOT
+  ? path.resolve(process.env.DEV_ROOT)
+  : path.join(__dirname, "..");
 const PORT = Number(process.env.PORT || 8123);
 
 const MIME = {

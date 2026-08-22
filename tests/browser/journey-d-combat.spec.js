@@ -5,6 +5,30 @@
 const { test, expect } = require("@playwright/test");
 const H = require("./helpers.js");
 
+// Flatten a deterministic fighting arena around the player: stone floor at
+// the feet row, air above, solid sub-floor. Removes terrain-dependent flakiness
+// (slimes knocked into dips leave the strike arc).
+async function buildArena(page) {
+  await page.evaluate(() => {
+    const TC = window.TC;
+    const px = Math.floor((TC.player.x + TC.player.w / 2) / TC.CONST.TS);
+    const feetTy = Math.floor((TC.player.y + TC.player.h) / TC.CONST.TS);
+    for (let dx = -12; dx <= 16; dx++) {
+      for (let dy = -9; dy <= -1; dy++) {
+        TC.world.setRaw(px + dx, feetTy + dy, TC.TILE.AIR);
+      }
+      for (let dy = 0; dy <= 2; dy++) {
+        TC.world.setRaw(px + dx, feetTy + dy, TC.TILE.STONE);
+      }
+    }
+    window.__TEST__.teleportPlayer(
+      px * TC.CONST.TS,
+      feetTy * TC.CONST.TS - TC.CONST.PLAYER_H,
+    );
+  });
+  await H.runFrames(page, 20);
+}
+
 test.describe("journey D — combat", () => {
   test("melee kills a slime with exactly one EntityKilled and gel loot", async ({
     page,
@@ -12,6 +36,7 @@ test.describe("journey D — combat", () => {
     test.setTimeout(120 * 1000);
     const errors = await H.openGame(page, "#test");
     await H.newWorld(page, 2024);
+    await buildArena(page);
 
     // count events for duplicate detection
     await page.evaluate(() => {
@@ -28,9 +53,11 @@ test.describe("journey D — combat", () => {
     // spawn a green slime right next to the player via the generic spawner
     const spawned = await page.evaluate(() => {
       const TC = window.TC;
-      const x = TC.player.x + TC.player.w + 30;
+      const x = TC.player.x + TC.player.w + 8; // inside the 34px strike arc
       const y = TC.player.y;
-      return !!TC.Enemies.spawnEnemy("green_slime", x, y);
+      const e = TC.Enemies.spawnEnemy("green_slime", x, y);
+      window.__slime = e; // page-side reference: director spawns can't confuse us
+      return !!e;
     });
     expect(spawned, "generic spawnEnemy must work for regular types").toBe(
       true,
@@ -40,29 +67,42 @@ test.describe("journey D — combat", () => {
     await H.selectSlot(page, 2);
     let dead = false;
     for (let i = 0; i < 40 && !dead; i++) {
+      // Pin the target inside the small melee arc on every swing: knockback
+      // would otherwise slide the slime out of reach and every later swing
+      // would whiff no matter where the cursor aims.
+      await page.evaluate(() => {
+        const TC = window.TC,
+          s = window.__slime;
+        if (!s || s.hp <= 0 || s.dead) return;
+        s.x = TC.player.x + TC.player.w + 4;
+        s.y = TC.player.y + TC.player.h - s.h;
+      });
       const tgt = await page.evaluate(() => {
-        const s = window.TC.Enemies.list[0];
-        if (!s) return null;
+        const s = window.__slime;
+        if (!s || s.hp <= 0 || s.dead) return null;
         return { x: s.x + s.w / 2, y: s.y + s.h / 2 };
       });
       if (!tgt) {
         dead = true;
         break;
       }
-      await page.evaluate((p) => {
+      // move the REAL pointer: a real mousedown recomputes worldX/Y from the
+      // last mousemove, so synthetic Input.mouse writes alone would be lost.
+      const scr = await page.evaluate((p) => {
         const cam = window.TC.camera,
           z = cam.zoom || 1;
-        window.TC.Input.mouse.x = (p.x - cam.x) * z;
-        window.TC.Input.mouse.y = (p.y - cam.y) * z;
-        try {
-          window.TC.Input.mouse.worldX = p.x;
-          window.TC.Input.mouse.worldY = p.y;
-        } catch (e) {}
+        return { x: (p.x - cam.x) * z, y: (p.y - cam.y) * z };
       }, tgt);
+      await page.mouse.move(scr.x, scr.y);
       await page.mouse.down();
       await H.runFrames(page, 14);
       await page.mouse.up();
-      dead = await page.evaluate(() => window.TC.Enemies.list.length === 0);
+      dead = await page.evaluate(
+        () =>
+          !window.__slime ||
+          window.__slime.hp <= 0 ||
+          window.__slime.dead === true,
+      );
     }
     expect(dead, "the slime must die from melee swings").toBe(true);
     await H.runFrames(page, 10);
@@ -87,6 +127,7 @@ test.describe("journey D — combat", () => {
     test.setTimeout(120 * 1000);
     const errors = await H.openGame(page, "#test");
     await H.newWorld(page, 2025);
+    await buildArena(page);
 
     await page.evaluate(() => {
       window.__kills = 0;
@@ -100,14 +141,16 @@ test.describe("journey D — combat", () => {
       });
     });
 
-    // second slime a fixed distance away
+    // second slime a fixed distance away, tracked by reference
     const ok = await page.evaluate(() => {
       const TC = window.TC;
-      return !!TC.Enemies.spawnEnemy(
+      const e = TC.Enemies.spawnEnemy(
         "green_slime",
         TC.player.x + 9 * TC.CONST.TS,
         TC.player.y,
       );
+      window.__slime = e;
+      return !!e;
     });
     expect(ok).toBe(true);
 
@@ -125,37 +168,38 @@ test.describe("journey D — combat", () => {
       }
     });
 
+        // One arrow deals ~10 vs 14 hp: KEEP FIRING until the slime dies.
     let fired = false;
-    for (let i = 0; i < 24 && !fired; i++) {
-      await page.evaluate(() => {
+    let killed = false;
+    for (let i = 0; i < 40 && !killed; i++) {
+      const scr = await page.evaluate(() => {
         const TC = window.TC;
-        const s = TC.Enemies.list[0];
-        if (!s) return;
+        const s = window.__slime;
+        if (!s || s.hp <= 0 || s.dead) return null;
         const cam = TC.camera,
           z = cam.zoom || 1;
         const wx = s.x + s.w / 2,
           wy = s.y + s.h / 2;
-        TC.Input.mouse.worldX = wx;
-        TC.Input.mouse.worldY = wy;
-        TC.Input.mouse.x = (wx - cam.x) * z;
-        TC.Input.mouse.y = (wy - cam.y) * z;
+        return { x: (wx - cam.x) * z, y: (wy - cam.y) * z };
       });
+      if (!scr) {
+        killed = true;
+        break;
+      }
+      await page.mouse.move(scr.x, scr.y);
       await page.mouse.down();
       await H.runFrames(page, 3);
       await page.mouse.up();
-      fired = await page.evaluate(() => window.__arrows > 0);
+      fired = fired || (await page.evaluate(() => window.__arrows > 0));
       await H.runFrames(page, 12);
-    }
-    expect(fired, "a bow shot must fire an arrow projectile").toBe(true);
-
-    // projectile collision must finish the slime
-    let killed = false;
-    for (let i = 0; i < 60 && !killed; i++) {
-      await H.runFrames(page, 6);
       killed = await page.evaluate(
-        () => window.TC.Enemies.list.length === 0 && window.__kills > 0,
+        () =>
+          window.__kills > 0 &&
+          (!window.__slime || window.__slime.hp <= 0 || window.__slime.dead),
       );
     }
+    expect(fired, "a bow shot must fire an arrow projectile").toBe(true);
+    
     expect(killed, "the arrow must collide and kill the slime").toBe(true);
     expect(await page.evaluate(() => window.__kills)).toBe(1);
 

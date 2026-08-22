@@ -15,7 +15,8 @@
     "test:world": "node --test \"tests/world/**/*.test.js\"",
     "test:browser": "playwright test",
     "build": "node tools/release-build.js",
-    "validate": "npm run check && npm test && npm run build && npm run test:browser",
+    "verify:build": "node tools/release-build.js && node tools/verify-dist.js",
+    "validate": "npm run check && npm test && npm run build && npm run verify:build && npm run test:browser",
     "serve": "python -m http.server 8000"
   },
   "comment": "The game itself runs from index.html with plain script tags (file:// or any static server). These scripts only drive validation. All --test arguments use globs because bare directory args are unreliable across supported Node versions/platforms.",

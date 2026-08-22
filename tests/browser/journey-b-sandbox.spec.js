@@ -122,8 +122,10 @@ test.describe("journey B — core sandbox", () => {
       ([tx, ty]) => window.TC.world.get(tx, ty),
       [target.tx, target.ty],
     );
+    // grass drops dirt, so the restored block is the DROP's tile
+    const placedTile = await page.evaluate(() => window.TC.TILE);
     expect(placed, "placing must restore a block in the mined cell").toBe(
-      target.id,
+      placedTile.DIRT,
     );
 
     // ---- open inventory + craft a workbench (mirrors the crafting-row click:

@@ -34,6 +34,16 @@
   TC.debug = false;
   TC.fps = 0;
 
+  // Input ownership: a menu click that causes a transition must never also
+  // act as a gameplay input. The transition runs mid-step inside UI.update,
+  // and the activating button's mouseup can still be queued behind the
+  // synchronous worldgen — so entering gameplay drops every transient
+  // pointer/key state before the first gameplay frame consumes input.
+  function enterPlaying() {
+    TC.state = 'playing';
+    if (TC.Input && typeof TC.Input.barrier === 'function') TC.Input.barrier();
+  }
+
   function buildWorld(seed, diffs, wallDiffs) {
     const gen = TC.WorldGen.generate(seed);
     if (TC.Loot && TC.Loot.populateWorld) TC.Loot.populateWorld(gen, seed);
@@ -79,7 +89,7 @@
     if (TC.Particles) TC.Particles.clear();
     if (TC.Sky) TC.Sky.reset();
     centerCamera(true);
-    TC.state = 'playing';
+    enterPlaying();
     if (TC.Events) { try { TC.Events.emit(TC.Events.EVENT.WorldLoaded, { seed: seed }); } catch (e) {} }
     if (TC.NPCs && typeof TC.NPCs.evaluateUnlocks === 'function') {
       try { TC.NPCs.evaluateUnlocks(); } catch (eu) {}
@@ -116,7 +126,7 @@
       try { TC.NPCs.evaluateUnlocks(); } catch (eu) {}
     }
     centerCamera(true);
-    TC.state = 'playing';
+    enterPlaying();
     if (TC.Events) { try { TC.Events.emit(TC.Events.EVENT.WorldLoaded, { seed: data.seed }); } catch (e) {} }
   };
 
@@ -126,6 +136,7 @@
     TC.worldSeed = null;
     TC.player = null;
     TC.state = 'title';
+    if (TC.Input && typeof TC.Input.barrier === 'function') TC.Input.barrier();
   };
 
   function centerCamera(snap) {

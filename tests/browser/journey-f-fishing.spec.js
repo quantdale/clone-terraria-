@@ -104,16 +104,25 @@ test.describe("journey F — fishing", () => {
         const d = window.TC.Fishing._debug();
         if (d.mode !== "idle") return false;
         const inv = window.TC.player.inventory;
-        for (let k = 0; k < inv.size(); k++) {
+        for (let k = 0; k < inv.slots.length; k++) {
           const s = inv.get(k);
           if (s && /fish|crate|bass|trout|salmon/.test(s.id)) return true;
         }
-        return d.catches > 0; // authoritative counter
+        // catches is a per-fish-id lifetime map {id: count}, not a counter
+        const c = d.catches;
+        if (c && typeof c === "object") {
+          for (const k in c) if ((c[k] | 0) > 0) return true;
+        }
+        return false;
       });
     }
-    const catches = await page.evaluate(
-      () => window.TC.Fishing._debug().catches,
-    );
+    const catches = await page.evaluate(() => {
+      const c = window.TC.Fishing._debug().catches;
+      if (typeof c === "number") return c; // legacy numeric shape
+      let n = 0;
+      for (const k in c || {}) n += c[k] | 0;
+      return n;
+    });
     expect(
       catches,
       "reeling on a bite must register a catch",
@@ -130,9 +139,15 @@ test.describe("journey F — fishing", () => {
     await H.clickTitleButton(page, 2);
     await page.waitForFunction(() => window.TC.state === "playing");
 
-    const restored = await page.evaluate(() => window.TC.Fishing._debug());
+    const restored = await page.evaluate(() => {
+      const c = window.TC.Fishing._debug().catches;
+      if (typeof c === "number") return c; // legacy numeric shape
+      let n = 0;
+      for (const k in c || {}) n += c[k] | 0;
+      return n;
+    });
     expect(
-      restored.catches,
+      restored,
       "catch count must survive via the systems provider",
     ).toBeGreaterThanOrEqual(1);
 
