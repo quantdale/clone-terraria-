@@ -794,6 +794,39 @@
     }
   }
 
+  // Coins (TC.Economy denominations): a stamped metal disc with a mint mark
+  // sized by denomination so the three tiers read apart at a glance.
+  function paintCoin(g, id) {
+    const metal = id === 'coin_gold' ? '#ffd24a'
+      : id === 'coin_silver' ? '#c0c0cc'
+      : '#c87137';
+    g.fillStyle = shade(metal, -40);       // rim shadow
+    g.beginPath(); g.arc(8, 8.6, 6.2, 0, Math.PI * 2); g.fill();
+    g.fillStyle = metal;                   // face
+    g.beginPath(); g.arc(8, 8, 5.6, 0, Math.PI * 2); g.fill();
+    g.fillStyle = shade(metal, 45);        // top-left glint band
+    g.beginPath();
+    g.moveTo(3.6, 6.4);
+    g.arc(8, 8, 4.6, Math.PI * 1.05, Math.PI * 1.55);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = shade(metal, -55);     // mint mark: ring / bars / star
+    g.lineWidth = 1;
+    if (id === 'coin_gold') {
+      g.beginPath(); g.arc(8, 8, 2.4, 0, Math.PI * 2); g.stroke();
+      rect(g, shade(metal, -55), 7.5, 5, 1, 6);
+    } else if (id === 'coin_silver') {
+      g.beginPath();
+      g.moveTo(5.5, 8); g.lineTo(10.5, 8);
+      g.moveTo(8, 5.5); g.lineTo(8, 10.5);
+      g.stroke();
+    } else {
+      g.beginPath();
+      g.moveTo(6, 9.5); g.lineTo(8, 5.8); g.lineTo(10, 9.5);
+      g.stroke();
+    }
+  }
+
   function shade(hex, amt) {             // hex like #rrggbb -> lightened/darkened
     const n = parseInt(hex.slice(1), 16);
     const r = Math.max(0, Math.min(255, ((n >> 16) & 255) + amt));
@@ -820,6 +853,7 @@
     if (d && d.kind === 'armor') return paintArmor(g, id);
     if (d && d.kind === 'summon') return paintCharm(g);
     if (d && d.kind === 'bucket') return paintBucket(g, id);
+    if (d && d.kind === 'currency') return paintCoin(g, id);
     if (d && d.kind === 'material') {
       if (/_bar$/.test(id) && metal) return paintBar(g, metal);
       if (/_ore$/.test(id) && metal) return paintOre(g, metal);

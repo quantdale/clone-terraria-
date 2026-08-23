@@ -728,6 +728,113 @@
   }
 
   // ======================================================================
+  // ShopBuy / ShopSell — transactional NPC economy (W2). Validate-then-apply
+  // guarantees failure mutates nothing: stock, price, purse and capacity are
+  // all checked up front; currency leaves exactly once via TC.Economy.pay.
+  // ======================================================================
+
+  // Resolve the live stock entry for an NPC kind. Progression-aware rows
+  // (requires: flag string or fn) filter through TC.NPCs.shopOf.
+  function resolveStockEntry(npcType, itemId) {
+    if (!TC.NPCs || typeof TC.NPCs.shopOf !== 'function') return null;
+    const stock = TC.NPCs.shopOf(npcType);
+    if (!Array.isArray(stock)) return null;
+    for (let i = 0; i < stock.length; i++) {
+      if (stock[i] && stock[i].itemId === itemId) return stock[i];
+    }
+    return null;
+  }
+
+  // Capacity dry-run: could `n` of id fit without mutating anything?
+  function canFit(inv, id, n) {
+    if (!inv || !Array.isArray(inv.slots)) return false;
+    const max = maxStack(id);
+    let room = 0;
+    for (let i = 0; i < inv.slots.length && room < n; i++) {
+      const s = inv.slots[i];
+      if (!s) room += max;
+      else if (s.id === id) room += max - s.count;
+    }
+    return room >= n;
+  }
+
+  function shopPriceOf(entry) {
+    const base = (entry && typeof entry.price === 'number' && isFinite(entry.price))
+      ? Math.max(1, Math.floor(entry.price)) : null;
+    if (base != null) return base;
+    const d = iDef(entry && entry.itemId);
+    return (d && typeof d.value === 'number') ? Math.max(1, d.value) : 1;
+  }
+
+  function validateShopBuy(c) {
+    const p = c.player;
+    if (!p || !p.inventory || !Array.isArray(p.inventory.slots)) return 'no-player';
+    if (!c.npcType || typeof c.npcType !== 'string') return 'no-shop';
+    if (!iDef(c.itemId)) return 'unknown-item';
+    const entry = resolveStockEntry(c.npcType, c.itemId);
+    if (!entry) return 'not-in-stock';
+    c._price = shopPriceOf(entry);               // internal: resolved price
+    if (!TC.Economy || typeof TC.Economy.total !== 'function') return 'no-economy';
+    if (TC.Economy.total(p.inventory) < c._price) return 'too-poor';
+    if (!canFit(p.inventory, c.itemId, 1)) return 'inventory-full';
+    return true;
+  }
+
+  function applyShopBuy(c) {
+    const inv = c.player.inventory;
+    if (!TC.Economy.pay(inv, c._price)) return { bought: false, reason: 'pay-failed' };
+    const left = inv.add(c.itemId, 1);
+    if (left > 0) {                              // belt & braces: refund + report
+      TC.Economy.give(inv, c._price);
+      return { bought: false, reason: 'inventory-full' };
+    }
+    sfx('pickup');
+    emit(TC.Events.EVENT.ShopBuy,
+      { npcType: c.npcType, itemId: c.itemId, price: c._price });
+    return { bought: true, price: c._price };
+  }
+
+  // Sell ratio: shopkeepers pay a fifth of the base value, minimum one coin.
+  const SELL_RATIO = 0.2;
+  function sellPriceOf(id) {
+    const d = iDef(id);
+    const v = d && typeof d.value === 'number' ? d.value : 0;
+    return v > 0 ? Math.max(1, Math.floor(v * SELL_RATIO)) : 0;
+  }
+
+  function validateShopSell(c) {
+    const p = c.player;
+    if (!p || !p.inventory) return 'no-player';
+    const slot = slotIn(p.inventory, c.slot);
+    if (slot < 0) return 'bad-slot';
+    const stack = p.inventory.get(slot);
+    if (!stack || !stack.id) return 'empty-slot';
+    if (!iDef(stack.id)) return 'unknown-item';
+    if (stack.id.indexOf('coin_') === 0) return 'cannot-sell-currency';
+    const unit = sellPriceOf(stack.id);
+    if (unit <= 0) return 'not-sellable';
+    const want = (c.count == null) ? stack.count : asInt(c.count);
+    if (want == null || want <= 0 || want > stack.count) return 'bad-count';
+    c._slot = slot;                              // internal: resolved slot/count/price
+    c._count = want;
+    c._unit = unit;
+    return true;
+  }
+
+  function applyShopSell(c) {
+    const inv = c.player.inventory;
+    const stack = inv.get(c._slot);
+    if (!stack || !stack.id) return { sold: false, reason: 'empty-slot' };
+    const id = stack.id;
+    consumeFromSlot(inv, c._slot, id, c._count);
+    const proceeds = TC.Economy.give(inv, c._unit * c._count);
+    sfx('pickup');
+    emit(TC.Events.EVENT.ShopSell,
+      { itemId: id, count: c._count, unitPrice: c._unit, proceeds: proceeds });
+    return { sold: true, proceeds: proceeds };
+  }
+
+  // ======================================================================
   // Registration
   // ======================================================================
 
@@ -740,6 +847,8 @@
   register('EquipItem', { validate: validateEquipItem, apply: applyEquipItem });
   register('CraftRecipe', { validate: validateCraftRecipe, apply: applyCraftRecipe });
   register('InteractTile', { validate: validateInteractTile, apply: applyInteractTile });
+  register('ShopBuy', { validate: validateShopBuy, apply: applyShopBuy });
+  register('ShopSell', { validate: validateShopSell, apply: applyShopSell });
 
   TC.Commands = { register, unregister, has, names, submit };
 })();

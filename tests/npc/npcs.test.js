@@ -158,6 +158,14 @@ test('npcs: shopOf returns copies — mutating them cannot touch internals', () 
   const TC = g.TC;
   const internal = () => TC.NPCs.KINDS.merchant.shop;
 
+  // W2 economy: some stock rows are progression-gated; raise every gate so
+  // the full table is visible for this copy-isolation probe.
+  if (TC.Progression) {
+    for (const k of Object.keys(TC.Progression.FLAGS)) {
+      try { TC.Progression.set(TC.Progression.FLAGS[k]); } catch (e) {}
+    }
+  }
+
   const before = JSON.stringify(internal());
   const s1 = TC.NPCs.shopOf('merchant');
   assert.ok(Array.isArray(s1) && s1.length === internal().length);

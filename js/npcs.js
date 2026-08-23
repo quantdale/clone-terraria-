@@ -66,12 +66,28 @@
         return false;
       },
       home: { spanTiles: DEFAULT_SPAN_TILES },
+      // Stock rows: {itemId, price?, requires?}. price is copper units
+      // (TC.Economy); omitted prices fall back to the item's base value.
+      // requires gates the row on TC.Progression flags / custom rules and
+      // rows whose item def is missing never show (load-order safe).
       shop: [
         { itemId: 'torch', price: 2 },
         { itemId: 'wood', price: 1 },
+        { itemId: 'stone', price: 1 },
         { itemId: 'arrow', price: 1 },
         { itemId: 'iron_bar', price: 12 },
-        { itemId: 'gold_bar', price: 30 }
+        { itemId: 'gold_bar', price: 30 },
+        { itemId: 'bucket', price: 25 },
+        { itemId: 'regen_potion', price: 15 },
+        { itemId: 'swiftness_potion', price: 15 },
+        { itemId: 'ironskin_potion', price: 15 },
+        { itemId: 'worm', price: 4 },
+        { itemId: 'wooden_fishing_rod', price: 40 },
+        { itemId: 'grenade', price: 40 },
+        { itemId: 'guard_ring', price: 250,
+          requires: 'boss.eye_of_void.defeated' },
+        { itemId: 'vital_amulet', price: 300,
+          requires: 'boss.king_slime.defeated' }
       ],
       look: { hair: '#5a4632', robe: '#8a5a2b', robeTrim: '#6a441f', sleeve: '#7a4e24' }
     }
@@ -214,6 +230,23 @@
         try { return !!TC.Progression.has(u); } catch (e) { return false; }
       }
       return false;
+    }
+    return false;
+  }
+
+  // One stock row's visibility rule (W2 economy): missing item defs never
+  // show; requires mirrors the unlocks grammar (flag string or function).
+  function stockUnlocked(e) {
+    if (!e || typeof e.itemId !== 'string') return false;
+    if (!TC.ITEM_DEFS || !TC.ITEM_DEFS[e.itemId]) return false;
+    const r = e.requires;
+    if (r == null || r === '') return true;
+    if (typeof r === 'function') {
+      try { return !!r(e); } catch (err) { return false; }
+    }
+    if (typeof r === 'string' && TC.Progression &&
+        typeof TC.Progression.has === 'function') {
+      try { return !!TC.Progression.has(r); } catch (err) { return false; }
     }
     return false;
   }
@@ -644,9 +677,16 @@
     kindDef: (type) => NPC_KINDS[type] || null,
     shopOf: (type) => {
       const def = NPC_KINDS[type];
-      // Copy the entries too: callers must never hold references into the def table.
-      return (def && Array.isArray(def.shop))
-        ? def.shop.map((e) => Object.assign({}, e)) : null;
+      if (!def || !Array.isArray(def.shop)) return null;
+      // Filter to visible rows and copy the entries: callers must never hold
+      // references into the def table.
+      const out = [];
+      for (let i = 0; i < def.shop.length; i++) {
+        const e = def.shop[i];
+        if (!stockUnlocked(e)) continue;
+        out.push(Object.assign({}, e));
+      }
+      return out.length ? out : null;
     },
     spawnGuide, spawn, evaluateUnlocks, validateHome, damage,
     update, draw, clear, serialize, load

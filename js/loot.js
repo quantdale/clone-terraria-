@@ -153,12 +153,14 @@
 
   // Pot break loot: [item id, min, max, weight]. Ids are checked against
   // ITEM_DEFS at break time, so optional siblings (accessories potions)
-  // simply drop out when absent. No coin item exists in this codebase, so
-  // bars stand in for coins.
+  // entries [itemId, min, max, weight]; absent optional ids simply drop out
+  // when absent. Coins (W2 economy) are ordinary items and ride the same path.
   const POT_LOOT = [
     ['torch', 1, 3, 26],
     ['arrow', 3, 8, 22],
     ['heart', 1, 1, 14],
+    ['coin_copper', 3, 12, 26],
+    ['coin_silver', 1, 4, 12],
     ['copper_bar', 1, 2, 16],
     ['gold_bar', 1, 1, 6],
     ['regen_potion', 1, 1, 9]

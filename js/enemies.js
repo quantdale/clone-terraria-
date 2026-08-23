@@ -1044,6 +1044,8 @@
   // Roll a dead enemy's loot table and scatter the results at (cx,cy).
   // def.drops is the single loot source: entries {id,min,max,chance} with
   // chance defaulting to 1; contents and probabilities live in ENEMY_DEFS.
+  // def.coins [minCopper,maxCopper] (W2 economy) scatters canonical currency
+  // through TC.Economy.dropCoins.
   function rollDrops(e, cx, cy) {
     const drops = e.def.drops || [];
     for (let k = 0; k < drops.length; k++) {
@@ -1052,6 +1054,18 @@
       const n = d.min + Math.floor(Math.random() * (d.max - d.min + 1));
       if (n > 0 && TC.Items && typeof TC.Items.spawnDrop === "function") {
         TC.Items.spawnDrop(cx, cy, d.id, n, true);
+      }
+    }
+    const coins = e.def.coins;
+    if (Array.isArray(coins) && coins.length >= 2) {
+      const amount =
+        coins[0] + Math.floor(Math.random() * (coins[1] - coins[0] + 1));
+      if (
+        amount > 0 &&
+        TC.Economy &&
+        typeof TC.Economy.dropCoins === "function"
+      ) {
+        TC.Economy.dropCoins(cx, cy, amount);
       }
     }
   }

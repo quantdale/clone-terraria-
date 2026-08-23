@@ -583,12 +583,17 @@ TC.ITEM_DEFS = {
   iron_bar: I("Iron Bar", "material", {}),
   gold_bar: I("Gold Bar", "material", {}),
   gel: I("Gel", "material", {}),
-   arrow: I("Arrow", "ammo", { damage: 4 }),
+  arrow: I("Arrow", "ammo", { damage: 4, value: 1 }),
   void_charm: I("Void Charm", "summon", { boss: "void_eye", maxStack: 20 }),
+  // Canonical currency (TC.Economy): face value in copper units. Prices,
+  // sell values and purses all speak this single integer scale.
+  coin_copper: I("Copper Coin", "currency", { value: 1, maxStack: 999 }),
+  coin_silver: I("Silver Coin", "currency", { value: 100, maxStack: 999 }),
+  coin_gold: I("Gold Coin", "currency", { value: 10000, maxStack: 999 }),
   // Buckets: kind 'bucket' handled by TC.Liquids.onUseHeld. bucketType uses
   // TC.Liquids.TYPE numerics (1 water, 2 lava, 3 honey) since constants load
   // before the liquids module.
-  bucket: I("Empty Bucket", "bucket", { bucketEmpty: true, maxStack: 999 }),
+  bucket: I("Empty Bucket", "bucket", { bucketEmpty: true, maxStack: 999, value: 25 }),
   bucket_water: I("Water Bucket", "bucket", { bucketType: 1, maxStack: 999 }),
   bucket_lava: I("Lava Bucket", "bucket", { bucketType: 2, maxStack: 999 }),
   bucket_honey: I("Honey Bucket", "bucket", { bucketType: 3, maxStack: 999 }),
@@ -730,7 +735,35 @@ TC.RECIPES = [
   { out: "bucket", n: 1, station: "anvil", cost: { iron_bar: 3 } },
 ];
 
+// ---- economy: base item values (copper units; TC.Economy scale) ----
+// Shop buy prices may override per stock entry; this table is the fallback
+// and the sell anchor (sell = max(1, floor(value/5))). Items absent here
+// have no base value and cannot be sold to shopkeepers.
+(function () {
+  const V = {
+    dirt: 0, stone: 1, wood: 1, sand: 1, snow: 1, glass: 4,
+    torch: 2, workbench: 3, furnace: 12, anvil: 20, chest: 15, door: 8,
+    gel: 1,
+    copper_ore: 3, iron_ore: 6, gold_ore: 15,
+    copper_bar: 5, iron_bar: 12, gold_bar: 30,
+    wooden_sword: 4,
+    copper_sword: 50, iron_sword: 120, gold_sword: 250,
+    copper_pickaxe: 60, iron_pickaxe: 150, gold_pickaxe: 300,
+    copper_axe: 55, iron_axe: 140, gold_axe: 280,
+    wooden_bow: 30,
+    copper_helmet: 40, copper_mail: 60, copper_boots: 30,
+    iron_helmet: 90, iron_mail: 140, iron_boots: 70,
+    gold_helmet: 180, gold_mail: 280, gold_boots: 140,
+    void_charm: 500,
+    bucket_water: 30, bucket_lava: 60, bucket_honey: 45,
+  };
+  for (const id in V) {
+    if (TC.ITEM_DEFS[id]) TC.ITEM_DEFS[id].value = V[id];
+  }
+})();
+
 // ---- enemies ----
+// coins: [minCopper, maxCopper] dropped on death (TC.Economy.dropCoins).
 TC.ENEMY_DEFS = {
   green_slime: {
     name: "Green Slime",
@@ -741,6 +774,7 @@ TC.ENEMY_DEFS = {
     w: 26,
     h: 18,
     color: "#3ec54a",
+    coins: [0, 2],
     drops: [{ id: "gel", min: 1, max: 2, chance: 1 }],
   },
   blue_slime: {
@@ -752,6 +786,7 @@ TC.ENEMY_DEFS = {
     w: 34,
     h: 22,
     color: "#4a6fd6",
+    coins: [4, 12],
     drops: [{ id: "gel", min: 1, max: 3, chance: 1 }],
   },
   zombie: {
@@ -763,6 +798,7 @@ TC.ENEMY_DEFS = {
     w: 22,
     h: 42,
     color: "#7a9e5a",
+    coins: [15, 35],
     drops: [],
   },
   demon_eye: {
@@ -774,6 +810,7 @@ TC.ENEMY_DEFS = {
     w: 26,
     h: 26,
     color: "#c93a3a",
+    coins: [25, 55],
     drops: [],
   },
   cave_bat: {
@@ -785,6 +822,7 @@ TC.ENEMY_DEFS = {
     w: 20,
     h: 16,
     color: "#6a5a4a",
+    coins: [8, 18],
     drops: [],
   },
   void_eye: {
@@ -798,6 +836,7 @@ TC.ENEMY_DEFS = {
     color: "#8a3ac9",
     boss: true,
     defense: 8,
+    coins: [600, 1200],
     drops: [
       { id: "gel", min: 25, max: 40, chance: 1 },
       { id: "gold_bar", min: 5, max: 8, chance: 1 },

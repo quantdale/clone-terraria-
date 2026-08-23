@@ -37,7 +37,6 @@
   const SHOP_ROW_H = 26;      // NPC shop row height
   // Shop currency: ITEM_DEFS has no coin item today, so prices are shown as
   // informational text and purchases only go through when this stack exists.
-  const CURRENCY_ID = 'coin_item';
   const CURRENCY_NAME = 'coin';
 
   const GOLD = '#ffd24a';
@@ -104,12 +103,19 @@
     } catch (e) { return false; }
   }
 
-  // ---- shop currency (informational until a coin item exists) ----
+  // ---- shop currency (canonical coins via TC.Economy, W2) ----
   function currencyCount(inv) {
-    if (!inv || typeof inv.count !== 'function') return 0;
-    let n = 0;
-    try { n = inv.count(CURRENCY_ID) | 0; } catch (e) { n = 0; }
-    return n;
+    if (!TC.Economy || typeof TC.Economy.total !== 'function') return 0;
+    try { return TC.Economy.total(inv) | 0; } catch (e) { return 0; }
+  }
+
+  function currencyLabel(inv) {
+    if (!TC.Economy || typeof TC.Economy.format !== 'function') {
+      return String(currencyCount(inv));
+    }
+    try { return TC.Economy.format(currencyCount(inv)); } catch (e) {
+      return String(currencyCount(inv));
+    }
   }
 
   // ---- nearest chest within reach (for Quick Stack with no panel open) ----
@@ -1220,29 +1226,30 @@
     return { name: UI.dialog.name, panel: { x: x, y: y, w: pw, h: ph }, rows: rows };
   }
 
-  // Transactional purchase: coins leave first; if the bought item cannot fit
-  // (inventory full) the coins are refunded. InventoryChanged events flow
-  // through Inventory.add/remove. Prices are informational today — ITEM_DEFS
-  // has no coin item yet, so affordability fails honestly until one exists.
+  // Transactional purchase through TC.Commands.ShopBuy (W2): stock, price,
+  // purse and capacity validate before anything mutates; failure reports a
+  // reason toast and changes nothing.
   function buyItem(entry) {
     if (!entry || typeof entry.itemId !== 'string') return;
-    const inv = getInv(false);
-    if (!inv || typeof inv.remove !== 'function' || typeof inv.add !== 'function') return;
-    const price = Math.max(1, Math.floor(entry.price) || 1);
-    if (currencyCount(inv) < price) {
-      toast('Price: ' + price + ' ' + CURRENCY_NAME +
-            (price === 1 ? '' : 's') + ' each');
-      return;
-    }
-    let paid = false;
-    try { paid = !!inv.remove(CURRENCY_ID, price); } catch (e) { paid = false; }
-    if (!paid) { toast('Purchase failed'); return; }
-    let left = 0;
-    try { left = inv.add(entry.itemId, 1); } catch (e) { left = 0; }
-    if (typeof left !== 'number' || !isFinite(left)) left = 0;
-    if (left > 0) {                        // could not fit: refund and abort
-      try { inv.add(CURRENCY_ID, price); } catch (e) {}
-      toast('Inventory full');
+    const p = TC.player;
+    if (!p) return;
+    // Resolve which shopkeeper this panel belongs to for stock validation.
+    const npcType = shopNpcType();
+    const r = (TC.Commands && typeof TC.Commands.submit === 'function')
+      ? TC.Commands.submit('ShopBuy', {
+          player: p, npcType: npcType, itemId: entry.itemId
+        })
+      : { ok: false, error: 'no-commands' };
+    if (!r.ok) {
+      const price = Math.max(1, Math.floor(entry.price) || 1);
+      if (r.error === 'too-poor') {
+        toast('Price: ' + price + ' ' + CURRENCY_NAME +
+              (price === 1 ? '' : 's') + ' each');
+      } else if (r.error === 'inventory-full') {
+        toast('Inventory full');
+      } else {
+        toast('Purchase failed');
+      }
       return;
     }
     if (TC.Audio && typeof TC.Audio.play === 'function') {
@@ -1252,6 +1259,50 @@
     toast('Bought ' + (d ? d.name : entry.itemId));
   }
 
+  // Sell from an inventory slot while shopping: count 1 per right-click,
+  // the whole stack with ctrl held. Transactional via TC.Commands.ShopSell.
+  function sellFromSlot(slot, count) {
+    const p = TC.player;
+    if (!p || !lastShop) return;
+    const npcType = shopNpcType();
+    const r = (TC.Commands && typeof TC.Commands.submit === 'function')
+      ? TC.Commands.submit('ShopSell', {
+          player: p, npcType: npcType, slot: slot, count: count
+        })
+      : { ok: false, error: 'no-commands' };
+    if (!r.ok) {
+      if (r.error === 'not-sellable' || r.error === 'cannot-sell-currency') {
+        toast('They will not buy that');
+      } else if (r.error !== 'empty-slot') {
+        toast('Cannot sell that');
+      }
+      return;
+    }
+    const res = r.result || {};
+    const txt = TC.Economy && TC.Economy.format
+      ? TC.Economy.format(res.proceeds || 0)
+      : String(res.proceeds || 0);
+    toast('Sold for ' + txt);
+  }
+
+  // The NPC type of the currently open shop dialog (nearest match), or null.
+  function shopNpcType() {
+    if (!UI.dialog || !TC.NPCs || !Array.isArray(TC.NPCs.list)) return null;
+    let best = null, bestD2 = Infinity;
+    const px = TC.player ? TC.player.x : 0;
+    const py = TC.player ? TC.player.y : 0;
+    for (let i = 0; i < TC.NPCs.list.length; i++) {
+      const n = TC.NPCs.list[i];
+      if (!n || n.name !== UI.dialog.name) continue;
+      if (typeof TC.NPCs.shopOf !== 'function') continue;
+      if (!TC.NPCs.shopOf(n.type)) continue;
+      const dx = n.x - px, dy = n.y - py;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) { bestD2 = d2; best = n.type; }
+    }
+    return best;
+  }
+
   // Shop list under an open NPC dialog: icon, name, coin-priced row per stock
   // entry. Hover shows the standard item tooltip plus the price line.
   function drawShop(c, shop, mx, my) {
@@ -1259,7 +1310,10 @@
     const p = shop.panel;
     panel(c, p.x, p.y, p.w, p.h, true);
     txt(c, 'SHOP - click a line to buy', p.x + 10, p.y + 11, 11, GOLD_DIM, 'left', true);
-    const purse = currencyCount(getInv(false));
+    const purseN = currencyCount(getInv(false));
+    const purse = currencyLabel(getInv(false));
+    c.font = '10px monospace';
+    txt(c, purse, p.x + p.w - 10, p.y + 11, 11, GOLD, 'right', true);
     for (let i = 0; i < shop.rows.length; i++) {
       const row = shop.rows[i];
       const r = row.rect;
@@ -1274,7 +1328,7 @@
       const d = itemDef(e.itemId);
       txt(c, d ? d.name : String(e.itemId), r.x + 26, r.y + r.h / 2, 13,
           hov ? GOLD : TEXT, 'left');
-      const afford = purse >= price;
+      const afford = purseN >= price;
       c.font = 'bold 13px monospace';
       const pw2 = c.measureText(String(price)).width;
       c.beginPath();                       // tiny coin dot left of the number
@@ -1286,8 +1340,9 @@
       if (hov) {
         const lines = itemLines(e.itemId);
         lines.push({
-          text: 'price: ' + price + ' ' + CURRENCY_NAME +
-                (purse >= price ? '' : '  (you have ' + purse + ')'),
+          text: 'price: ' + TC.Economy.format(price) +
+                (afford ? '' : '  (you have ' + purse + ')') +
+                '  - RMB a bag slot to sell',
           color: afford ? '#8fe08f' : '#ff7a6a'
         });
         tooltip = { x: mx + 18, y: my + 10, lines: lines };
@@ -1626,6 +1681,19 @@
           buyItem(row.entry);
           handled = true;
           break;
+        }
+      }
+      // W2 economy: right-click a hotbar/bag slot while shopping to SELL
+      // one item (ctrl+right-click sells the whole stack). The dialog stays.
+      if (!handled && m.rightClicked && lastShop) {
+        const inv2 = getInv(true);
+        if (inv2) {
+          let slot = hitHotbar(L, mx, my);
+          if (slot < 0) slot = hitBag(L, mx, my);
+          if (slot >= 0) {
+            sellFromSlot(slot, ctrlHeld() ? 999 : 1);
+            handled = true;
+          }
         }
       }
       if (!handled) UI.dialog = null;

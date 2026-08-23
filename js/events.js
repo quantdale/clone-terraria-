@@ -24,6 +24,8 @@
     BuffApplied: 'BuffApplied',
     BuffExpired: 'BuffExpired',
     CraftCompleted: 'CraftCompleted',
+    ShopBuy: 'ShopBuy',
+    ShopSell: 'ShopSell',
     BossDefeated: 'BossDefeated',
     WorldProgressChanged: 'WorldProgressChanged',
     NpcMovedIn: 'NpcMovedIn',
