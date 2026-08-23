@@ -362,16 +362,27 @@
       return false;
     }
 
+    // Body-overlap scan for swim physics. Layer liquid (TC.Liquids, the W1
+    // authority) counts once a cell is at least ~40% full; legacy WATER
+    // tiles remain as a fallback for headless/import-less contexts.
     checkWater() {
       if (!TC.world || typeof TC.world.get !== "function") return false;
       const TS = CONST.TS,
         e = 0.01;
       const x0 = Math.floor((this.x + e) / TS),
         x1 = Math.floor((this.x + this.w - e) / TS);
-      const y0 = Math.floor((this.y + e) / TS),
+      const y0 = Math.floor((this.y + this.h * 0.5) / TS),
         y1 = Math.floor((this.y + this.h - e) / TS);
+      const LQ = TC.Liquids;
       for (let ty = y0; ty <= y1; ty++) {
         for (let tx = x0; tx <= x1; tx++) {
+          if (
+            LQ &&
+            typeof LQ.queryAt === "function"
+          ) {
+            const q = LQ.queryAt(tx, ty);
+            if (q.type !== 0 && q.amount >= 102) return true; // ~40% of 255
+          }
           if (TC.world.get(tx, ty) === TILE.WATER) return true;
         }
       }
@@ -386,24 +397,32 @@
         x1 = Math.floor((this.x + this.w - e) / TS);
       const y0 = Math.floor((this.y + e) / TS),
         y1 = Math.floor((this.y + this.h - e) / TS);
+      const LQ = TC.Liquids;
       for (let ty = y0; ty <= y1; ty++) {
         for (let tx = x0; tx <= x1; tx++) {
+          if (LQ && typeof LQ.queryAt === "function") {
+            const q = LQ.queryAt(tx, ty);
+            if (q.type === 2 && q.amount > 0) return true;
+          }
           if (TC.world.get(tx, ty) === TILE.LAVA) return true;
         }
       }
       return false;
     }
 
-    // Head-submersion test for the breath meter: single tile sample.
+    // Head-submersion test for the breath meter: single tile sample. Water
+    // and honey both displace air; lava does not (it burns instead).
     checkHeadWater() {
       if (!TC.world || typeof TC.world.get !== "function") return false;
       const TS = CONST.TS;
-      return (
-        TC.world.get(
-          Math.floor((this.x + this.w / 2) / TS),
-          Math.floor((this.y + 6) / TS),
-        ) === TILE.WATER
-      );
+      const htx = Math.floor((this.x + this.w / 2) / TS),
+        hty = Math.floor((this.y + 6) / TS);
+      const LQ = TC.Liquids;
+      if (LQ && typeof LQ.queryAt === "function") {
+        const q = LQ.queryAt(htx, hty);
+        if ((q.type === 1 || q.type === 3) && q.amount >= 102) return true;
+      }
+      return TC.world.get(htx, hty) === TILE.WATER;
     }
 
     inReach(tx, ty) {
@@ -727,7 +746,17 @@
         this.mineTarget = null;
         return;
       }
-      if (TC.Gear && TC.Gear.onUseHeld(this, def, dt)) return;
+      if (
+        TC.Gear &&
+        TC.Gear.onUseHeld(this, def, dt)
+      )
+        return;
+      if (
+        TC.Liquids &&
+        typeof TC.Liquids.onUseHeld === "function" &&
+        TC.Liquids.onUseHeld(this, def, dt)
+      )
+        return;
       if (TC.Loot && TC.Loot.onUseHeld(this, def, dt)) return;
       if (
         TC.Fishing &&

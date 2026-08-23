@@ -14,6 +14,11 @@
   const FALLBACK_INTERVAL = 30;
 
   // Pristine baseline for diffing, memoized per seed (generate is deterministic).
+  // W1 liquid migration: the baseline is normalized through the same claim
+  // conversion the runtime applies at build time (WATER/LAVA tiles -> AIR,
+  // liquid owned by the TC.Liquids provider), so imported liquid is not
+  // recorded as thousands of spurious AIR diffs. Legacy saves whose diffs
+  // still carry WATER ids apply them before import and stay byte-compatible.
   let baseCache = null; // { seed, tiles, walls }
   function baseline(seed) {
     if (!TC.WorldGen || typeof TC.WorldGen.generate !== 'function') return null;
@@ -21,7 +26,15 @@
     let gen = null;
     try { gen = TC.WorldGen.generate(seed); } catch (e) { return null; }
     if (!gen || !gen.tiles) return null;
-    baseCache = { seed: seed, tiles: gen.tiles, walls: gen.walls || null };
+    const tiles = gen.tiles;
+    const WATER = TC.TILE ? TC.TILE.WATER : -1;
+    const LAVA = TC.TILE ? TC.TILE.LAVA : -1;
+    for (let i = 0; i < tiles.length; i++) {
+      if (tiles[i] === WATER || tiles[i] === LAVA) {
+        tiles[i] = 0 /* AIR */;
+      }
+    }
+    baseCache = { seed: seed, tiles: tiles, walls: gen.walls || null };
     return baseCache;
   }
 

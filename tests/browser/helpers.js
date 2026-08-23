@@ -164,6 +164,27 @@ async function selectSlot(page, i) {
   await page.keyboard.press("Digit" + ((i + 1) % 10));
 }
 
+// Clear authoritative layer liquid from a tile rect (W1 migration): arena
+// fixtures carve AIR with setRaw, which does NOT touch TC.Liquids — without
+// this, a worldgen pool overlapping the fixture floods it and swim physics
+// take over. Runs in-page; returns displaced cell count.
+async function dryRegion(page, tx0, ty0, tx1, ty1) {
+  return page.evaluate(
+    ([x0, y0, x1, y1]) => {
+      const LQ = window.TC.Liquids;
+      if (!LQ || typeof LQ.displace !== "function") return 0;
+      let n = 0;
+      for (let ty = y0; ty <= y1; ty++) {
+        for (let tx = x0; tx <= x1; tx++) {
+          if (LQ.displace(tx, ty)) n++;
+        }
+      }
+      return n;
+    },
+    [tx0, ty0, tx1, ty1],
+  );
+}
+
 module.exports = {
   trackErrors,
   assertNoErrors,
@@ -176,4 +197,5 @@ module.exports = {
   clickTitleButton,
   aimAt,
   selectSlot,
+  dryRegion,
 };

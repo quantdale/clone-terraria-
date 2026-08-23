@@ -219,7 +219,18 @@
   }
 
   // ---- liquid + zone detection (the "world liquid check") ----
+  // TC.Liquids is the runtime liquid authority (W1); the legacy tile ids are
+  // only a fallback for contexts that never imported.
   function liquidAt(tx, ty) {
+    const LQ = TC.Liquids;
+    if (LQ && typeof LQ.queryAt === 'function') {
+      const q = LQ.queryAt(tx, ty);
+      if (q.amount > 0) {
+        if (q.type === 1) return 'water';
+        if (q.type === 2) return 'lava';
+        if (q.type === 3) return 'honey';
+      }
+    }
     const w = TC.world;
     if (!w || typeof w.get !== 'function') return null;
     const id = w.get(tx, ty);

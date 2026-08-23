@@ -583,8 +583,15 @@ TC.ITEM_DEFS = {
   iron_bar: I("Iron Bar", "material", {}),
   gold_bar: I("Gold Bar", "material", {}),
   gel: I("Gel", "material", {}),
-  arrow: I("Arrow", "ammo", { damage: 4 }),
+   arrow: I("Arrow", "ammo", { damage: 4 }),
   void_charm: I("Void Charm", "summon", { boss: "void_eye", maxStack: 20 }),
+  // Buckets: kind 'bucket' handled by TC.Liquids.onUseHeld. bucketType uses
+  // TC.Liquids.TYPE numerics (1 water, 2 lava, 3 honey) since constants load
+  // before the liquids module.
+  bucket: I("Empty Bucket", "bucket", { bucketEmpty: true, maxStack: 999 }),
+  bucket_water: I("Water Bucket", "bucket", { bucketType: 1, maxStack: 999 }),
+  bucket_lava: I("Lava Bucket", "bucket", { bucketType: 2, maxStack: 999 }),
+  bucket_honey: I("Honey Bucket", "bucket", { bucketType: 3, maxStack: 999 }),
   copper_helmet: I("Copper Helmet", "armor", { slot: "head", defense: 1 }),
   copper_mail: I("Copper Mail", "armor", { slot: "body", defense: 2 }),
   copper_boots: I("Copper Greaves", "armor", { slot: "feet", defense: 1 }),
@@ -720,6 +727,7 @@ TC.RECIPES = [
   { out: "void_charm", n: 1, station: "anvil", cost: { gel: 15, gold_bar: 3 } },
   { out: "chest", n: 1, station: "workbench", cost: { wood: 8, iron_bar: 2 } },
   { out: "door", n: 1, station: "workbench", cost: { wood: 6 } },
+  { out: "bucket", n: 1, station: "anvil", cost: { iron_bar: 3 } },
 ];
 
 // ---- enemies ----

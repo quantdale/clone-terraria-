@@ -67,7 +67,15 @@
     }
     if (diffs || wallDiffs) TC.world.markAllDirty();
     if (TC.Lighting) TC.Lighting.init(TC.world);
-    if (TC.Liquids && typeof TC.Liquids.reset === 'function') TC.Liquids.reset(TC.world);
+    // W1 liquid migration: claim ALL liquid (fresh worldgen output + any
+    // legacy WATER/LAVA diff tiles) into the TC.Liquids volume layer. From
+    // here on the layer is the single runtime authority; the tile ids are
+    // only a legacy representation consumed by this one-way import.
+    if (TC.Liquids && typeof TC.Liquids.importFromWorld === 'function') {
+      try { TC.Liquids.importFromWorld(TC.world); } catch (e) {
+        console.warn('[TC] liquid import failed:', e && e.message);
+      }
+    }
     return gen;
   }
 

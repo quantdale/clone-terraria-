@@ -8,7 +8,7 @@ const H = require("./helpers.js");
 
 // Flat stone floor with controllable columns at x0..x0+7, air above.
 async function buildArena(page) {
-  return page.evaluate(() => {
+  const a = await page.evaluate(() => {
     const TC = window.TC;
     const px = Math.floor((TC.player.x + TC.player.w / 2) / TC.CONST.TS);
     const feetTy = Math.floor((TC.player.y + TC.player.h) / TC.CONST.TS);
@@ -28,6 +28,10 @@ async function buildArena(page) {
     }
     return { px: px, feetTy: feetTy };
   });
+  // setRaw does not touch the authoritative liquid layer — evict any
+  // worldgen pool overlapping the fixture so swim physics cannot hijack it.
+  await H.dryRegion(page, a.px - 7, a.feetTy - 9, a.px + 7, a.feetTy + 3);
+  return a;
 }
 
 test.describe("journey H — terrain shapes", () => {

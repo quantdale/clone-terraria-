@@ -464,11 +464,20 @@
     return cv;
   }
 
-  // Surface line only when the tile above is not water; prefer a world peek,
-  // fall back to the mask (opaque cover) if the world is not up yet.
+  // Surface line only when the tile above is not liquid; prefer the
+  // TC.Liquids volume layer (W1 authority), then a legacy world peek, then
+  // the mask (opaque cover) when neither is up yet.
   function waterAbove(tx, ty, mask) {
+    const LQ = TC.Liquids;
+    if (LQ && typeof LQ.queryAt === 'function') {
+      const q = LQ.queryAt(tx, ty - 1);
+      if (q.amount > 0) return true;
+    }
     const w = TC.world;
-    if (w && typeof w.get === 'function') return w.get(tx, ty - 1) === TC.TILE.WATER;
+    if (w && typeof w.get === 'function') {
+      const id = w.get(tx, ty - 1);
+      if (id === TC.TILE.WATER || id === TC.TILE.LAVA) return true;
+    }
     return !!(mask & 1);
   }
 

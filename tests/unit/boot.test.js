@@ -65,12 +65,25 @@ test('sim: new game starts, world+player live; bare generate() is deterministic'
   assert.deepStrictEqual(Array.from(a.tiles), Array.from(b.tiles),
     'generate(seed) not deterministic across calls');
   assert.deepStrictEqual(Array.from(a.surfaceY), Array.from(b.surfaceY));
-  // World built via buildWorld == bare gen + deterministic loot post-pass.
+  // World built via buildWorld == bare gen + deterministic loot post-pass
+  // + W1 liquid import (WATER/LAVA tiles claimed into TC.Liquids -> AIR).
   const gen2 = TC.WorldGen.generate(12345);
   if (TC.Loot && TC.Loot.populateWorld) TC.Loot.populateWorld(gen2, 12345);
   let same = true;
   for (let i = 0; i < gen2.tiles.length; i++) {
-    if (gen2.tiles[i] !== TC.world.tiles[i]) { same = false; break; }
+    let expected = gen2.tiles[i];
+    if (expected === TC.TILE.WATER || expected === TC.TILE.LAVA) expected = TC.TILE.AIR;
+    if (expected !== TC.world.tiles[i]) { same = false; break; }
   }
-  assert.ok(same, 'buildWorld output != generate()+populateWorld pipeline');
+  assert.ok(same, 'buildWorld output != generate()+populateWorld+liquid-import pipeline');
+  // ...and the claimed liquid actually landed in the authoritative layer.
+  let layerCells = 0;
+  for (let i = 0; i < TC.world.tiles.length; i++) {
+    const id = TC.world.tiles[i];
+    if (id === TC.TILE.WATER || id === TC.TILE.LAVA) {
+      layerCells = -1; break; // stray legacy tile: fail below
+    }
+  }
+  if (layerCells === 0) layerCells = TC.Liquids.stats().cells;
+  assert.ok(layerCells > 0, 'live world kept no liquid and imported none');
 });

@@ -120,7 +120,18 @@
           const id = world.tiles[ty * w + tx];
           const under = ty >= underStart;           // underworld dominates by depth
           let r, g, b;
-          if (id === AIR) {
+          // Layer liquid (TC.Liquids, W1 authority) paints over air cells.
+          let liquidRgb = null;
+          if (id === AIR && TC.Liquids && typeof TC.Liquids.queryAt === 'function') {
+            const q = TC.Liquids.queryAt(tx, ty);
+            if (q.amount > 0 && q.type > 0) {
+              const lc = q.type === 1 ? '#3a6ea8' : q.type === 2 ? '#e85a1a' : '#d18a1f';
+              liquidRgb = this.parseColor(lc);
+            }
+          }
+          if (id === AIR && liquidRgb) {
+            r = liquidRgb[0]; g = liquidRgb[1]; b = liquidRgb[2];
+          } else if (id === AIR) {
             if (under) { r = UNDER_AIR[0]; g = UNDER_AIR[1]; b = UNDER_AIR[2]; }
             else if (ty < surf) { r = skyR; g = skyG; b = skyB; }
             else { r = CAVE_RGB[0]; g = CAVE_RGB[1]; b = CAVE_RGB[2]; }

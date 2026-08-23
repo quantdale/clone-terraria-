@@ -219,44 +219,39 @@ test('liquids: persistence round-trip via SaveCore envelope preserves sparse cel
   assert.deepStrictEqual(after, before, 'round-trip changed the liquid state');
 });
 
-test('liquids: importFromWorld CONSUMES WATER/LAVA tiles (one-way act)', () => {
+test('liquids: a fresh game holds ALL liquid in the layer; import is idempotent', () => {
   const { TC } = setup({ seed: 21 });
   let tiles = 0;
   for (let i = 0; i < TC.world.tiles.length; i++) {
     const id = TC.world.tiles[i];
     if (id === TC.TILE.WATER || id === TC.TILE.LAVA) tiles++;
   }
-  assert.ok(tiles > 0, 'seeded world has no liquids to import (sanity)');
-  const c1 = TC.Liquids.importFromWorld(TC.world);
-  const s1 = TC.Liquids.stats();
-  // Authority boundary: the first import CLAIMS every liquid tile into the
-  // layer (tiles -> AIR), so a second import finds nothing left to convert.
-  const c2 = TC.Liquids.importFromWorld(TC.world);
-  assert.strictEqual(c1, tiles, 'import count != WATER+LAVA tile count');
-  assert.strictEqual(c2, 0, 're-import found liquid tiles — consumption failed');
-  assert.strictEqual(TC.Liquids.stats().cells, s1.cells);
+  assert.strictEqual(tiles, 0,
+    'buildWorld left WATER/LAVA tiles behind — build-time import missing');
+  assert.strictEqual(TC.Liquids.mode(), 'layer', 'authority must be the layer');
+  assert.ok(TC.Liquids.stats().cells > 0, 'layer empty after import');
+  // one-way act: re-import finds nothing left to claim
+  assert.strictEqual(TC.Liquids.importFromWorld(TC.world), 0);
 });
 
-test('liquids: dual-authority — world.set populates/wakes ONLY the legacy sim; layer untouched', () => {
+test('liquids: single authority — stray tiles never simulate; edits never leak across layers', () => {
   const { TC } = setup({ seed: 31 });
   const X0 = 800, Y1 = 100;
   carveArena(TC, X0, Y1 - 6, X0 + 4, Y1);
-  TC.Liquids.reset(TC.world);
 
-  // (a) placing a WATER TILE leaves the layer untouched (legacy is live sim)
+  // (a) placing a WATER TILE writes the grid but never enters/moves in any
+  // simulation: no tile-water mover exists and the layer is untouched.
   TC.world.set(X0 + 2, Y1 - 4, TC.TILE.WATER);          // mid-air in the shaft
   const s = TC.Liquids.sampleAt((X0 + 2) * 16 + 8, (Y1 - 4) * 16 + 8);
   assert.strictEqual(s.type, TC.Liquids.TYPE.NONE,
-    'layer unexpectedly mirrors tile water — migration flipped? update this test');
-
-  // ...and the legacy sim DID wake: the tile free-falls to the floor
+    'tile water leaked into the layer');
   for (let i = 0; i < 20; i++) TC.world.update(0.05);
-  assert.strictEqual(TC.world.get(X0 + 2, Y1), TC.TILE.WATER,
-    'legacy water did not land on the arena floor — legacy sim dead? update this test');
+  assert.strictEqual(TC.world.get(X0 + 2, Y1 - 4), TC.TILE.WATER,
+    'a tile-water simulation still runs — dual simulation is back');
 
   // (b) writing the layer never leaks into the tile grid either
   TC.Liquids.reset(TC.world);
   assert.ok(TC.Liquids.set(X0 + 1, Y1, TC.Liquids.TYPE.WATER, 255));
   assert.strictEqual(TC.world.get(X0 + 1, Y1), TC.TILE.AIR,
-    'layer write leaked into tiles — migration flipped? update this test');
+    'layer write leaked into tiles');
 });

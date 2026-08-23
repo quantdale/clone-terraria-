@@ -138,27 +138,12 @@
   };
   TC.Shapes = SHAPES;
 
-  // ---- flowing water (active-set cellular sim) ----
-  const WATER_TICK = 0.05; // seconds between sim steps
-  const WATER_BUDGET = 400; // active cells processed per step
-  const WATER_MAX_ACTIVE = 4000; // active-set size cap
-  // Tile indices of water cells due for a sim step; insertion order = age
-  // order. Module-level: only one World lives at a time, and the constructor
-  // clears it so indices never leak across worlds.
-  const waterActive = new Set();
-
-  function wakeWater(i) {
-    if (waterActive.has(i)) return;
-    if (waterActive.size >= WATER_MAX_ACTIVE) {
-      // Evict the oldest entries (Sets iterate in insertion order).
-      let excess = waterActive.size - WATER_MAX_ACTIVE + 1;
-      for (const k of waterActive) {
-        waterActive.delete(k);
-        if (--excess <= 0) break;
-      }
-    }
-    waterActive.add(i);
-  }
+  // ---- flowing water ----
+  // REMOVED (W1 liquid migration): the legacy WATER-tile active-set mover
+  // lived here. TC.Liquids is now the single runtime liquid authority — every
+  // world is imported into its volume layer at build time and these tile ids
+  // never simulate. Edits wake the layer via TC.Liquids.wake below; solid
+  // placements displace layer liquid through TC.Liquids.displace.
 
   // Open/closed furniture pairs: closed tile id -> open tile id and back.
   // Doors register here; new two-state furniture adds one line each way.
@@ -191,8 +176,6 @@
       this.chunksY = Math.ceil(this.height / this.CHUNK);
       this.chunks = new Map(); // chunkKey -> { cv, ctx } canvas cache
       this.dirty = new Set(); // chunkKeys needing a rebuild
-      this.waterAcc = 0; // water sim accumulator (seconds)
-      waterActive.clear(); // drop cells left over from an old world
       this.markAllDirty();
     }
 
@@ -229,11 +212,31 @@
     set(x, y, id) {
       if (!this.inB(x, y)) return;
       const i = this.idx(x, y);
+      const prevId = this.tiles[i];
       this.tiles[i] = id;
       this.damage.delete(i); // a rewritten tile loses its crack state
       this.shapes[i] = 0; // ...and any hammer shape / paint on it
       this.paints.delete(i);
-      this.seedWater(i); // wake water touched by the edit
+      // A solid/opaque placement buries any layer liquid in the cell.
+      if (
+        id !== TC.TILE.AIR &&
+        TC.TILE_DEFS[id].solid &&
+        TC.Liquids &&
+        typeof TC.Liquids.displace === "function"
+      ) {
+        try {
+          TC.Liquids.displace(x, y);
+        } catch (e) {}
+      }
+      if (prevId === TC.TILE.WATER || prevId === TC.TILE.LAVA) {
+        // Overwriting a legacy liquid tile by hand claims nothing — clear the
+        // layer cell too so the invariant can never break from this side.
+        if (TC.Liquids && typeof TC.Liquids.displace === "function") {
+          try {
+            TC.Liquids.displace(x, y);
+          } catch (e) {}
+        }
+      }
       this.rescanSurface(x);
       this.markDirtyAt(x, y);
       if (TC.Lighting) TC.Lighting.onTileChanged(x, y);
@@ -258,8 +261,14 @@
       this.damage.delete(i);
       this.shapes[i] = 0; // a rewritten tile loses shape/paint state
       this.paints.delete(i);
-      this.seedWater(i); // wake water touched by the write
       this.markDirtyAt(x, y);
+      // Tree felling / bulk writes can open cells under liquid — wake the
+      // layer around the change so pools react on the next settle step.
+      if (id === TC.TILE.AIR && TC.Liquids && typeof TC.Liquids.wake === "function") {
+        try {
+          TC.Liquids.wake(x, y);
+        } catch (e) {}
+      }
       if (TC.Events) {
         try {
           TC.Events.emit(TC.Events.EVENT.TileChanged, { tx: x, ty: y, id: id });
@@ -592,40 +601,12 @@
     }
 
     // ---- flowing water ----
-    // An edit wakes the written cell plus any WATER 4-neighbours so the sim
-    // reacts to holes dug under pools, blocks placed into water, etc.
-    seedWater(i) {
-      const w = this.width;
-      const x = i % w,
-        y = (i / w) | 0;
-      const touch =
-        this.tiles[i] === TC.TILE.WATER ||
-        (y > 0 && this.tiles[i - w] === TC.TILE.WATER) ||
-        (y < this.height - 1 && this.tiles[i + w] === TC.TILE.WATER) ||
-        (x > 0 && this.tiles[i - 1] === TC.TILE.WATER) ||
-        (x < w - 1 && this.tiles[i + 1] === TC.TILE.WATER);
-      if (!touch) return;
-      wakeWater(i); // the written cell itself always joins
-      this.wakeAround(i);
-    }
+    // (legacy tile-water sim removed — see module comment near the top of
+    // this class's file section; TC.Liquids owns all runtime liquid)
 
-    // Add the WATER 4-neighbours of a cell to the active set.
-    wakeAround(i) {
-      const w = this.width;
-      const x = i % w,
-        y = (i / w) | 0;
-      if (y > 0 && this.tiles[i - w] === TC.TILE.WATER) wakeWater(i - w);
-      if (y < this.height - 1 && this.tiles[i + w] === TC.TILE.WATER)
-        wakeWater(i + w);
-      if (x > 0 && this.tiles[i - 1] === TC.TILE.WATER) wakeWater(i - 1);
-      if (x < w - 1 && this.tiles[i + 1] === TC.TILE.WATER) wakeWater(i + 1);
-    }
-
-    // Water-sim write: dirty chunks only. No rescan/relight/support-pop/drops
-    // and no seeding (the sim wakes cells explicitly). Water and air are both
-    // non-solid and non-opaque, so surfaceY and lighting are unaffected; a
-    // plant stranded over flowed-away water just stays until a player edit
-    // re-runs the support checks.
+    // Water-sim write kept for TC.Liquids' water+lava -> stone contact and
+    // other raw internal writes: dirty chunks only. No rescan/relight/
+    // support-pop/drops and no seeding.
     rawSetTile(x, y, id) {
       const i = this.idx(x, y);
       this.tiles[i] = id;
@@ -633,98 +614,6 @@
       this.shapes[i] = 0; // a rewritten tile loses shape/paint state
       this.paints.delete(i);
       this.markDirtyAt(x, y);
-    }
-
-    // Budgeted sim pass, at most every WATER_TICK. Stale (non-water) entries
-    // settle out; water that cannot move is considered settled and leaves the
-    // set until an edit or a neighbour's move wakes it again.
-    stepWater(dt) {
-      // Authority guard: once TC.Liquids has claimed the world's liquid into
-      // the layer (import/restore, mode 'layer'), the legacy tile sim is
-      // frozen — it must never mutate liquid the layer owns.
-      const LQ = TC.Liquids;
-      if (LQ && typeof LQ.mode === "function" && LQ.mode() === "layer") return;
-      this.waterAcc += dt;
-      if (this.waterAcc < WATER_TICK) return;
-      this.waterAcc %= WATER_TICK;
-      if (!waterActive.size) return;
-      let budget = WATER_BUDGET;
-      for (const i of waterActive) {
-        if (budget-- <= 0) break;
-        if (this.tiles[i] !== TC.TILE.WATER) {
-          waterActive.delete(i);
-          continue;
-        }
-        if (!this.flowWater(i)) waterActive.delete(i);
-      }
-    }
-
-    // One cell's rules: fall into AIR below, else spread sideways into AIR
-    // that has floor under it or water beside it. Returns true if it moved.
-    flowWater(i) {
-      const w = this.width;
-      const x = i % w,
-        y = (i / w) | 0;
-      if (y + 1 < this.height && this.tiles[i + w] === TC.TILE.AIR) {
-        this.moveWater(i, x, y, x, y + 1);
-        return true;
-      }
-      // Preferred side alternates with index parity so neighbouring cells
-      // don't all shove the same way each step (avoids jitter). Sideways
-      // flow needs a reason: water pressing from above (column overflow)
-      // or a water neighbour beside the target (pool-surface levelling).
-      // A lone tile on flat ground has neither, so it settles instead of
-      // drifting/ping-ponging across the floor forever.
-      const l = x > 0 ? i - 1 : -1;
-      const r = x < w - 1 ? i + 1 : -1;
-      const pressed = y > 0 && this.tiles[i - w] === TC.TILE.WATER;
-      const first = (i & 1) === 0 ? r : l;
-      const second = first === l ? r : l;
-      const trySide = (t) => {
-        if (t < 0 || !this.canSpreadInto(t, i)) return false;
-        const tx = t % w;
-        const beside =
-          (tx > 0 && t - 1 !== i && this.tiles[t - 1] === TC.TILE.WATER) ||
-          (tx < w - 1 && t + 1 !== i && this.tiles[t + 1] === TC.TILE.WATER);
-        return pressed || beside;
-      };
-      if (trySide(first)) {
-        this.moveWater(i, x, y, first % w, (first / w) | 0);
-        return true;
-      }
-      if (trySide(second)) {
-        this.moveWater(i, x, y, second % w, (second / w) | 0);
-        return true;
-      }
-      return false;
-    }
-
-    // A sideways target qualifies when the AIR cell has solid ground under
-    // it, or sits beside other water (spreading along a pool surface).
-    canSpreadInto(t, from) {
-      if (this.tiles[t] !== TC.TILE.AIR) return false;
-      const w = this.width;
-      const tx = t % w,
-        ty = (t / w) | 0;
-      if (ty + 1 < this.height && TC.TILE_DEFS[this.tiles[t + w]].solid)
-        return true;
-      return (
-        (tx > 0 && t - 1 !== from && this.tiles[t - 1] === TC.TILE.WATER) ||
-        (tx < w - 1 && t + 1 !== from && this.tiles[t + 1] === TC.TILE.WATER)
-      );
-    }
-
-    // Move a water cell: raw writes, then wake the moved cell, its new
-    // neighbourhood, and the one it left (water above the gap follows on the
-    // next step).
-    moveWater(i, x, y, nx, ny) {
-      this.rawSetTile(x, y, TC.TILE.AIR);
-      this.rawSetTile(nx, ny, TC.TILE.WATER);
-      waterActive.delete(i);
-      const j = this.idx(nx, ny);
-      wakeWater(j);
-      this.wakeAround(j);
-      this.wakeAround(i);
     }
 
     // ---- chunk rendering ----
@@ -754,7 +643,6 @@
 
     // Rebuild up to 3 dirty chunks per frame, nearest the camera first.
     update(dt) {
-      this.stepWater(dt); // water moves mark chunks dirty, rebuilt below
       if (!this.dirty.size || !TC.Tiles) return;
       const span = this.CHUNK * TS;
       const cam = TC.camera;

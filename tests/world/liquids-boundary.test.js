@@ -1,11 +1,17 @@
-/* tests/world/liquids-boundary.test.js — Phase 7: liquid authority invariant.
-   Proves the one-directional compatibility boundary between the legacy
-   WATER/LAVA tile sim (world.js) and the TC.Liquids type/amount layer:
-     INVARIANT: no cell ever simultaneously holds a legacy liquid tile
-     (TILE.WATER / TILE.LAVA) AND layer liquid (type != NONE && amount > 0).
-   Enforcement paths under test: claim-on-set, consuming importFromWorld,
-   restore filtering, stepWater freeze in 'layer' mode, and unchanged
-   default-mode ('tiles') behavior for normal gameplay edits. */
+/* tests/world/liquids-boundary.test.js — W1 campaign: liquid authority
+   invariant under the SINGLE-AUTHORITY contract:
+     - TC.Liquids owns all runtime liquid. main.buildWorld() imports every
+       WATER/LAVA tile into the volume layer at build time, so live worlds
+       hold NO liquid tiles and run in mode 'layer'.
+     - Legacy WATER/LAVA tile ids are only a representation (worldgen output,
+       legacy-save diffs). No tile liquid simulation exists any more; a stray
+       WATER tile written by hand stays exactly where it is until an import
+       claims it.
+      INVARIANT: no cell ever simultaneously holds a legacy liquid tile
+      (TILE.WATER / TILE.LAVA) AND layer liquid (type != NONE && amount > 0).
+   Enforcement paths under test: build-time import coherence, claim-on-set,
+   consuming importFromWorld, restore filtering, displacement by solid
+   placements, and SaveCore round-trips keeping the authority. */
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -91,10 +97,10 @@ test('boundary: Liquids.set over a WATER tile CLAIMS the cell (tile -> AIR)', ()
   const { TC } = setup(101);
   const X = 500, YFLOOR = 140;
   carveArena(TC, X - 3, YFLOOR - 3, X + 3, YFLOOR);
-  // legacy water via world.set (full edit path seeds the active set)
+  // a stray legacy liquid tile (only possible by hand now — worldgen liquid
+  // is imported at build time)
   TC.world.set(X, YFLOOR, TC.TILE.WATER);
   assert.strictEqual(TC.world.get(X, YFLOOR), TC.TILE.WATER, 'precondition');
-  assert.strictEqual(TC.Liquids.mode(), 'tiles', 'default mode must be tiles');
 
   // claim it into the layer
   assert.ok(TC.Liquids.set(X, YFLOOR, TC.Liquids.TYPE.WATER, 255));
@@ -102,10 +108,10 @@ test('boundary: Liquids.set over a WATER tile CLAIMS the cell (tile -> AIR)', ()
     'layer write did not clear the legacy liquid tile');
   assert.strictEqual(TC.Liquids.sampleAt(X * 16 + 8, YFLOOR * 16 + 8).amount, 255);
 
-  // legacy sim steps cannot resurrect or move anything there
+  // nothing can resurrect or move the claimed cell: no tile sim exists
   for (let i = 0; i < 20; i++) TC.world.update(0.05);
   assert.notStrictEqual(TC.world.get(X, YFLOOR), TC.TILE.WATER,
-    'legacy sim re-materialized claimed water');
+    'claimed water re-materialized as a tile');
   const inv = scanInvariant(TC);
   assert.ok(inv.ok, 'invariant broken at ' + JSON.stringify(inv.cell));
 });
@@ -195,38 +201,36 @@ test('boundary: after import, both sims run freely yet never diverge; pure-water
     'pure-water layer mass changed without evaporation/contact causes');
 });
 
-// ---- d. mode transitions + frozen legacy sim ---------------------------------
+// ---- d. no tile-liquid simulation exists ------------------------------------
 
-test('boundary: reset -> tiles, import -> layer; legacy sim frozen in layer mode', () => {
+test('boundary: stray WATER tiles never simulate — only the layer moves liquid', () => {
   const { TC } = setup(44);
   const X = 600, YF = 120;
   carveArena(TC, X - 3, YF - 2, X + 3, YF);
-  assert.strictEqual(TC.Liquids.mode(), 'tiles');
-
-  assert.ok(TC.Liquids.importFromWorld(TC.world));
+  assert.ok(TC.Liquids.importFromWorld(TC.world) >= 0); // idempotent no-op here
   assert.strictEqual(TC.Liquids.mode(), 'layer');
 
-  // While mode === 'layer': manually place a WATER tile over open air — the
-  // legacy sim would free-fall it within one tick if not frozen.
+  // A hand-placed WATER tile over open air must stay put forever: the legacy
+  // tile mover was removed in W1 and nothing else may mutate liquid tiles.
   const wx = X, wyA = YF - 4;
   TC.world.setRaw(wx, wyA, TC.TILE.WATER);
-  for (let i = 0; i < 30; i++) TC.world.update(0.05);
+  for (let i = 0; i < 60; i++) TC.world.update(0.05);
   assert.strictEqual(TC.world.get(wx, wyA), TC.TILE.WATER,
-    'legacy sim moved water while mode was layer (freeze broken)');
+    'a tile-water simulation still runs — dual simulation is back');
   assert.strictEqual(TC.Liquids.sampleAt(wx * 16 + 8, wyA * 16 + 8).amount, 0,
     'stray tile leaked into the layer');
 
-  // Back to 'tiles' via reset: same placement now falls to the floor row.
-  TC.Liquids.reset(TC.world);
-  assert.strictEqual(TC.Liquids.mode(), 'tiles');
-  TC.world.setRaw(wx, wyA, TC.TILE.WATER);
-  let fell = false;
-  for (let i = 0; i < 60 && !fell; i++) {
-    TC.world.update(0.05);
-    fell = TC.world.get(wx, wyA) !== TC.TILE.WATER &&
-           TC.world.get(wx, YF) === TC.TILE.WATER;
+  // ...and worldgen-imported layer liquid DOES fall/settle in the same span:
+  // prove movement exists exactly once, on the authoritative side.
+  carveArena(TC, X - 3, YF - 2, X + 3, YF);
+  TC.world.setRaw(wx, wyA, TC.TILE.AIR);
+  assert.ok(TC.Liquids.set(X, wyA, TC.Liquids.TYPE.WATER, 255));
+  let landed = false;
+  for (let i = 0; i < 60 && !landed; i++) {
+    TC.Liquids.update(0.05);
+    landed = TC.Liquids.sampleAt(X * 16 + 8, YF * 16 + 8).amount > 0;
   }
-  assert.ok(fell, 'legacy sim did not resume after Liquids.reset');
+  assert.ok(landed, 'authoritative layer did not settle a free-falling cell');
 });
 
 // ---- e. persistence keeps the boundary --------------------------------------
@@ -279,15 +283,34 @@ test('boundary: restore filters layer data that collides with live liquid tiles'
   assert.strictEqual(TC.world.get(X, Y1), TC.TILE.WATER, 'hostile restore ate the tile');
 });
 
-// ---- f. default-mode coherence (no behavioral change pre-import) --------------
+// ---- f. build-time import coherence (the migration act) ----------------------
 
-test('boundary: default tiles mode — world.set populates ONLY the legacy sim', () => {
+test('boundary: a fresh game imports ALL worldgen liquid — zero liquid tiles live', () => {
   const { TC } = setup(57);
-  const X = 300, Y1 = 150;
+  // newGame -> buildWorld -> importFromWorld: the whole grid must be claimed
+  assert.strictEqual(countLegacyLiquid(TC), 0,
+    'live world still holds WATER/LAVA tiles after the build-time import');
+  assert.strictEqual(TC.Liquids.mode(), 'layer', 'runtime authority must be the layer');
+  assert.ok(TC.Liquids.stats().cells > 0, 'imported layer is empty (nothing imported?)');
+
+  // gameplay edits never flip the authority back
+  TC.world.set(600, 100, TC.TILE.STONE);
+  assert.strictEqual(TC.Liquids.mode(), 'layer', 'gameplay edits must not flip mode');
+  // ...and re-import is a no-op once everything is claimed
+  assert.strictEqual(TC.Liquids.importFromWorld(TC.world), 0,
+    'second import found liquid tiles — consumption failed');
+});
+
+// ---- g. solid placement displaces layer liquid ------------------------------
+
+test('boundary: placing a solid tile into layer liquid displaces it', () => {
+  const { TC } = setup(58);
+  const X = 320, Y1 = 150;
   carveArena(TC, X - 3, Y1 - 2, X + 3, Y1);
-  assert.strictEqual(TC.Liquids.mode(), 'tiles');
-  TC.world.set(X, Y1, TC.TILE.WATER);
-  assert.strictEqual(TC.world.get(X, Y1), TC.TILE.WATER);
-  assert.strictEqual(TC.Liquids.stats().cells, 0, 'layer must stay untouched');
-  assert.strictEqual(TC.Liquids.mode(), 'tiles', 'gameplay edits must not flip mode');
+  assert.ok(TC.Liquids.set(X, Y1, TC.Liquids.TYPE.WATER, 255), 'precondition');
+  TC.world.set(X, Y1, TC.TILE.STONE);
+  assert.strictEqual(TC.Liquids.sampleAt(X * 16 + 8, Y1 * 16 + 8).amount, 0,
+    'solid placement left liquid buried inside a block');
+  const inv = scanInvariant(TC);
+  assert.ok(inv.ok, 'invariant broken at ' + JSON.stringify(inv.cell));
 });

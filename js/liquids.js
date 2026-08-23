@@ -1,16 +1,19 @@
-/* liquids.js — independent liquid layer foundation (ARCHITECTURE campaign).
+/* liquids.js — THE authoritative liquid simulation (GAMEPLAY campaign W1).
    Liquid lives in two typed arrays (type + amount 0..255 per cell) layered
    over the tile grid. Provides a budgeted volume-based settle sim (fall /
    spread / equalize / evaporate, water+lava -> stone contact), immersion
    queries for breath/buoyancy consumers, wave rendering, sparse SaveCore
-   persistence, and a CONSUMING bridge import from WATER/LAVA tiles.
-   Authority model (one-directional compatibility boundary):
-     - mode 'tiles' (default): legacy WATER/LAVA tile ids own all liquid;
-       world.stepWater() simulates them and this layer stays empty unless a
-       caller explicitly writes it.
-     - mode 'layer': entered by importFromWorld() or provider restore. All
-       imported liquid was CLAIMED out of the tile grid (tiles -> AIR),
-       world.stepWater() is frozen, and this layer is the single authority.
+   persistence, bucket collect/place interactions, and a CONSUMING bridge
+   import from WATER/LAVA tiles.
+   Authority model (single authority, one-way migration):
+     - Every runtime world enters mode 'layer' at build time: main.buildWorld
+       calls importFromWorld() which CLAIMS all WATER/LAVA tiles out of the
+       grid (tiles -> AIR) into this layer. The legacy tile ids survive only
+       as worldgen output format and legacy-save diff payloads; they never
+       simulate anything (the old World.stepWater mover was removed).
+     - Legacy liquid tiles are treated as SOLID by this sim so flow can never
+       re-enter them, and claim-on-set clears them when the layer writes a
+       cell they occupy.
    Invariant: no cell ever holds BOTH a legacy liquid tile AND layer liquid.
    Enforced by claim-on-set, consuming import, restore filtering, and the
    settle sim refusing to enter legacy-liquid cells. */
@@ -330,6 +333,188 @@
     return { type: liquidType[i], amount: a, percent: a / FULL };
   }
 
+  // Tile-coord query for consumers (fishing zones, minimap, rendering):
+  // { type, amount } at a cell, zeros when out of bounds / not ready.
+  function queryAt(tx, ty) {
+    const w = worldRef;
+    if (!ready || !w || !w.inB(tx, ty)) {
+      return { type: TYPE.NONE, amount: 0 };
+    }
+    const i = ty * w.width + tx;
+    return { type: liquidType[i], amount: liquidAmount[i] };
+  }
+
+  // Displace the liquid under a newly placed tile: the volume is destroyed
+  // (not pushed — deterministic and simple), neighbours wake so pools close
+  // the gap. Called from World.set when a solid/opaque tile covers a cell.
+  function displace(x, y) {
+    const w = worldRef;
+    if (!ready || !w || !w.inB(x, y)) return false;
+    const i = ty_idx(w, x, y);
+    if (liquidType[i] === TYPE.NONE && liquidAmount[i] === 0) return false;
+    liquidType[i] = TYPE.NONE;
+    liquidAmount[i] = 0;
+    noteChange(i);
+    wakeAroundIdx(i);
+    return true;
+  }
+
+  function ty_idx(w, x, y) {
+    return y * w.width + x;
+  }
+
+  // ---- buckets -------------------------------------------------------
+  // Canonical liquid containers: an empty bucket scoops a settled cell
+  // (needs BUCKET_MIN volume), a filled bucket pours a FULL cell into an
+  // empty, non-solid one. Either way the held item converts in place.
+  const COLLECT_MIN = 96; // ~38% of a cell: puddle films can't be scooped
+  const BUCKET_CD = 0.3; // seconds between uses (player._bucketCd)
+  const BUCKET_ITEM = { 1: "bucket_water", 2: "bucket_lava", 3: "bucket_honey" };
+
+  // Scoop the whole cell at (tx,ty). Returns the collected TYPE or 0 when
+  // too shallow / dry / blocked.
+  function collectAt(tx, ty) {
+    const w = worldRef;
+    if (!ready || !w || !w.inB(tx, ty)) return 0;
+    const i = ty_idx(w, tx, ty);
+    if (liquidAmount[i] < COLLECT_MIN) return 0;
+    const t = liquidType[i];
+    if (!t) return 0;
+    liquidType[i] = TYPE.NONE;
+    liquidAmount[i] = 0;
+    noteChange(i);
+    wakeAroundIdx(i);
+    return t;
+  }
+
+  // Pour a FULL cell of `type` at (tx,ty). Fails on solids, other liquids,
+  // legacy liquid tiles and cells that already hold liquid. Wakes the cell.
+  function placeAt(tx, ty, type) {
+    const w = worldRef;
+    type = clampType(type);
+    if (!type || !ready || !w || !w.inB(tx, ty)) return false;
+    const id = w.tiles[ty_idx(w, tx, ty)];
+    if (id === TC.TILE.WATER || id === TC.TILE.LAVA) return false;
+    if (typeof w.isSolid === "function" ? w.isSolid(tx, ty) : !!TC.TILE_DEFS[id].solid)
+      return false;
+    const i = ty_idx(w, tx, ty);
+    if (liquidType[i] !== TYPE.NONE) return false;
+    liquidType[i] = type;
+    liquidAmount[i] = FULL;
+    noteChange(i);
+    wakeIdx(i);
+    wakeAroundIdx(i);
+    return true;
+  }
+
+  // Lead-facing use hook (kind 'bucket' items). True = the vanilla switch
+  // must not run. Click-paced via player._bucketCd; dt only ticks it down.
+  function onUseHeld(player, def, dt) {
+    if (!player || !def || def.kind !== "bucket") return false;
+    if ((player._bucketCd || 0) > 0) {
+      player._bucketCd -= dt || 0; // click-paced: swallow the hold while hot
+      return true;
+    }
+    const inp = TC.Input;
+    const m = inp && inp.mouse;
+    if (!m || !isFinite(m.worldX) || !isFinite(m.worldY)) return true;
+    const tx = Math.floor(m.worldX / TS),
+      ty = Math.floor(m.worldY / TS);
+    const sel =
+      typeof player.selectedSlot === "function" ? player.selectedSlot() : null;
+    const inv = player.inventory;
+    if (!sel || !inv || typeof inv.add !== "function") return true;
+
+    let used = false;
+    if (def.bucketEmpty) {
+      const got = collectAt(tx, ty);
+      if (got && BUCKET_ITEM[got] && TC.ITEM_DEFS[BUCKET_ITEM[got]]) {
+        used = swapHeld(inv, sel.id, BUCKET_ITEM[got]);
+        if (used) splashFx(tx, ty, got);
+      } else {
+        floatTxt(
+          m.worldX,
+          m.worldY,
+          "no liquid",
+          "#9ecbff",
+        );
+      }
+    } else if (def.bucketType) {
+      if (placeAt(tx, ty, def.bucketType)) {
+        used = swapHeld(inv, sel.id, "bucket");
+        if (used) splashFx(tx, ty, clampType(def.bucketType));
+      }
+    }
+    if (used) {
+      player._bucketCd = BUCKET_CD;
+      sfx("splash");
+    }
+    return true;
+  }
+
+  // Consume one of itemId from the slot that holds it and add `giveId`.
+  // Prefers the selected slot; falls back to any stack of the same id.
+  function swapHeld(inv, itemId, giveId) {
+    const slots = Array.isArray(inv.slots) ? inv.slots : null;
+    if (!slots) return false;
+    let idx = -1;
+    for (let i = 0; i < slots.length; i++) {
+      if (slots[i] && slots[i].id === itemId) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0 || !TC.ITEM_DEFS[giveId]) return false;
+    slots[idx].count--;
+    if (slots[idx].count <= 0) slots[idx] = null;
+    inv.add(giveId, 1);
+    if (
+      TC.Events &&
+      typeof TC.Events.emit === "function" &&
+      TC.Events.EVENT &&
+      TC.Events.EVENT.InventoryChanged
+    ) {
+      try {
+        TC.Events.emit(TC.Events.EVENT.InventoryChanged, {
+          reason: "bucket",
+          from: String(itemId),
+          to: String(giveId),
+        });
+      } catch (e) {}
+    }
+    return true;
+  }
+
+  function splashFx(tx, ty, t) {
+    const c = COLORS[t] || COLORS[1];
+    if (TC.Particles && typeof TC.Particles.burst === "function") {
+      try {
+        TC.Particles.burst((tx + 0.5) * TS, (ty + 0.5) * TS, 8, {
+          colors: [c],
+          speed: 70,
+          life: 0.4,
+          size: 2,
+        });
+      } catch (e) {}
+    }
+  }
+
+  function sfx(name) {
+    if (TC.Audio && typeof TC.Audio.play === "function") {
+      try {
+        TC.Audio.play(name);
+      } catch (e) {}
+    }
+  }
+
+  function floatTxt(x, y, str, color) {
+    if (TC.Particles && typeof TC.Particles.floatText === "function") {
+      try {
+        TC.Particles.floatText(x, y, str, color);
+      } catch (e) {}
+    }
+  }
+
   // Topmost liquid row in a tile column, -1 when the column is dry.
   function columnSurface(tx) {
     const w = worldRef;
@@ -573,14 +758,25 @@
     wake: wake,
     set: set,
     sampleAt: sampleAt,
+    queryAt: queryAt,
+    displace: displace,
+    collectAt: collectAt,
+    placeAt: placeAt,
+    onUseHeld: onUseHeld,
     columnSurface: columnSurface,
     averageColumnSurface: averageColumnSurface,
     importFromWorld: importFromWorld,
     stats: stats,
 
-    // Authority mode of the current world's liquid: 'tiles' until an explicit
-    // import/restore claims the liquid into this layer, then 'layer'. Read by
-    // world.stepWater() to freeze the legacy sim once the layer owns liquid.
+    // Authority mode of the current world's liquid. Runtime worlds are
+    // imported into the layer at build time, so this reads 'layer' during
+    // normal play; headless tests may still see 'tiles' before importing.
     mode: () => mode,
+
+    // True when (tx,ty) holds layer liquid of any type with volume > 0.
+    isLiquid: (tx, ty) => {
+      const q = queryAt(tx, ty);
+      return q.type !== TYPE.NONE && q.amount > 0;
+    },
   };
 })();

@@ -759,6 +759,41 @@
     rect(g, '#181022', 9, 8, 2, 2);
   }
 
+  // Buckets: riveted metal pail with an arc handle; the fill color names the
+  // liquid it carries (empty shows bare interior).
+  const BUCKET_FILL = {
+    bucket_water: ['#3a6ea8', '#5a8ec8'],
+    bucket_lava: ['#e85a1a', '#ffb03a'],
+    bucket_honey: ['#d18a1f', '#f0b455'],
+  };
+  function paintBucket(g, id) {
+    g.fillStyle = '#9aa0ad';               // body
+    g.beginPath();
+    g.moveTo(3.5, 6);
+    g.lineTo(12.5, 6);
+    g.lineTo(11.2, 14);
+    g.lineTo(4.8, 14);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = '#7d828e';             // body shading
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(4, 13); g.lineTo(12, 13); g.stroke();
+    g.strokeStyle = '#c6ccd8';             // rim + handle
+    g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(3, 6); g.lineTo(13, 6); g.stroke();
+    g.beginPath(); g.moveTo(4.5, 6); g.quadraticCurveTo(8, 1.5, 11.5, 6); g.stroke();
+    const fill = BUCKET_FILL[id];
+    if (fill) {
+      g.fillStyle = fill[0];               // liquid surface peeking over the rim
+      g.fillRect(4.5, 6.5, 7, 2);
+      g.fillStyle = fill[1];
+      g.fillRect(5.5, 6.5, 2, 1);
+    } else {
+      g.fillStyle = '#5d626e';             // empty: dark interior
+      g.fillRect(4.5, 6.8, 7, 1.6);
+    }
+  }
+
   function shade(hex, amt) {             // hex like #rrggbb -> lightened/darkened
     const n = parseInt(hex.slice(1), 16);
     const r = Math.max(0, Math.min(255, ((n >> 16) & 255) + amt));
@@ -784,6 +819,7 @@
     if (id === 'arrow') return paintArrow(g);
     if (d && d.kind === 'armor') return paintArmor(g, id);
     if (d && d.kind === 'summon') return paintCharm(g);
+    if (d && d.kind === 'bucket') return paintBucket(g, id);
     if (d && d.kind === 'material') {
       if (/_bar$/.test(id) && metal) return paintBar(g, metal);
       if (/_ore$/.test(id) && metal) return paintOre(g, metal);
