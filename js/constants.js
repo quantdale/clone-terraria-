@@ -597,6 +597,16 @@ TC.ITEM_DEFS = {
   bucket_water: I("Water Bucket", "bucket", { bucketType: 1, maxStack: 999 }),
   bucket_lava: I("Lava Bucket", "bucket", { bucketType: 2, maxStack: 999 }),
   bucket_honey: I("Honey Bucket", "bucket", { bucketType: 3, maxStack: 999 }),
+  // Grappling hooks (kind 'grapple' -> TC.Grapple): grapple = { range px,
+  // pull accel px/s^2, flight speed px/s }. A short progression ladder.
+  hook_basic: I("Grappling Hook", "grapple", {
+    grapple: { range: 270, pull: 540, speed: 760 },
+    maxStack: 1,
+  }),
+  hook_gemshot: I("Gemshot Hook", "grapple", {
+    grapple: { range: 400, pull: 680, speed: 900 },
+    maxStack: 1,
+  }),
   copper_helmet: I("Copper Helmet", "armor", { slot: "head", defense: 1 }),
   copper_mail: I("Copper Mail", "armor", { slot: "body", defense: 2 }),
   copper_boots: I("Copper Greaves", "armor", { slot: "feet", defense: 1 }),
@@ -733,6 +743,13 @@ TC.RECIPES = [
   { out: "chest", n: 1, station: "workbench", cost: { wood: 8, iron_bar: 2 } },
   { out: "door", n: 1, station: "workbench", cost: { wood: 6 } },
   { out: "bucket", n: 1, station: "anvil", cost: { iron_bar: 3 } },
+  { out: "hook_basic", n: 1, station: "anvil", cost: { iron_bar: 10, wood: 5 } },
+  {
+    out: "hook_gemshot",
+    n: 1,
+    station: "anvil",
+    cost: { gold_bar: 8, glass: 12 },
+  },
 ];
 
 // ---- economy: base item values (copper units; TC.Economy scale) ----
@@ -756,6 +773,7 @@ TC.RECIPES = [
     gold_helmet: 180, gold_mail: 280, gold_boots: 140,
     void_charm: 500,
     bucket_water: 30, bucket_lava: 60, bucket_honey: 45,
+    hook_basic: 120, hook_gemshot: 400,
   };
   for (const id in V) {
     if (TC.ITEM_DEFS[id]) TC.ITEM_DEFS[id].value = V[id];

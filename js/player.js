@@ -747,6 +747,12 @@
         return;
       }
       if (
+        TC.Grapple &&
+        typeof TC.Grapple.onUseHeld === "function" &&
+        TC.Grapple.onUseHeld(this, def, dt)
+      )
+        return;
+      if (
         TC.Gear &&
         TC.Gear.onUseHeld(this, def, dt)
       )

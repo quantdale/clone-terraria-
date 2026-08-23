@@ -794,6 +794,30 @@
     }
   }
 
+  // Grappling hooks: coiled rope around a three-pronged head; the gemshot
+  // variant gets a gold head and a violet gem.
+  function paintGrapple(g, id) {
+    const head = id === 'hook_gemshot' ? '#ffd24a' : '#c0c0cc';
+    g.strokeStyle = '#8a5a32';             // rope coil
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.arc(7, 10, 4.2, 0, Math.PI * 1.6);
+    g.stroke();
+    g.fillStyle = head;                    // head block
+    rect(g, head, 8, 3, 5, 4);
+    g.strokeStyle = shade(head, -45);      // prongs
+    g.lineWidth = 1.4;
+    g.beginPath();
+    g.moveTo(11, 3); g.lineTo(14.5, 1);
+    g.moveTo(13, 5); g.lineTo(15.5, 6.5);
+    g.moveTo(9, 7); g.lineTo(9.5, 10);
+    g.stroke();
+    if (id === 'hook_gemshot') {
+      g.fillStyle = '#b07ae8';             // gem
+      g.fillRect(9, 4, 2, 2);
+    }
+  }
+
   // Coins (TC.Economy denominations): a stamped metal disc with a mint mark
   // sized by denomination so the three tiers read apart at a glance.
   function paintCoin(g, id) {
@@ -854,6 +878,7 @@
     if (d && d.kind === 'summon') return paintCharm(g);
     if (d && d.kind === 'bucket') return paintBucket(g, id);
     if (d && d.kind === 'currency') return paintCoin(g, id);
+    if (d && d.kind === 'grapple') return paintGrapple(g, id);
     if (d && d.kind === 'material') {
       if (/_bar$/.test(id) && metal) return paintBar(g, metal);
       if (/_ore$/.test(id) && metal) return paintOre(g, metal);

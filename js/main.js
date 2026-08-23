@@ -76,6 +76,9 @@
         console.warn('[TC] liquid import failed:', e && e.message);
       }
     }
+    if (TC.Grapple && typeof TC.Grapple.resetForNewWorld === 'function') {
+      try { TC.Grapple.resetForNewWorld(); } catch (e) {}
+    }
     return gen;
   }
 
@@ -172,7 +175,11 @@
     if (TC.state !== 'playing') return;
     if (TC.Sky) TC.Sky.update(dt);
     if (TC.Biomes) TC.Biomes.update(dt);
+    // Grapple pull thrust resolves before player physics; the rope
+    // constraint corrects position after movement (see js/grapple.js).
+    if (TC.Grapple && typeof TC.Grapple.preUpdate === 'function') TC.Grapple.preUpdate(dt);
     if (TC.player) TC.player.update(dt);
+    if (TC.Grapple && typeof TC.Grapple.postUpdate === 'function') TC.Grapple.postUpdate(dt);
     if (TC.Loot && TC.player) TC.Loot.update(TC.player, dt);
     if (TC.Accessories && typeof TC.Accessories.update === 'function') TC.Accessories.update(dt);
     if (TC.Fishing && typeof TC.Fishing.update === 'function') TC.Fishing.update(dt);
@@ -214,6 +221,7 @@
       if (TC.player) TC.player.draw(ctx, cam);
       if (TC.Fishing && typeof TC.Fishing.draw === 'function') TC.Fishing.draw(ctx, cam);
       if (TC.Combat) TC.Combat.draw(ctx, cam);
+      if (TC.Grapple && typeof TC.Grapple.drawWorld === 'function') TC.Grapple.drawWorld(ctx, cam);
       if (TC.Gear) TC.Gear.draw(ctx, cam);
       if (TC.Magic && typeof TC.Magic.drawWorld === 'function') TC.Magic.drawWorld(ctx, cam);
       if (TC.Particles) TC.Particles.draw(ctx, cam);
