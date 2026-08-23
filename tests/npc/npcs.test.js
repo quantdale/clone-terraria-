@@ -245,6 +245,12 @@ function buildRoom(TC, w, h) {
     world.setRaw(tx + w, y, T.DIRT);              // right wall
     for (let x = tx; x < tx + w; x++) world.setRaw(x, y, T.AIR);
   }
+  // W10 housing contract: background walls across the footprint plus one
+  // entrance door in the left wall column.
+  for (let y = ty; y <= floorY; y++) {
+    for (let x = tx; x < tx + w; x++) world.setRawWall(x, y, TC.WALL.DIRT);
+  }
+  world.setRaw(tx - 1, floorY - 1, T.DOOR_CLOSED);
   return { tx, ty, w, h, floorY };
 }
 

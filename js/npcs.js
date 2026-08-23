@@ -2,8 +2,11 @@
    defines name, dialog lines, unlock rule, home params, optional shop stock
    and a paint palette; the Guide is the seed entry, the Merchant demonstrates
    unlocks + shop data (shop panel is wired lead-side). NPCs wander near home,
-   talk on right-click (lines cycle deterministically), take damage via
-   TC.NPCs.damage and respawn at home after a delay. Never hostile. */
+   talk on right-click (night/biome-aware pools, each cycled deterministically),
+   take damage via TC.NPCs.damage and respawn at home after a delay. Never
+   hostile. On move-in each NPC runs an incremental housing scan (claimHouse)
+   for the smallest valid room nearby; claims persist in npc.state.home and
+   re-anchor homeX to the plot center. TC.NPCs.houseOf exposes the plot. */
 'use strict';
 (function () {
   window.TC = window.TC || {};
@@ -16,6 +19,25 @@
   const BASE_HP = 250;
   const RESPAWN_SECONDS = 45;     // dead -> back at home after this long
   const DEFAULT_SPAN_TILES = 8;   // default wander radius around homeX
+
+  // Housing bounds (tiles) for validateHome / claiming.
+  const HOME_MIN_W = 4, HOME_MIN_H = 3;
+  const HOME_MAX_W = 14, HOME_MAX_H = 10;
+  const HOME_WALL_COVER = 0.6;    // min fraction of wall-backed interior cells
+
+  // Home-claiming scan: bounded spiral around the arrival spot, sampled at
+  // stride 2, smallest footprints first. Work is spread across frames —
+  // CLAIM_BUDGET validateHome calls per update tick, CLAIM_MAX_CALLS hard
+  // cap per NPC so a scan can never spin forever.
+  const CLAIM_RADIUS = 48;
+  const CLAIM_BUDGET = 40;
+  const CLAIM_MAX_CALLS = 6000;
+  const CLAIM_SIZES = (function () {
+    const out = [];
+    for (let hh = 4; hh <= 6; hh++)
+      for (let ww = 5; ww <= 9; ww++) out.push([ww, hh]);
+    return out;                   // ascending area: smallest valid wins
+  })();
 
   const DEFAULT_LOOK = {
     skin: '#edb98a', hair: '#b9bdc9', robe: '#3f8f46', robeTrim: '#2e6e35',
@@ -42,6 +64,32 @@
         'Press N to toggle the minimap.',
         'Press M to mute or unmute the sound.'
       ],
+      dialogNight: [
+        'Grappling hooks and buckets, friend: the hook carries you over pits, the bucket carries water and lava away.',
+        'Nights run long. Seal the door, keep a torch lit, and craft something useful while you wait.',
+        'The dark bites hardest after sundown. A closed door beats a hero\'s luck.'
+      ],
+      dialogBiome: {
+        snow: [
+          'Snow packs hard underfoot and the caves below freeze solid. Carry spare torches.',
+          'Ice over water holds right up until it does not. Rope and a bucket, always.'
+        ],
+        desert: [
+          'Sand pours like water when you dig it. Shore the walls or swim in dunes.'
+        ],
+        jungle: [
+          'The canopy eats torchlight here. Mark your trail with rope or torches.'
+        ],
+        corruption: [
+          'This purple rot spreads after dark. Do not build your house on cursed ground.'
+        ],
+        underworld: [
+          'It only gets hotter below this line. A full bucket outvalues any sword down there.'
+        ],
+        cave: [
+          'Listen for drips when you dig - moving water means ore nearby, or trouble ahead.'
+        ]
+      },
       unlocks: null,
       home: { spanTiles: DEFAULT_SPAN_TILES },
       shop: null,
@@ -53,8 +101,33 @@
       dialogLines: [
         'Bars, torches, arrows - everything a delver needs, at honest prices.',
         'Give me a house with a door, a light and a flat floor and I will stay.',
-        'Smelt your ore. Bars are worth more than rocks, always.'
+        'Smelt your ore. Bars are worth more than rocks, always.',
+        'Surplus gear weighing you down? Right-click a bag slot while browsing my stock to sell it for coins.'
       ],
+      dialogNight: [
+        'My stall stays lit after dark - honest coin spends exactly the same by moonlight.',
+        'Lamp-lit stalls draw fewer slimes. Trust me, I have counted.'
+      ],
+      dialogBiome: {
+        snow: [
+          'Cold thickens the oil in my scales. Warm customers get warm prices.'
+        ],
+        desert: [
+          'Sand gets into everything, even the coin purse. Rare goods turn up near dunes, though.'
+        ],
+        jungle: [
+          'Jungle fruit ferments on the vine. I move it by the barrelful, quietly.'
+        ],
+        corruption: [
+          'No stall stays open long in the rot. Buy what you need and keep moving.'
+        ],
+        underworld: [
+          'Everything burns down there except a fair bargain. Fireproof your pockets first.'
+        ],
+        cave: [
+          'Underground I sell rope, torches, and honest directions back to daylight.'
+        ]
+      },
       unlocks: function () {          // moves in once the player owns any metal bar
         const p = TC.player;
         const inv = p && p.inventory;
@@ -143,7 +216,8 @@
       phase: 0,             // walk-cycle progress (visual only)
       hitWall: false,
       dialogTimer: 0,
-      dialogIdx: -1,        // cycles dialogLines deterministically
+      dialogIdx: -1,        // cycles base dialogLines deterministically
+      dialogPoolIdx: {},    // per-pool counters for night/biome pools
       hp: hp, maxHp: hp,
       look: look,
       state: {}             // type-specific extensible state (persisted)
@@ -207,6 +281,7 @@
     const n = makeNpc(def, spot ? spot.x : px, spot ? spot.y : py);
     list.push(n);
     emitSafe('EntitySpawned', { kind: 'npc', type: n.type, x: n.x, y: n.y });
+    enqueueClaim(n);              // move-in housing scan (incremental)
     return n;
   }
 
@@ -214,6 +289,7 @@
   function spawnGuide(px, py) {
     list.length = 0;
     pending.length = 0;
+    claimQueue.length = 0;
     spawn('guide', num(px) != null ? px : 0, num(py) != null ? py : 0);
   }
 
@@ -377,6 +453,66 @@
     if (n.onGround && n.hitWall) n.vy = HOP_VY;   // hop up 1-tile steps
   }
 
+  // ---- dialog selection --------------------------------------------------
+  // Context-aware pools without changing the def format: plain dialogLines
+  // still work; optional def.dialogNight and def.dialogBiome.{biome}[]
+  // entries win when they apply. Selection order: night pool > biome pool >
+  // base cycle. Each pool cycles deterministically per NPC - no randomness.
+
+  function isNight() {
+    if (TC.Sky && typeof TC.Sky.isDay === 'function') {
+      try { return !TC.Sky.isDay(); } catch (e) {}
+    }
+    if (TC.Sky && typeof TC.Sky.daylight === 'function') {
+      try { return TC.Sky.daylight() < 0.5; } catch (e) {}
+    }
+    return false;
+  }
+
+  function biomeTag() {
+    try {
+      const b = (typeof TC.Biomes === 'object' && TC.Biomes)
+        ? TC.Biomes.current : null;
+      return (typeof b === 'string' && b) ? b : null;
+    } catch (e) { return null; }
+  }
+
+  // Choose the pool for this moment: {pool, key}.
+  function pickPool(def) {
+    if (!def) return { pool: ['...'], key: 'base' };
+    if (isNight() && Array.isArray(def.dialogNight) && def.dialogNight.length) {
+      return { pool: def.dialogNight, key: 'night' };
+    }
+    const bio = biomeTag();
+    if (bio && def.dialogBiome) {
+      const p = def.dialogBiome[bio];
+      if (Array.isArray(p) && p.length) return { pool: p, key: 'biome:' + bio };
+    }
+    return {
+      pool: (Array.isArray(def.dialogLines) && def.dialogLines.length)
+        ? def.dialogLines : ['...'],
+      key: 'base'
+    };
+  }
+
+  // Next line for an NPC from whichever pool applies right now.
+  function dialogLineFor(n) {
+    const pick = pickPool(NPC_KINDS[n.type]);
+    const lines = pick.pool;
+    let idx;
+    if (pick.key === 'base') {
+      const cur = (typeof n.dialogIdx === 'number') ? n.dialogIdx : -1;
+      idx = (cur + 1) % lines.length;
+      n.dialogIdx = idx;
+    } else {
+      const map = n.dialogPoolIdx || (n.dialogPoolIdx = {});
+      const cur = (typeof map[pick.key] === 'number') ? map[pick.key] : -1;
+      idx = (cur + 1) % lines.length;
+      map[pick.key] = idx;
+    }
+    return lines[idx] || '...';
+  }
+
   // Right-click over the bbox (screen space via camera) opens a tip dialog;
   // lines cycle in order so every line shows up without repeats.
   function handleClick(n) {
@@ -390,12 +526,9 @@
     const mx = inp.mouse.x, my = inp.mouse.y;
     if (mx < sx || mx > sx + n.w * z || my < sy || my > sy + n.h * z) return;
     n.dialogTimer = DIALOG_CD;
-    const def = NPC_KINDS[n.type];
-    const lines = (def && def.dialogLines && def.dialogLines.length)
-      ? def.dialogLines : ['...'];
-    n.dialogIdx = (n.dialogIdx + 1) % lines.length;
+    const line = dialogLineFor(n);
     if (TC.UI && typeof TC.UI.showDialog === 'function') {
-      try { TC.UI.showDialog(n.name, lines[n.dialogIdx]); } catch (e) {}
+      try { TC.UI.showDialog(n.name, line); } catch (e) {}
     }
   }
 
@@ -417,6 +550,7 @@
       moveAndCollide(n, dt);
       handleClick(n);
     }
+    processClaims();                // budgeted home-claim scans
   }
 
   // ---- drawing (world-space humanoid, player.js style) ----
@@ -524,7 +658,14 @@
     ctx.restore();
   }
 
-  // ---- housing validation (conservative) ---------------------------------
+  // ---- housing validation -------------------------------------------------
+  // A valid home: bounded footprint (4..14 x 3..10 tiles), flat solid floor,
+  // open interior, sealed shell (doors count), a door anywhere on the border
+  // ring, >=60% background-wall coverage across the footprint, no liquid
+  // volume inside (TC.Liquids is the authority), and light from a torch
+  // inside or TC.Lighting. Checks run cheap-first; problems come back as
+  // descriptive keys: 'floor','blocked','open','dark' plus 'too-small',
+  // 'too-large','no-walls','flooded','no-entrance'.
 
   function doorAt(tx, ty) {
     const w = TC.world;
@@ -540,10 +681,43 @@
     return solidAt(tx, ty) || doorAt(tx, ty);
   }
 
-  // Validate a candidate house region [tx..tx+w) x [ty..ty+h):
-  // flat solid floor, open interior, sealed shell (doors count), light from a
-  // torch inside or Lighting. Returns { ok, problems: ['floor','blocked',
-  // 'open','dark', ...] }. Conservative: any doubt fails the check.
+  // A door anywhere on the ring just outside the shell gives entrance.
+  function entranceOnRing(world, tx, ty, w, h) {
+    for (let x = tx - 1; x <= tx + w; x++) {
+      if (doorAt(x, ty - 1) || doorAt(x, ty + h)) return true;
+    }
+    for (let y = ty - 1; y <= ty + h; y++) {
+      if (doorAt(tx - 1, y) || doorAt(tx + w, y)) return true;
+    }
+    return false;
+  }
+
+  // Fraction of the footprint's cells backed by a background wall. Worlds
+  // without a walls layer never get penalized by this check.
+  function wallCoverage(world, tx, ty, w, h) {
+    if (!world.walls || !world.walls.length || !(world.width > 0)) return 1;
+    let filled = 0;
+    const total = w * h;
+    for (let y = ty; y < ty + h; y++) {
+      const row = y * world.width;
+      for (let x = tx; x < tx + w; x++) {
+        if (world.walls[row + x]) filled++;
+      }
+    }
+    return total ? filled / total : 1;
+  }
+
+  // True when the runtime liquid layer holds any volume in a cell.
+  function liquidIn(tx, ty) {
+    if (!TC.Liquids || typeof TC.Liquids.queryAt !== 'function') return false;
+    try {
+      const q = TC.Liquids.queryAt(tx, ty);
+      return !!(q && q.type && q.amount > 0);
+    } catch (e) { return false; }
+  }
+
+  // Validate a candidate house region [tx..tx+w) x [ty..ty+h).
+  // Returns { ok, problems: [...] }. Conservative: any doubt fails the check.
   function validateHome(tx, ty, w, h) {
     const res = { ok: false, problems: [] };
     const world = TC.world;
@@ -553,6 +727,14 @@
     }
     tx |= 0; ty |= 0; w |= 0; h |= 0;
     if (w <= 0 || h <= 0) { res.problems.push('bad-size'); return res; }
+    if (w < HOME_MIN_W || h < HOME_MIN_H) {
+      res.problems.push('too-small');
+      return res;
+    }
+    if (w > HOME_MAX_W || h > HOME_MAX_H) {
+      res.problems.push('too-large');
+      return res;
+    }
     if (tx < 0 || ty < 0 || tx + w > world.width || ty + h > world.height) {
       res.problems.push('out-of-bounds');
       return res;
@@ -566,6 +748,19 @@
     for (let y = ty; y < floorY; y++) {
       for (let x = tx; x < tx + w; x++) {
         if (solidAt(x, y)) { res.problems.push('blocked'); break outer; }
+      }
+    }
+
+    if (!entranceOnRing(world, tx, ty, w, h)) res.problems.push('no-entrance');
+
+    if (wallCoverage(world, tx, ty, w, h) < HOME_WALL_COVER) {
+      res.problems.push('no-walls');
+    }
+
+    flood:
+    for (let y = ty; y < ty + h; y++) {
+      for (let x = tx; x < tx + w; x++) {
+        if (liquidIn(x, y)) { res.problems.push('flooded'); break flood; }
       }
     }
 
@@ -597,6 +792,146 @@
     return res;
   }
 
+  // ---- home claiming ------------------------------------------------------
+  // On move-in an NPC searches outward from its arrival spot for the smallest
+  // valid room rectangle and claims it as a plot: npc.state.home = {tx,ty,w,h}
+  // and homeX re-anchors to the plot center (wander span unchanged; the state
+  // blob already serializes, so claims ride saves for free). The search is
+  // incremental - at most CLAIM_BUDGET validateHome calls per update tick -
+  // so a town full of move-ins can never spike a frame.
+
+  const claimQueue = [];            // NPCs whose scans are unfinished
+  const ringCache = {};             // radius -> [[dx,dy],...] stride-2 offsets
+
+  // Deterministic square-ring offsets, nearest ring first, deduped corners.
+  function ringOffsets(rad) {
+    const hit = ringCache[rad];
+    if (hit) return hit;
+    const pts = [];
+    if (rad <= 0) {
+      pts.push([0, 0]);
+    } else {
+      const seen = {};
+      const push = (dx, dy) => {
+        const key = dx + ',' + dy;
+        if (!seen[key]) { seen[key] = 1; pts.push([dx, dy]); }
+      };
+      for (let d = -rad; d <= rad; d += 2) {
+        push(d, -rad); push(d, rad); push(-rad, d); push(rad, d);
+      }
+    }
+    ringCache[rad] = pts;
+    return pts;
+  }
+
+  function enqueueClaim(n) {
+    if (!n || n.dead || n._claimScan) return;
+    n._claimScan = {
+      ax: Math.floor((n.x + n.w / 2) / TC.CONST.TS),   // arrival tile
+      // air cell holding the feet (-0.5 guards exact-resting y values)
+      ay: Math.floor((n.y + n.h - 0.5) / TC.CONST.TS),
+      rad: 0, k: 0, calls: 0, done: false
+    };
+    claimQueue.push(n);
+  }
+
+  // Spend up to `maxCalls` validateHome calls advancing one scan. Returns the
+  // claimed plot or null (spent count lands in st.callsUsed); st.done flips
+  // once the spiral is exhausted.
+  function advanceScan(st, maxCalls) {
+    const world = TC.world;
+    let used = 0;
+    st.callsUsed = 0;
+    while (!st.done && used < maxCalls) {
+      if (st.rad > CLAIM_RADIUS || st.calls >= CLAIM_MAX_CALLS || !world) {
+        st.done = true;
+        break;
+      }
+      const ring = ringOffsets(st.rad);
+      if (st.k >= ring.length) { st.rad += 2; st.k = 0; continue; }
+      const off = ring[st.k++];
+      // stride-2 rings plus both neighbour columns keep odd-parity plots
+      // reachable without sampling every tile
+      for (let side = -1; side <= 1 && used < maxCalls && !st.done; side++) {
+        const ax = st.ax + off[0] + side, ay = st.ay + off[1];
+        if (ax < 1 || ay < 1 || ax >= world.width - 1 || ay >= world.height - 1) {
+          continue;
+        }
+        if (!solidAt(ax, ay + 1)) continue;               // needs floor below
+        if (solidAt(ax, ay) || solidAt(ax, ay - 1)) continue; // standing room
+        for (let si = 0; si < CLAIM_SIZES.length && used < maxCalls; si++) {
+          const fw = CLAIM_SIZES[si][0], fh = CLAIM_SIZES[si][1];
+          used++; st.calls++;
+          const rx = ax - ((fw / 2) | 0), ry = ay + 2 - fh;
+          const v = validateHome(rx, ry, fw, fh);
+          if (v.ok) {
+            st.callsUsed = used;
+            return { tx: rx, ty: ry, w: fw, h: fh };
+          }
+        }
+      }
+    }
+    st.callsUsed = used;
+    return null;
+  }
+
+  // Budgeted per-tick pass over every queued scan.
+  function processClaims() {
+    if (!TC.world || !claimQueue.length) return;
+    let budget = CLAIM_BUDGET;
+    while (budget > 0 && claimQueue.length) {
+      const n = claimQueue.shift();
+      if (!n || n.dead || list.indexOf(n) < 0) continue;  // gone: drop quietly
+      const st = n._claimScan;
+      if (!st) continue;
+      const plot = advanceScan(st, budget);
+      budget -= st.callsUsed;
+      if (plot) {
+        n.state.home = plot;
+        n.homeX = (plot.tx + plot.w / 2) * TC.CONST.TS;   // re-anchor to plot
+        n._claimScan = null;
+      } else if (st.done) {
+        n._claimScan = null;
+      } else {
+        claimQueue.push(n);                               // resume next tick
+      }
+    }
+  }
+
+  // Start (or report) a housing scan for an NPC object or type string.
+  // Already-claimed NPCs report true without rescanning.
+  function claimHouse(npcOrType) {
+    let n = npcOrType;
+    if (typeof npcOrType === 'string') {
+      n = null;
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].type === npcOrType) { n = list[i]; break; }
+      }
+    }
+    if (!n || typeof n !== 'object' || n.dead || list.indexOf(n) < 0) {
+      return false;
+    }
+    if (n.state && n.state.home) return true;
+    enqueueClaim(n);
+    return true;
+  }
+
+  // Plot lookup for UI/tests/debug: NPC object, type string, or null.
+  function houseOf(npcOrType) {
+    let n = null;
+    if (npcOrType && typeof npcOrType === 'object') n = npcOrType;
+    else if (typeof npcOrType === 'string') {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].type === npcOrType) { n = list[i]; break; }
+      }
+    }
+    const hm = (n && n.state && typeof n.state === 'object') ? n.state.home : null;
+    if (!hm || typeof hm !== 'object') return null;
+    const t = num(hm.tx), y = num(hm.ty), ww = num(hm.w), hh = num(hm.h);
+    if (t == null || y == null || ww == null || hh == null) return null;
+    return { tx: t | 0, ty: y | 0, w: ww | 0, h: hh | 0 };
+  }
+
   // ---- persistence ----
 
   function serializeNpc(n) {
@@ -626,6 +961,7 @@
   function load(data) {
     list.length = 0;
     pending.length = 0;
+    claimQueue.length = 0;
     let restored = false;
     if (Array.isArray(data)) {
       for (let i = 0; i < data.length; i++) {
@@ -668,6 +1004,7 @@
   function clear() {
     list.length = 0;
     pending.length = 0;
+    claimQueue.length = 0;
   }
 
   // ---- public surface ----
@@ -689,6 +1026,7 @@
       return out.length ? out : null;
     },
     spawnGuide, spawn, evaluateUnlocks, validateHome, damage,
+    claimHouse, houseOf, dialogLineFor,
     update, draw, clear, serialize, load
   };
 })();

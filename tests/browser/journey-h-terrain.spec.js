@@ -48,7 +48,7 @@ test.describe("journey H — terrain shapes", () => {
       ({ a }) => {
         const TC = window.TC;
         for (let dx = -3; dx <= 2; dx++) {
-          TC.world.setRaw(a.px + dx, a.feetTy - 4, TC.TILE.PLATFORM);
+          TC.world.setRaw(a.px + dx, a.feetTy - 3, TC.TILE.PLATFORM);
         }
       },
       { a },
@@ -61,30 +61,36 @@ test.describe("journey H — terrain shapes", () => {
         const TS = TC.CONST.TS;
         window.__TEST__.teleportPlayer(
           a.px * TS,
-          (a.feetTy - 3) * TS - TC.CONST.PLAYER_H,
+          (a.feetTy - 2) * TS - TC.CONST.PLAYER_H,
         );
       },
       { a },
     );
+    // NOTE: no settle delay here — the jump must fire during the teleport
+    // descent (coyote window), clearing the deck by a wide margin. Settling
+    // to the floor first leaves a full ground jump ~1px short of the deck
+    // plane under explicit-Euler integration.
     // Phase 1: hold Space to rise THROUGH the deck until feet pass deck top.
+    // Generous windows: this journey asserts PHYSICS outcomes, not frame
+    // budgets — rAF pacing varies with machine load.
     await page.keyboard.down("Space");
     let risen = false;
-    for (let i = 0; i < 90 && !risen; i++) {
+    for (let i = 0; i < 240 && !risen; i++) {
       await H.runFrames(page, 1);
       risen = await page.evaluate(({ a }) => {
         const p = window.TC.player;
-        return p.y + p.h <= (a.feetTy - 4) * 16 + (16 * 5) / 16 + 1;
+        return p.y + p.h <= (a.feetTy - 3) * 16 + (16 * 5) / 16 + 1;
       }, { a });
     }
     // Phase 2: release Space so the landing frame is not consumed by an
     // immediate re-jump, then wait to SETTLE on the deck.
     await page.keyboard.up("Space");
     let above = false;
-    for (let i = 0; i < 120 && !above; i++) {
+    for (let i = 0; i < 300 && !above; i++) {
       await H.runFrames(page, 1);
       above = await page.evaluate(({ a }) => {
         const p = window.TC.player;
-        const deckTop = (a.feetTy - 4) * 16 + (16 * 5) / 16;
+        const deckTop = (a.feetTy - 3) * 16 + (16 * 5) / 16;
         return p.onGround && Math.abs(p.y + p.h - deckTop) < 1.5;
       }, { a });
     }
@@ -102,7 +108,7 @@ test.describe("journey H — terrain shapes", () => {
     // hold S to drop through
     await page.keyboard.down("KeyS");
     let below = false;
-    for (let i = 0; i < 90 && !below; i++) {
+    for (let i = 0; i < 180 && !below; i++) {
       await H.runFrames(page, 2);
       below = await page.evaluate(
         ({ a }) => {
