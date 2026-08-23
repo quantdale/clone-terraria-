@@ -199,6 +199,15 @@ TC.TILE = {
   DUNGEON_BRICK: 32,
   HELL_BRICK: 33,
   SANDSTONE_BRICK: 34,
+  // W4 campaign: micro-biome blocks + expanded ore tiers (append-only).
+  GLEAM: 35,
+  MUSHGRASS: 36,
+  MUSHSTEM: 37,
+  GRANITE: 38,
+  MARBLE: 39,
+  MOSSSTONE: 40,
+  SILVER_ORE: 41,
+  CRYSTAL_ORE: 42,
 };
 
 // def fields: solid, opaque(blocks light), hardness(sec to mine at 100 power), tool
@@ -532,12 +541,103 @@ TC.TILE_DEFS = [
     pattern: "plank",
     colors: ["#c9ae6e", "#ad9257"],
   }),
+  /* W4 campaign: deep-cavern micro-biome blocks + expanded ore tiers.
+     New ids append only; never renumber. Patterns reuse existing painters
+     so tiles.js renders them without modification. */
+  /* GLEAM         */ D("gleamstone", {
+    solid: true,
+    opaque: true,
+    hardness: 0.55,
+    tool: "pick",
+    drop: "gleam",
+    pattern: "speckle",
+    light: 0.4,
+    colors: ["#3d7a78", "#57b8b2", "#7fe0d8"],
+  }),
+  /* MUSHGRASS     */ D("mushroom grass", {
+    solid: true,
+    opaque: true,
+    hardness: 0.3,
+    tool: "pick",
+    drop: "mushgrass",
+    pattern: "grass",
+    colors: ["#5a4468", "#9a6ac8"],
+  }),
+  /* MUSHSTEM      */ D("mushroom stem", {
+    solid: true,
+    opaque: false,
+    hardness: 0.25,
+    tool: "any",
+    drop: "mushstem",
+    pattern: "plank",
+    colors: ["#d8ccb8", "#bfb098"],
+  }),
+  /* GRANITE       */ D("granite", {
+    solid: true,
+    opaque: true,
+    hardness: 0.65,
+    tool: "pick",
+    drop: "granite",
+    pattern: "speckle",
+    colors: ["#4a4258", "#3a3448", "#5a5268"],
+  }),
+  /* MARBLE        */ D("marble", {
+    solid: true,
+    opaque: true,
+    hardness: 0.6,
+    tool: "pick",
+    drop: "marble",
+    pattern: "speckle",
+    colors: ["#d8d2c8", "#c4beb4", "#e8e2da"],
+  }),
+  /* MOSSSTONE     */ D("mossy stone", {
+    solid: true,
+    opaque: true,
+    hardness: 0.5,
+    tool: "pick",
+    drop: "moss_stone",
+    pattern: "speckle",
+    colors: ["#5d6b52", "#4a5842", "#6e7c62"],
+  }),
+  /* SILVER_ORE    */ D("silver ore", {
+    solid: true,
+    opaque: true,
+    hardness: 0.9,
+    tool: "pick",
+    minPower: 55,
+    drop: "silver_ore",
+    pattern: "ore",
+    colors: ["#7d7d7d", "#d8dce8"],
+  }),
+  /* CRYSTAL_ORE   */ D("gleam crystal", {
+    solid: true,
+    opaque: true,
+    hardness: 1.05,
+    tool: "pick",
+    minPower: 75,
+    drop: "crystal",
+    pattern: "ore",
+    light: 0.25,
+    colors: ["#3d3a52", "#b07ae8"],
+  }),
 ];
 
 // ---- wall ids (background layer) ----
 // SAND/EBON/DUNGEON/HELL were historically appended by worldgen.js at load
 // time; promoted here (same order, same numeric ids). Never renumber.
-TC.WALL = { NONE: 0, DIRT: 1, STONE: 2, SAND: 3, EBON: 4, DUNGEON: 5, HELL: 6 };
+TC.WALL = {
+  NONE: 0,
+  DIRT: 1,
+  STONE: 2,
+  SAND: 3,
+  EBON: 4,
+  DUNGEON: 5,
+  HELL: 6,
+  GRANITE: 7,
+  MARBLE: 8,
+  MOSS: 9,
+  GLEAM: 10,
+};
 
 TC.WALL_DEFS = [
   { name: "none", color: null, hardness: 0 },
@@ -547,6 +647,11 @@ TC.WALL_DEFS = [
   { name: "ebonstone wall", color: "#3a3444", hardness: 0.4 },
   { name: "dungeon wall", color: "#333f54", hardness: 0.45 },
   { name: "hell brick wall", color: "#401d18", hardness: 0.45 },
+  // W4 campaign: micro-biome background walls (append-only)
+  { name: "granite wall", color: "#342e42", hardness: 0.45 },
+  { name: "marble wall", color: "#a89f92", hardness: 0.4 },
+  { name: "moss wall", color: "#3c4a36", hardness: 0.35 },
+  { name: "gleam wall", color: "#2c4a48", hardness: 0.4 },
 ];
 
 // ---- items ----
@@ -578,13 +683,31 @@ TC.ITEM_DEFS = {
   jungle_grass: I("Jungle Grass", "block", { tile: TC.TILE.JGRASS }),
   copper_ore: I("Copper Ore", "material", {}),
   iron_ore: I("Iron Ore", "material", {}),
+  silver_ore: I("Silver Ore", "material", { value: 9 }),
   gold_ore: I("Gold Ore", "material", {}),
+  crystal: I("Gleam Crystal", "material", { value: 40 }),
+  gleam: I("Gleamstone", "block", { tile: TC.TILE.GLEAM }),
+  mushgrass: I("Mushroom Grass", "block", { tile: TC.TILE.MUSHGRASS }),
+  mushstem: I("Mushroom Stem", "block", { tile: TC.TILE.MUSHSTEM }),
+  granite: I("Granite", "block", { tile: TC.TILE.GRANITE, value: 2 }),
+  marble: I("Marble", "block", { tile: TC.TILE.MARBLE, value: 2 }),
+  moss_stone: I("Mossy Stone", "block", { tile: TC.TILE.MOSSSTONE }),
   copper_bar: I("Copper Bar", "material", {}),
   iron_bar: I("Iron Bar", "material", {}),
+  silver_bar: I("Silver Bar", "material", { value: 20 }),
   gold_bar: I("Gold Bar", "material", {}),
   gel: I("Gel", "material", {}),
   arrow: I("Arrow", "ammo", { damage: 4, value: 1 }),
   void_charm: I("Void Charm", "summon", { boss: "void_eye", maxStack: 20 }),
+  // W6 campaign bosses: original summons + signature materials. kind
+  // 'summon' items call TC.Enemies.spawnBoss(def.boss) at night (player.js).
+  storm_bell: I("Storm Bell", "summon", { boss: "storm_jelly", maxStack: 20 }),
+  moss_heart: I("Beating Moss Heart", "summon", {
+    boss: "moss_mother",
+    maxStack: 20,
+  }),
+  storm_core: I("Storm Core", "material", { value: 120 }),
+  moss_core: I("Verdant Core", "material", { value: 150 }),
   // Canonical currency (TC.Economy): face value in copper units. Prices,
   // sell values and purses all speak this single integer scale.
   coin_copper: I("Copper Coin", "currency", { value: 1, maxStack: 999 }),
@@ -611,6 +734,20 @@ TC.ITEM_DEFS = {
   copper_mail: I("Copper Mail", "armor", { slot: "body", defense: 2 }),
   copper_boots: I("Copper Greaves", "armor", { slot: "feet", defense: 1 }),
   iron_helmet: I("Iron Helmet", "armor", { slot: "head", defense: 2 }),
+  silver_helmet: I("Silver Helmet", "armor", { slot: "head", defense: 3 }),
+  silver_mail: I("Silver Mail", "armor", { slot: "body", defense: 4 }),
+  silver_boots: I("Silver Greaves", "armor", { slot: "feet", defense: 2 }),
+  crystal_blade: I("Crystal Blade", "weapon", {
+    damage: 24,
+    knockback: 4,
+    useTime: 0.21,
+  }),
+  storm_blade: I("Storm Blade", "weapon", {
+    damage: 30,
+    knockback: 6.5,
+    useTime: 0.24,
+  }),
+  moss_cloak: I("Verdant Cloak", "armor", { slot: "body", defense: 5 }),
   iron_mail: I("Iron Mail", "armor", { slot: "body", defense: 3 }),
   iron_boots: I("Iron Greaves", "armor", { slot: "feet", defense: 2 }),
   gold_helmet: I("Gold Helmet", "armor", { slot: "head", defense: 3 }),
@@ -631,6 +768,11 @@ TC.ITEM_DEFS = {
     knockback: 5.5,
     useTime: 0.3,
   }),
+  silver_sword: I("Silver Sword", "weapon", {
+    damage: 17,
+    knockback: 5,
+    useTime: 0.27,
+  }),
   gold_sword: I("Gold Sword", "weapon", {
     damage: 19,
     knockback: 6,
@@ -647,6 +789,13 @@ TC.ITEM_DEFS = {
     tool: "pick",
     power: 55,
     useTime: 0.28,
+    damage: 5,
+    knockback: 2,
+  }),
+  silver_pickaxe: I("Silver Pickaxe", "tool", {
+    tool: "pick",
+    power: 65,
+    useTime: 0.26,
     damage: 5,
     knockback: 2,
   }),
@@ -712,6 +861,7 @@ TC.RECIPES = [
   { out: "anvil", n: 1, station: "workbench", cost: { iron_bar: 5 } },
   { out: "copper_bar", n: 1, station: "furnace", cost: { copper_ore: 3 } },
   { out: "iron_bar", n: 1, station: "furnace", cost: { iron_ore: 3 } },
+  { out: "silver_bar", n: 1, station: "furnace", cost: { silver_ore: 4 } },
   { out: "gold_bar", n: 1, station: "furnace", cost: { gold_ore: 4 } },
   { out: "glass", n: 1, station: "furnace", cost: { sand: 2 } },
   {
@@ -750,6 +900,39 @@ TC.RECIPES = [
     station: "anvil",
     cost: { gold_bar: 8, glass: 12 },
   },
+  // silver tier (W4/W5 progression): between iron and gold
+  { out: "silver_sword", n: 1, station: "anvil", cost: { silver_bar: 8 } },
+  {
+    out: "silver_pickaxe",
+    n: 1,
+    station: "anvil",
+    cost: { silver_bar: 10, wood: 3 },
+  },
+  { out: "silver_helmet", n: 1, station: "anvil", cost: { silver_bar: 8 } },
+  { out: "silver_mail", n: 1, station: "anvil", cost: { silver_bar: 12 } },
+  { out: "silver_boots", n: 1, station: "anvil", cost: { silver_bar: 6 } },
+  // gleam crystal gear (deep-cavern endgame pre-hardmode)
+  {
+    out: "crystal_blade",
+    n: 1,
+    station: "anvil",
+    cost: { crystal: 6, silver_bar: 6 },
+  },
+  // W6 boss summons + boss-craft gear
+  {
+    out: "storm_bell",
+    n: 1,
+    station: "anvil",
+    cost: { iron_bar: 5, gel: 12 },
+  },
+  {
+    out: "moss_heart",
+    n: 1,
+    station: "workbench",
+    cost: { mushgrass: 20, jungle_grass: 5 },
+  },
+  { out: "storm_blade", n: 1, station: "anvil", cost: { storm_core: 8, silver_bar: 10 } },
+  { out: "moss_cloak", n: 1, station: "workbench", cost: { moss_core: 6, mushstem: 25 } },
 ];
 
 // ---- economy: base item values (copper units; TC.Economy scale) ----
@@ -762,7 +945,9 @@ TC.RECIPES = [
     torch: 2, workbench: 3, furnace: 12, anvil: 20, chest: 15, door: 8,
     gel: 1,
     copper_ore: 3, iron_ore: 6, gold_ore: 15,
-    copper_bar: 5, iron_bar: 12, gold_bar: 30,
+    silver_ore: 9, crystal: 40,
+    gleam: 3, mushgrass: 1, mushstem: 1, moss_stone: 1,
+    copper_bar: 5, iron_bar: 12, gold_bar: 30, silver_bar: 20,
     wooden_sword: 4,
     copper_sword: 50, iron_sword: 120, gold_sword: 250,
     copper_pickaxe: 60, iron_pickaxe: 150, gold_pickaxe: 300,
@@ -770,6 +955,10 @@ TC.RECIPES = [
     wooden_bow: 30,
     copper_helmet: 40, copper_mail: 60, copper_boots: 30,
     iron_helmet: 90, iron_mail: 140, iron_boots: 70,
+    silver_sword: 170, silver_pickaxe: 200, crystal_blade: 600,
+    silver_helmet: 130, silver_mail: 210, silver_boots: 100,
+    storm_core: 30, moss_core: 38,
+    storm_blade: 900, moss_cloak: 850,
     gold_helmet: 180, gold_mail: 280, gold_boots: 140,
     void_charm: 500,
     bucket_water: 30, bucket_lava: 60, bucket_honey: 45,

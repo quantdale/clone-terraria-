@@ -52,13 +52,15 @@ test("content: promoted tile/wall ids keep their frozen legacy numbers", () => {
     assert.ok(TC.TILE_DEFS[id], `TILE_DEFS[${id}] missing`);
     assert.strictEqual(TC.TILE_DEFS[id].name.length > 0, true);
   }
-  // Base tables end exactly after the promoted block (wiring/tiles/loot
-  // appends land later at 35+; see full-boot test below).
-  assert.strictEqual(TC.TILE_DEFS.length, 35, "base TILE_DEFS length changed");
+  // Base tables end after the promoted block plus the W4 campaign additions
+  // (micro-biome blocks GLEAM..CRYSTAL_ORE at 35-42; module appends land
+  // later; see full-boot test below).
+  assert.strictEqual(TC.TILE_DEFS.length, 43, "base TILE_DEFS length changed");
   for (const [key, id] of EXT_WALLS) {
     assert.strictEqual(TC.WALL[key], id, `TC.WALL.${key} must stay ${id}`);
   }
-  assert.strictEqual(TC.WALL_DEFS.length, 7, "WALL_DEFS length changed");
+  // W1-W4: hell(6) + granite/marble/moss/gleam walls (7-10)
+  assert.strictEqual(TC.WALL_DEFS.length, 11, "WALL_DEFS length changed");
 });
 
 test("content: promoted item defs exist and back-reference their tiles", () => {
@@ -186,23 +188,24 @@ test("registry: validate() passes AFTER full script load incl. wiring aliases", 
     true,
     "wiring item string-key alias missing",
   );
-  // Full-boot table length is base(35) + tiles.js platform set(3)
-  // + loot.js pot/crystal(2) + wiring(8) = 48. If this changes, content was
-  // added or reordered somewhere — update deliberately.
+  // Full-boot table length is base(43, incl. W4 micro-biome blocks)
+  // + tiles.js platform set(3) + loot.js pot/crystal(2) + wiring(8) = 56.
+  // If this changes, content was added or reordered somewhere — update
+  // deliberately.
   assert.strictEqual(
     TC.TILE_DEFS.length,
-    48,
+    56,
     "full-boot TILE_DEFS length drifted",
   );
 });
 
-test("savecore: GENERATION_VERSION stays 2 and rides the save envelope", () => {
+test("savecore: GENERATION_VERSION stays 3 (W4 deepening) and rides the save envelope", () => {
   const g = loadGame();
   const TC = g.TC;
-  assert.strictEqual(TC.WorldGen.GENERATION_VERSION, 2);
+  assert.strictEqual(TC.WorldGen.GENERATION_VERSION, 3);
   assert.strictEqual(
     TC.SaveCore.GENERATION_VERSION,
-    2,
+    3,
     "SaveCore must source the value from WorldGen, not a literal",
   );
   TC.newGame(424242);
@@ -212,7 +215,7 @@ test("savecore: GENERATION_VERSION stays 2 and rides the save envelope", () => {
   const env = JSON.parse(raw);
   assert.strictEqual(
     env.generationVersion,
-    2,
+    3,
     "envelope must embed the live WorldGen.GENERATION_VERSION",
   );
 });

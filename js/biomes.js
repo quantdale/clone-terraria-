@@ -131,6 +131,10 @@
     current = next;
     tgtPal = PAL[next] || PAL.forest;
     // blend restarts toward new target; draw lerps curPal -> tgtPal
+    // W5: record the discovery milestone once per world (guarded).
+    if (TC.Progression && typeof TC.Progression.discoverBiome === 'function') {
+      try { TC.Progression.discoverBiome(next); } catch (e) {}
+    }
   }
 
   function tick(dt) {

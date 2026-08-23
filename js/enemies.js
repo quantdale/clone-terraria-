@@ -1,8 +1,13 @@
 /* enemies.js — enemy spawning, AI, physics, damage, procedural rendering.
    Also owns this module's content additions: extra ENEMY_DEFS, summon-item
-   ITEM_DEFS + RECIPES entries, and the Blood Moon event. constants.js /
-   index.html are lead-owned, so new definitions are merged in here at load
-   time instead (script order guarantees constants.js has run first). */
+   ITEM_DEFS + RECIPES entries, and the Blood Moon event. Waves 6-7 add the
+   'stationary' / 'teleporter' archetypes, six biome regulars and the Storm
+   Jelly / Moss Mother bosses. Boss shots ride TC.Projectiles with owner:null
+   for motion/tiles/light; player contact for those shots is tracked here
+   because the pool deliberately damages enemies only (same split wiring.js
+   uses for trap darts). constants.js / index.html are lead-owned, so new
+   definitions are merged in here at load time instead (script order
+   guarantees constants.js has run first). */
 
 (() => {
   window.TC = window.TC || {};
@@ -14,10 +19,15 @@
   // ======================================================================
 
   // -- enemy definitions added on top of TC.ENEMY_DEFS --
-  // New shared AI 'walker': daylight-immune ground chaser tuned by def.speed /
-  // def.jumpVel. Boss AIs: 'king_slime', 'skeletron' (+ 'skele_hand' parts),
-  // 'wof'. def.part marks boss *parts* (Skeletron hands): they persist like
-  // bosses but do not count toward MAX_BOSSES and never take the UI boss bar.
+  // Shared AI roster: 'slime'/'zombie'/'eye'/'bat'/'harpy', 'walker'
+  // (daylight-immune ground chaser tuned by def.speed / def.jumpVel, with
+  // def.lunge and def.charge variants), 'stationary' (rooted hazard that
+  // bites in reach) and 'teleporter' (floater that blinks toward the player).
+  // Boss AIs: 'king_slime', 'skeletron' (+ 'skele_hand' parts), 'wof',
+  // 'storm_jelly', 'moss_mother'. def.part marks boss *parts* (Skeletron
+  // hands): they persist like bosses but do not count toward MAX_BOSSES and
+  // never take the UI boss bar. def.coins [minC,maxC] scatters canonical
+  // currency through TC.Economy.dropCoins on death.
   if (TC.ENEMY_DEFS) {
     Object.assign(TC.ENEMY_DEFS, {
       // ---- regular enemies ----
@@ -31,6 +41,7 @@
         h: 24,
         color: "#b8a06a",
         drops: [{ id: "feather", min: 1, max: 2, chance: 0.9 }],
+        coins: [30, 60],
       },
       vulture: {
         name: "Vulture",
@@ -42,6 +53,7 @@
         h: 18,
         color: "#9a7a52",
         drops: [{ id: "feather", min: 1, max: 1, chance: 0.6 }],
+        coins: [15, 35],
       },
       eater_of_souls: {
         name: "Eater of Souls",
@@ -53,6 +65,7 @@
         h: 26,
         color: "#7a4a9a",
         drops: [{ id: "shadow_shard", min: 1, max: 1, chance: 0.5 }],
+        coins: [45, 80],
       },
       ice_slime: {
         name: "Ice Slime",
@@ -64,6 +77,7 @@
         h: 20,
         color: "#9adcf0",
         drops: [{ id: "gel", min: 1, max: 2, chance: 1 }],
+        coins: [6, 14],
       },
       sand_slime: {
         name: "Sand Slime",
@@ -75,6 +89,7 @@
         h: 22,
         color: "#d8c86e",
         drops: [{ id: "gel", min: 1, max: 3, chance: 1 }],
+        coins: [10, 22],
       },
       jungle_bat: {
         name: "Jungle Bat",
@@ -86,6 +101,7 @@
         h: 16,
         color: "#4a8a3a",
         drops: [],
+        coins: [10, 20],
       },
       skeleton: {
         name: "Skeleton",
@@ -100,6 +116,7 @@
         jumpVel: 330,
         look: "skeleton",
         drops: [{ id: "bone", min: 1, max: 2, chance: 1 }],
+        coins: [20, 45],
       },
       granite_golem: {
         name: "Granite Golem",
@@ -115,6 +132,7 @@
         look: "golem",
         defense: 4,
         drops: [{ id: "granite_shard", min: 1, max: 2, chance: 0.8 }],
+        coins: [60, 110],
       },
       blood_crawler: {
         name: "Blood Crawler",
@@ -130,6 +148,7 @@
         look: "crawler",
         bloodMoonOnly: true,
         drops: [{ id: "blood_shard", min: 1, max: 2, chance: 0.7 }],
+        coins: [25, 55],
       },
       crimson_slime: {
         name: "Crimson Slime",
@@ -145,6 +164,7 @@
           { id: "gel", min: 2, max: 4, chance: 1 },
           { id: "blood_shard", min: 1, max: 1, chance: 0.5 },
         ],
+        coins: [18, 40],
       },
       hungry: {
         name: "Hungry",
@@ -157,6 +177,123 @@
         color: "#b04a4a",
         drops: [],
       }, // Wall of Flesh servant
+
+      // ---- wave 6-7 regulars ----
+      dune_stalker: {
+        name: "Dune Stalker",
+        hp: 58,
+        dmg: 17,
+        kbResist: 0.45,
+        ai: "walker",
+        w: 26,
+        h: 34,
+        color: "#c9a86a",
+        speed: 72,
+        jumpVel: 330,
+        look: "stalker",
+        drops: [],
+        coins: [15, 35],
+      },
+      frost_wolf: {
+        name: "Frost Wolf",
+        hp: 64,
+        dmg: 19,
+        kbResist: 0.4,
+        ai: "walker",
+        w: 34,
+        h: 24,
+        color: "#a8c8e0",
+        speed: 104,
+        jumpVel: 430,
+        look: "wolf",
+        lunge: true, // bursts of extra vx when the player is near
+        lungeBoost: 95,
+        drops: [],
+        coins: [20, 40],
+      },
+      snapvine: {
+        name: "Snapvine",
+        hp: 74,
+        dmg: 22,
+        kbResist: 0.85,
+        ai: "stationary", // rooted hazard; bites players in short reach
+        w: 26,
+        h: 36,
+        color: "#4a9a3e",
+        drops: [],
+        coins: [12, 26],
+      },
+      rock_charger: {
+        name: "Rock Charger",
+        hp: 130,
+        dmg: 24,
+        kbResist: 0.8,
+        ai: "walker",
+        w: 30,
+        h: 30,
+        color: "#8a7f72",
+        speed: 42,
+        jumpVel: 300,
+        look: "charger",
+        charge: true, // straight-line rush when roughly level with the player
+        chargeSpeed: 235,
+        defense: 3,
+        drops: [],
+        coins: [35, 65],
+      },
+      void_wisp: {
+        name: "Void Wisp",
+        hp: 66,
+        dmg: 21,
+        kbResist: 0.35,
+        ai: "teleporter", // drifts like an eye but blinks toward the player
+        w: 24,
+        h: 24,
+        color: "#6a4ac0",
+        drops: [{ id: "shadow_shard", min: 1, max: 1, chance: 0.5 }],
+        coins: [28, 55],
+      },
+      gloom_bat: {
+        name: "Gloom Bat",
+        hp: 44,
+        dmg: 20,
+        kbResist: 0.2,
+        ai: "bat",
+        w: 22,
+        h: 17,
+        color: "#37304a",
+        drops: [],
+        coins: [12, 24],
+      },
+
+      // ---- boss minion sheds (normal enemies, linked via .master) ----
+      jelly_minion: {
+        name: "Storm Jellyfish",
+        hp: 42,
+        dmg: 15,
+        kbResist: 0.3,
+        ai: "slime",
+        w: 22,
+        h: 15,
+        color: "#9b8cf0",
+        drops: [{ id: "gel", min: 1, max: 2, chance: 0.8 }],
+        coins: [8, 18],
+      },
+      sporeling: {
+        name: "Sporeling",
+        hp: 48,
+        dmg: 18,
+        kbResist: 0.35,
+        ai: "walker",
+        w: 20,
+        h: 22,
+        color: "#79b04a",
+        speed: 82,
+        jumpVel: 360,
+        look: "sporeling",
+        drops: [{ id: "mushstem", min: 1, max: 1, chance: 0.35 }],
+        coins: [10, 20],
+      },
 
       // ---- bosses (all kbResist 1; respect MAX_BOSSES via spawnBoss) ----
       king_slime: {
@@ -175,6 +312,7 @@
           { id: "gold_bar", min: 4, max: 7, chance: 1 },
           { id: "slime_crown", min: 1, max: 1, chance: 0.5 },
         ],
+        coins: [300, 600],
       },
       skeletron: {
         name: "Skeletron",
@@ -191,6 +329,7 @@
           { id: "bone", min: 20, max: 35, chance: 1 },
           { id: "gold_bar", min: 6, max: 10, chance: 1 },
         ],
+        coins: [500, 900],
       },
       skele_hand: {
         name: "Skeletron Hand",
@@ -219,8 +358,54 @@
           { id: "blood_shard", min: 15, max: 25, chance: 1 },
           { id: "gold_bar", min: 8, max: 12, chance: 1 },
         ],
+        coins: [1200, 2400],
+      },
+
+      // ---- wave 6-7 bosses ----
+      storm_jelly: {
+        name: "Storm Jelly",
+        hp: 1800,
+        dmg: 26,
+        kbResist: 1,
+        ai: "storm_jelly",
+        w: 80,
+        h: 64,
+        color: "#8f7ff0",
+        boss: true,
+        defense: 10,
+        drops: [
+          { id: "storm_core", min: 6, max: 10, chance: 1 },
+          { id: "gel", min: 25, max: 40, chance: 1 },
+          { id: "gold_bar", min: 4, max: 7, chance: 1 },
+        ],
+        coins: [800, 1600],
+      },
+      moss_mother: {
+        name: "Moss Mother",
+        hp: 2600,
+        dmg: 30,
+        kbResist: 1,
+        ai: "moss_mother",
+        w: 96,
+        h: 72,
+        color: "#5d7a3a",
+        boss: true,
+        defense: 14,
+        drops: [
+          { id: "moss_core", min: 8, max: 12, chance: 1 },
+          { id: "mushstem", min: 12, max: 20, chance: 1 },
+          { id: "gold_bar", min: 5, max: 9, chance: 1 },
+        ],
+        coins: [1000, 2000],
       },
     });
+  }
+
+  // Coins economy retrofit on a lead-owned def (zombie): field-level MERGE.
+  // A 'zombie: {...}' entry inside the assign above would replace the whole
+  // lead def instead of topping it up.
+  if (TC.ENEMY_DEFS && TC.ENEMY_DEFS.zombie) {
+    Object.assign(TC.ENEMY_DEFS.zombie, { coins: [15, 35] });
   }
 
   // -- item definitions added on top of TC.ITEM_DEFS (materials + summons) --
@@ -255,6 +440,10 @@
         maxStack: 20,
         boss: "__blood_moon__",
       },
+      // NOTE: storm_bell / moss_heart summons are lead-owned in constants.js
+      // (already wired to boss ids 'storm_jelly' / 'moss_mother' with their
+      // own recipes) — do NOT redefine them here; a redefinition remaps the
+      // legacy registry key and fails TC.Registry.validate().
     });
   }
 
@@ -392,12 +581,21 @@
       ["vulture", 0.6],
       ["ice_slime", 1.2],
       ["sand_slime", 1.0],
+      ["dune_stalker", 0.9],
+      ["frost_wolf", 1.0],
+      ["snapvine", 0.8],
     ],
-    night: [["eater_of_souls", 0.8]],
+    night: [
+      ["eater_of_souls", 0.8],
+      ["void_wisp", 0.7],
+      ["snapvine", 0.5],
+    ],
     cave: [
       ["skeleton", 1.4],
       ["granite_golem", 0.7],
       ["jungle_bat", 0.8],
+      ["rock_charger", 0.8],
+      ["gloom_bat", 0.7],
     ],
   };
   const BLOOD_MOON_TABLE = [
@@ -414,7 +612,17 @@
     if (id === TC.TILE.SNOW) return "snow";
     if (id === TC.TILE.JGRASS) return "jungle";
     if (id === TC.TILE.SAND) return "desert";
+    if (id === TC.TILE.EBONGRASS || id === TC.TILE.EBONSTONE)
+      return "corruption";
     return "";
+  }
+  // Player depth below the local surface, in tiles (depth-gated cave picks).
+  function playerDepthT() {
+    const w = TC.world,
+      p = TC.player;
+    if (!w || !p || !w.surfaceY) return 0;
+    const col = clamp(Math.floor((p.x + p.w / 2) / TC.CONST.TS), 0, w.width - 1);
+    return (p.y + p.h / 2) / TC.CONST.TS - (w.surfaceY[col] || 0);
   }
   function zoneTable(zone, pcol) {
     const C = TC.CONST;
@@ -425,14 +633,21 @@
     const base =
       bio && zone !== "cave" ? bio : (C.SPAWN && C.SPAWN[zone]) || [];
     if (zone === "night" && bloodMoon) return BLOOD_MOON_TABLE;
+    const b = surfaceBiome(pcol);
+    const depth = playerDepthT();
     const extra = (EXTRA_SPAWN[zone] || []).filter((entry) => {
       const def = TC.ENEMY_DEFS[entry[0]];
       if (def && def.bloodMoonOnly && !bloodMoon) return false;
-      const b = surfaceBiome(pcol);
       if (entry[0] === "ice_slime") return b === "snow";
       if (entry[0] === "sand_slime") return b === "desert";
       if (entry[0] === "vulture") return b === "desert";
       if (entry[0] === "jungle_bat") return true; // cave-adjacent jungle bat
+      if (entry[0] === "dune_stalker") return b === "desert";
+      if (entry[0] === "frost_wolf") return b === "snow";
+      if (entry[0] === "snapvine") return b === "jungle";
+      if (entry[0] === "void_wisp") return b === "corruption"; // night only
+      if (entry[0] === "rock_charger") return depth > 16;
+      if (entry[0] === "gloom_bat") return depth > 42; // deep underground
       return true;
     });
     return base.concat(extra);
@@ -478,6 +693,8 @@
       ai === "bat" ||
       ai === "eye_boss" ||
       ai === "harpy" ||
+      ai === "teleporter" ||
+      ai === "storm_jelly" ||
       ai === "skeletron" ||
       ai === "skele_hand" ||
       ai === "hungry" ||
@@ -738,11 +955,32 @@
 
       case "walker": {
         // daylight-immune ground chaser (skeleton / granite golem / blood
-        // crawler), tuned by def.speed / def.jumpVel
+        // crawler / wave 6-7 walkers), tuned by def.speed / def.jumpVel;
+        // def.lunge adds a frost-wolf pounce, def.charge a rock-charger rush
         if (p && !p.dead) {
           const dir = pcx >= ecx ? 1 : -1;
+          let target = e.def.speed || 55;
+          if (e.def.lunge) {
+            // frost wolf: bursts of extra vx when the player is close by
+            e.atkTimer -= dt;
+            if (
+              e.atkTimer <= 0 &&
+              Math.abs(pcx - ecx) < 9 * TC.CONST.TS &&
+              Math.abs(pcy - ecy) < 3 * TC.CONST.TS
+            ) {
+              e.atkTimer = rand(1.8, 3);
+              e.vx = dir * (target + (e.def.lungeBoost || 90));
+            }
+          }
+          if (
+            e.def.charge &&
+            Math.abs(pcy - ecy) < 2.5 * TC.CONST.TS &&
+            Math.abs(pcx - ecx) < 12 * TC.CONST.TS
+          ) {
+            target = e.def.chargeSpeed || 220; // straight-line rush, capped
+          }
           e.facing = dir;
-          e.vx = approach(e.vx, dir * (e.def.speed || 55), 8, dt);
+          e.vx = approach(e.vx, dir * target, 8, dt);
           if (e.onGround && e.hitWall) e.vy = -(e.def.jumpVel || 330);
         } else {
           e.vx = approach(e.vx, 0, 4, dt);
@@ -1035,6 +1273,289 @@
         return true;
       }
 
+      case "stationary": {
+        // rooted hazard (snapvine): cannot move; bites players in short
+        // reach on a cooldown, with a brief telegraphed wind-up
+        e.vx = 0;
+        e.vy = 0;
+        const inReach =
+          p &&
+          !p.dead &&
+          Math.abs(pcx - ecx) < 3.2 * TC.CONST.TS &&
+          Math.abs(pcy - ecy) < 2.6 * TC.CONST.TS;
+        if (e.astate === "bite") {
+          e.teleTimer -= dt;
+          if (e.teleTimer <= 0) {
+            e.astate = "idle";
+            e.atkTimer = rand(1.6, 2.6);
+            if (inReach) {
+              const dir = pcx >= ecx ? 1 : -1;
+              e.facing = dir;
+              if (
+                TC.Combat &&
+                typeof TC.Combat.hurtPlayer === "function"
+              ) {
+                TC.Combat.hurtPlayer(
+                  e.def.dmg,
+                  dir * TOUCH_KB_X,
+                  TOUCH_KB_Y,
+                  e.def.name,
+                );
+              }
+              puffAt(ecx + dir * 10, ecy, ["#4a9a3e", "#c8e8a0"]);
+              if (TC.Audio) TC.Audio.play("hit");
+            }
+          }
+          return true;
+        }
+        e.atkTimer -= dt;
+        if (inReach && e.atkTimer <= 0) {
+          e.astate = "bite";
+          e.teleTimer = 0.32;
+          e.facing = pcx >= ecx ? 1 : -1;
+        }
+        return true;
+      }
+
+      case "teleporter": {
+        // void wisp: drifts like an eye but periodically blinks a short
+        // distance toward the player in a puff of particles
+        if (e.blinkTimer == null) e.blinkTimer = rand(2, 3.5);
+        e.phase += dt * 3;
+        e.blinkTimer -= dt;
+        if (p && !p.dead) {
+          const dx = pcx - ecx,
+            dy = pcy - ecy;
+          const d = Math.hypot(dx, dy) || 1;
+          const ACC = 300;
+          e.vx += (dx / d) * ACC * dt;
+          e.vy += (dy / d) * ACC * dt;
+          const wob = Math.sin(e.phase) * 200 * dt;
+          e.vx += (-dy / d) * wob;
+          e.vy += (dx / d) * wob;
+          const sp = Math.hypot(e.vx, e.vy);
+          if (sp > 150) {
+            e.vx *= 150 / sp;
+            e.vy *= 150 / sp;
+          }
+        } else {
+          e.vx = approach(e.vx, 0, 1.5, dt);
+          e.vy = approach(e.vy, 0, 1.5, dt);
+        }
+        if (e.blinkTimer <= 0 && p && !p.dead) {
+          e.blinkTimer = rand(2.2, 3.6);
+          puffAt(ecx, ecy, [e.def.color, "#b89aff"]);
+          const dx = pcx - ecx,
+            dy = pcy - ecy;
+          const d = Math.hypot(dx, dy) || 1;
+          const dist = rand(80, 150); // always a substantial short-range blink
+          // toward-player full/half hops, then an upward pop for when the
+          // wisp is terrain-pinned against the ground beside its target
+          const hops = [
+            [e.x + (dx / d) * dist, e.y + (dy / d) * dist],
+            [e.x + (dx / d) * dist * 0.5, e.y + (dy / d) * dist * 0.5],
+            [e.x, e.y - Math.max(56, dist * 0.6)],
+          ];
+          for (let k = 0; k < hops.length; k++) {
+            if (!rectSolid(hops[k][0], hops[k][1], e.w, e.h)) {
+              e.x = hops[k][0];
+              e.y = hops[k][1];
+              break;
+            }
+          }
+          puffAt(e.x + e.w / 2, e.y + e.h / 2, [e.def.color, "#b89aff"]);
+          e.vx *= 0.25; // resume the drift gently
+          e.vy *= 0.25;
+        }
+        e.facing = e.vx >= 0 ? 1 : -1;
+        return true;
+      }
+
+      case "storm_jelly": {
+        // Storm Jelly: hovers above the player swaying side to side; cycles
+        // telegraphed triple lightning drops with dash sweeps; escalates at
+        // 66% (faster, more sweeps) and 33% (sheds up to two tiny jellies)
+        if (e.cycleTimer == null) e.cycleTimer = 2.2;
+        const frac = e.hp / e.maxHp;
+        if (!e.phase2 && frac <= 0.66) {
+          e.phase2 = true;
+          e.cycleTimer = Math.min(e.cycleTimer, 1.2);
+          puffAt(ecx, ecy, [e.def.color, "#ffffff"]);
+        }
+        if (!e.phase3 && frac <= 0.33) {
+          e.phase3 = true;
+          puffAt(ecx, ecy, [e.def.color, "#ffe98a"]);
+          if (p && !p.dead)
+            for (let k = 0; k < 2 && e.servants < 2; k++)
+              spawnServantOf(e, "jelly_minion", ecx, ecy + 24);
+        }
+        const ph = e.phase3 ? 3 : e.phase2 ? 2 : 1;
+
+        if (e.bstate === "dash") {
+          // sweep through the player's last position until bounced or spent
+          const done = e.vx * e.dashDx + e.vy * e.dashDy < 0;
+          const DSP = ph >= 2 ? 470 : 400;
+          if (done || e.dashLeft <= 0) {
+            e.bstate = "hover";
+            e.cycleTimer = jellyCycle(ph);
+          } else {
+            e.vx = e.dashDx * DSP;
+            e.vy = e.dashDy * DSP;
+            e.dashLeft -= DSP * dt;
+          }
+          e.facing = e.vx >= 0 ? 1 : -1;
+          return true;
+        }
+
+        if (e.bstate === "tele") {
+          // one pause of the volley: hang right over the player, flashing,
+          // then drop a fast bolt straight down
+          const hx = pcx - e.w / 2;
+          const hy = pcy - 7 * TC.CONST.TS - e.h / 2 + Math.sin(clock * 2) * 5;
+          const dx = hx - e.x,
+            dy = hy - e.y;
+          const d = Math.hypot(dx, dy) || 1;
+          e.vx += (dx / d) * 520 * dt;
+          e.vy += (dy / d) * 520 * dt;
+          const tsp = Math.hypot(e.vx, e.vy);
+          if (tsp > 250) {
+            e.vx *= 250 / tsp;
+            e.vy *= 250 / tsp;
+          }
+          e.teleTimer -= dt;
+          if (e.teleTimer <= 0) {
+            dropLightning(e);
+            e.shotsLeft--;
+            if (e.shotsLeft > 0) {
+              e.teleTimer = 0.55;
+            } else {
+              e.bstate = "hover";
+              e.cycleTimer = jellyCycle(ph);
+            }
+          }
+          return true;
+        }
+
+        // hover: drift overhead, swaying
+        e.cycleTimer -= dt;
+        const hx = pcx + Math.sin(clock * 0.7 + e.phase) * 46 - e.w / 2;
+        const hy =
+          pcy -
+          (e.hoverH || 12 * TC.CONST.TS) +
+          Math.sin(clock * 1.15 + e.phase) * 10 -
+          e.h / 2;
+        const dx = hx - e.x,
+          dy = hy - e.y;
+        const d = Math.hypot(dx, dy) || 1;
+        e.vx += (dx / d) * 260 * dt;
+        e.vy += (dy / d) * 260 * dt;
+        const hsp = Math.hypot(e.vx, e.vy);
+        if (hsp > 120) {
+          e.vx *= 120 / hsp;
+          e.vy *= 120 / hsp;
+        }
+        e.facing = pcx >= ecx ? 1 : -1;
+
+        if (e.cycleTimer <= 0 && p && !p.dead) {
+          // later phases favor the sweep more often
+          const dashW = ph === 1 ? 0.9 : ph === 2 ? 1.7 : 2.2;
+          if (weightedPick([["bolt", 1.4], ["dash", dashW]]) === "dash") {
+            const ddx = pcx - ecx,
+              ddy = pcy - ecy;
+            const dd = Math.hypot(ddx, ddy) || 1;
+            e.dashDx = ddx / dd;
+            e.dashDy = ddy / dd;
+            e.dashLeft = 13 * TC.CONST.TS;
+            e.bstate = "dash";
+          } else {
+            e.bstate = "tele";
+            e.shotsLeft = 3;
+            e.teleTimer = 0.55;
+          }
+        }
+        return true;
+      }
+
+      case "moss_mother": {
+        // Moss Mother: slow relentless grounded walker that leaps obstacles;
+        // root slams up close, fanned spore breath at range; sheds 2-3
+        // sporelings at 50% and again at 25%; enrages below 25%
+        if (e.cycleTimer == null) e.cycleTimer = 2.8;
+        const frac = e.hp / e.maxHp;
+        if (!e.phase2 && frac <= 0.5) {
+          e.phase2 = true;
+          shedSporelings(e, ecx, ecy);
+          puffAt(ecx, ecy, [e.def.color, "#8adf6a"]);
+        }
+        if (!e.phase3 && frac <= 0.25) {
+          e.phase3 = true;
+          shedSporelings(e, ecx, ecy);
+          puffAt(ecx, ecy, [e.def.color, "#ff8a6a"]);
+        }
+        const enraged = !!e.phase3;
+
+        if (e.astate === "slamWind" || e.astate === "breathWind") {
+          // wind-up: she plants her roots, then releases
+          e.teleTimer -= dt;
+          e.vx = approach(e.vx, 0, 10, dt);
+          if (e.teleTimer <= 0) {
+            const wasSlam = e.astate === "slamWind";
+            e.astate = "idle";
+            e.cycleTimer = enraged ? rand(1.2, 1.9) : rand(2.2, 3.2);
+            if (wasSlam) {
+              if (
+                TC.Combat &&
+                typeof TC.Combat.shockwave === "function"
+              ) {
+                TC.Combat.shockwave(
+                  ecx,
+                  e.y + e.h,
+                  4.2 * TC.CONST.TS,
+                  e.def.dmg,
+                  300,
+                );
+              }
+              puffAt(ecx, e.y + e.h, ["#8a6f4a", "#5a4632"]);
+            } else {
+              sporeBreath(e);
+            }
+          }
+          return true;
+        }
+
+        // movement: slow relentless walk; vaults walls with a leap
+        const mul = enraged ? 1.5 : 1;
+        if (p && !p.dead) {
+          const dir = pcx >= ecx ? 1 : -1;
+          e.facing = dir;
+          e.vx = approach(e.vx, dir * (e.def.speed || 46) * mul, 4, dt);
+        } else {
+          e.vx = approach(e.vx, 0, 3, dt);
+        }
+        if (e.onGround && e.hitWall) {
+          e.vy = -430;
+          e.vx = (e.facing || 1) * 150;
+        }
+
+        // pick an attack when the cycle comes around
+        e.cycleTimer -= dt;
+        if (e.cycleTimer <= 0 && p && !p.dead && e.onGround) {
+          const adx = Math.abs(pcx - ecx);
+          const ady = Math.abs(pcy - ecy);
+          if (adx < 4.5 * TC.CONST.TS && ady < 4 * TC.CONST.TS) {
+            e.astate = "slamWind"; // player close: radial root slam
+            e.teleTimer = 0.45;
+          } else if (adx < 18 * TC.CONST.TS) {
+            e.astate = "breathWind"; // range: arc burst of spores
+            e.teleTimer = 0.5;
+            e.facing = pcx >= ecx ? 1 : -1;
+          } else {
+            e.cycleTimer = 0.8; // keep walking until she's in range
+          }
+        }
+        return true;
+      }
+
       default:
         return true;
     }
@@ -1284,6 +1805,134 @@
     }
   }
 
+  // ---- hostile boss projectiles ----
+  // TC.Projectiles deliberately damages enemies only (see projectiles.js),
+  // so boss shots ride the pool for motion/tiles/light with owner:null and
+  // player contact is tracked here each frame (the same split wiring.js uses
+  // for trap darts). The shooter is pre-seeded into every shot's hit list so
+  // homing/bite-back can never target the boss herself.
+  const hostileShots = [];
+
+  function trackHostileShot(pr, shooter, dmg) {
+    if (!pr) return;
+    if (Array.isArray(pr.hits)) pr.hits.push(shooter);
+    // remember the type: pooled slots recycle, so the tracker must confirm
+    // the slot still holds this kind of shot before reading it as hostile
+    hostileShots.push({ p: pr, type: pr.type, dmg: dmg, src: shooter.def.name });
+  }
+
+  function updateHostileShots() {
+    for (let i = hostileShots.length - 1; i >= 0; i--) {
+      const h = hostileShots[i];
+      if (
+        !h.p ||
+        !h.p.active ||
+        h.p.type !== h.type ||
+        h.p.owner != null
+      ) {
+        hostileShots.splice(i, 1);
+        continue;
+      }
+      const p = TC.player;
+      if (!p || p.dead) continue;
+      const r = h.p.hitRadius || 8;
+      if (
+        h.p.x + r > p.x &&
+        h.p.x - r < p.x + p.w &&
+        h.p.y + r > p.y &&
+        h.p.y - r < p.y + p.h &&
+        TC.Combat &&
+        typeof TC.Combat.hurtPlayer === "function"
+      ) {
+        try {
+          TC.Combat.hurtPlayer(
+            h.dmg,
+            (h.p.vx >= 0 ? 1 : -1) * 170,
+            -150,
+            h.src,
+          );
+        } catch (err) {}
+        h.p.age = (h.p.maxAge || 1) + 1; // expire on the pool's next tick
+        hostileShots.splice(i, 1);
+      }
+    }
+  }
+
+  function puffAt(x, y, colors) {
+    if (TC.Particles && typeof TC.Particles.burst === "function") {
+      try {
+        TC.Particles.burst(x, y, 10, {
+          colors: colors,
+          speed: 120,
+          life: 0.45,
+          size: 2.5,
+          gravity: 0,
+        });
+      } catch (err) {}
+    }
+  }
+
+  // Storm Jelly attack cadence per phase (seconds between attacks).
+  function jellyCycle(ph) {
+    return ph === 1 ? rand(2.6, 3.6) : ph === 2 ? rand(1.8, 2.6) : rand(1.4, 2.1);
+  }
+
+  function dropLightning(e) {
+    if (!(TC.Projectiles && typeof TC.Projectiles.spawn === "function"))
+      return;
+    const dmg = Math.round(e.def.dmg * 0.85);
+    const pr = TC.Projectiles.spawn(
+      "falling_star",
+      e.x + e.w / 2,
+      e.y + e.h,
+      Math.PI / 2, // straight down (+y)
+      {
+        owner: null,
+        speed: 470,
+        dmg: dmg,
+        kb: 3,
+        life: 2.2,
+        hitRadius: 11,
+        color: "#ffe98a",
+      },
+    );
+    trackHostileShot(pr, e, dmg);
+    puffAt(e.x + e.w / 2, e.y + e.h, ["#ffe98a", "#ffffff"]);
+  }
+
+  function sporeBreath(e) {
+    if (!(TC.Projectiles && typeof TC.Projectiles.spawn === "function"))
+      return;
+    const f = e.facing || 1;
+    const cx = e.x + e.w / 2 + f * e.w * 0.45,
+      cy = e.y + e.h * 0.38;
+    let base = f > 0 ? 0 : Math.PI;
+    const p = TC.player;
+    if (p && !p.dead)
+      base = Math.atan2(p.y + p.h / 2 - cy, p.x + p.w / 2 - cx);
+    const n = 5 + Math.floor(Math.random() * 3); // arc burst of 5-7 spores
+    const dmg = Math.round(e.def.dmg * 0.55);
+    for (let k = 0; k < n; k++) {
+      const ang = base + (k / (n - 1) - 0.5) * 0.76;
+      const pr = TC.Projectiles.spawn("magic_bolt", cx, cy, ang, {
+        owner: null,
+        speed: 290,
+        dmg: dmg,
+        kb: 2,
+        life: 2.4,
+        hitRadius: 9,
+        color: "#8adf6a",
+      });
+      trackHostileShot(pr, e, dmg);
+    }
+    puffAt(cx, cy, ["#8adf6a", "#c8f0a8"]);
+  }
+
+  function shedSporelings(e, bx, by) {
+    const n = 2 + (Math.random() < 0.5 ? 1 : 0); // 2-3 minions
+    for (let k = 0; k < n; k++) spawnServantOf(e, "sporeling", bx, by);
+  }
+
   // ---- boss summoning ----
   // Shed a servant of `type` beside the boss in free space. Links it to the
   // boss (dies with the boss, tracked via boss.servants). Returns the enemy.
@@ -1361,6 +2010,11 @@
       // slide in from whichever side the player is closer to
       e.dir = p && p.x + p.w / 2 >= x + def.w / 2 ? 1 : -1;
       e.summonTimer = 7;
+    } else if (type === "storm_jelly") {
+      e.cycleTimer = 2.2; // first attack after a short settle
+      e.shotsLeft = 0;
+    } else if (type === "moss_mother") {
+      e.cycleTimer = 2.8;
     }
 
     list.push(e);
@@ -1396,6 +2050,9 @@
       setBloodMoon(false); // dawn
     }
     prevDaylight = dl;
+
+    // boss-shot player contact (pool damages enemies only; see above)
+    updateHostileShots();
 
     for (let i = list.length - 1; i >= 0; i--) {
       const e = list[i];
@@ -1837,6 +2494,191 @@
       c.fillRect(x + w * 0.42, y + h * 0.38, w * 0.16, h * 0.14);
       c.fillStyle = "#3a4a56";
       c.fillRect(x + (f === 1 ? w * 0.58 : w * 0.26), y + h * 0.09, 4, 3);
+    } else if (look === "charger") {
+      // boulder brute: craggy round body, heavy arms; the ember core flares
+      // brighter the faster it charges
+      c.fillStyle = "#6a6054";
+      c.fillRect(x + w * 0.18, y + h * 0.66, w * 0.24, h * 0.34);
+      c.fillRect(x + w * 0.58, y + h * 0.66, w * 0.24, h * 0.34);
+      c.fillStyle = e.def.color;
+      c.beginPath();
+      c.arc(x + w * 0.5, y + h * 0.44, w * 0.46, 0, Math.PI * 2);
+      c.fill();
+      c.strokeStyle = "rgba(50,44,38,0.7)";
+      c.lineWidth = 1.5;
+      c.beginPath();
+      c.moveTo(x + w * 0.2, y + h * 0.36);
+      c.lineTo(x + w * 0.42, y + h * 0.5);
+      c.moveTo(x + w * 0.66, y + h * 0.26);
+      c.lineTo(x + w * 0.58, y + h * 0.48);
+      c.moveTo(x + w * 0.4, y + h * 0.68);
+      c.lineTo(x + w * 0.6, y + h * 0.6);
+      c.stroke();
+      const glow = clamp(Math.abs(e.vx) / 200, 0, 1);
+      c.fillStyle = hexA("#ff8a3a", 0.35 + glow * 0.55);
+      c.beginPath();
+      c.arc(x + w * 0.5, y + h * 0.46, w * 0.14, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = "#2c2620";
+      c.fillRect(x + (f === 1 ? w * 0.6 : w * 0.26), y + h * 0.28, 4, 4);
+      c.fillRect(x + (f === 1 ? w * 0.74 : w * 0.4), y + h * 0.3, 4, 4);
+    } else if (look === "wolf") {
+      // lean arctic wolf: galloping legs, bushy tail, pointed ears
+      c.strokeStyle = "#7e9cb8";
+      c.lineWidth = 3;
+      c.lineCap = "round";
+      c.beginPath();
+      for (let i = 0; i < 2; i++) {
+        const lx = x + w * (0.3 + i * 0.4);
+        const o = (i === 0 ? 1 : -1) * step * 4;
+        c.moveTo(lx + o, y + h * 0.6);
+        c.lineTo(lx + o * 1.6, y + h);
+        c.moveTo(lx + 5 - o, y + h * 0.6);
+        c.lineTo(lx + 5 - o * 1.6, y + h);
+      }
+      c.stroke();
+      c.fillStyle = e.def.color;
+      c.beginPath();
+      c.ellipse(
+        x + w * 0.48,
+        y + h * 0.46,
+        w * 0.36,
+        h * 0.3,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      c.fill();
+      // tail streaming behind
+      const rx = x + w * (f === 1 ? 0.16 : 0.84);
+      c.strokeStyle = e.def.color;
+      c.lineWidth = 5;
+      c.beginPath();
+      c.moveTo(rx, y + h * 0.42);
+      c.quadraticCurveTo(
+        rx - f * w * 0.16,
+        y + h * 0.22,
+        rx - f * w * 0.3,
+        y + h * 0.34,
+      );
+      c.stroke();
+      // head with muzzle and ears
+      const hd = x + w * (f === 1 ? 0.76 : 0.24);
+      c.fillStyle = e.def.color;
+      c.beginPath();
+      c.arc(hd, y + h * 0.34, h * 0.26, 0, Math.PI * 2);
+      c.fill();
+      c.beginPath(); // ears sweep back
+      c.moveTo(hd - f * 3, y + h * 0.14);
+      c.lineTo(hd - f * 8, y - h * 0.04);
+      c.lineTo(hd - f * 12, y + h * 0.18);
+      c.closePath();
+      c.fill();
+      c.beginPath(); // muzzle
+      c.moveTo(hd + f * h * 0.16, y + h * 0.28);
+      c.lineTo(hd + f * h * 0.44, y + h * 0.38);
+      c.lineTo(hd + f * h * 0.16, y + h * 0.46);
+      c.closePath();
+      c.fill();
+      c.fillStyle = "#eef6fc"; // chest ruff
+      c.beginPath();
+      c.ellipse(
+        hd - f * w * 0.08,
+        y + h * 0.52,
+        h * 0.16,
+        h * 0.12,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      c.fill();
+      c.fillStyle = "#16222e";
+      c.fillRect(hd + f * 2 - 1.5, y + h * 0.26, 3, 3); // eye
+      c.fillRect(hd + f * h * 0.4, y + h * 0.35, 2.5, 2.5); // nose
+    } else if (look === "stalker") {
+      // low sand lizard: scuttling legs, long tail, wedge head
+      c.strokeStyle = "#a8894e";
+      c.lineWidth = 2.5;
+      c.lineCap = "round";
+      c.beginPath();
+      for (let i = 0; i < 2; i++) {
+        const lx = x + w * (0.32 + i * 0.36);
+        c.moveTo(lx, y + h * 0.62);
+        c.lineTo(lx - 3 + step * 3, y + h);
+        c.moveTo(lx + 4, y + h * 0.62);
+        c.lineTo(lx + 7 - step * 3, y + h);
+      }
+      c.stroke();
+      c.fillStyle = e.def.color;
+      c.beginPath();
+      c.ellipse(
+        x + w * 0.5,
+        y + h * 0.5,
+        w * 0.4,
+        h * 0.26,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      c.fill();
+      // tail curls away from travel
+      const rx = x + w * (f === 1 ? 0.14 : 0.86);
+      c.strokeStyle = e.def.color;
+      c.lineWidth = 4;
+      c.beginPath();
+      c.moveTo(rx, y + h * 0.46);
+      c.quadraticCurveTo(
+        rx - f * w * 0.14,
+        y + h * 0.36,
+        rx - f * w * 0.24,
+        y + h * 0.56,
+      );
+      c.stroke();
+      c.fillStyle = "#8a6f3c"; // back stripe
+      c.fillRect(x + w * 0.24, y + h * 0.32, w * 0.5, 3);
+      const hd = x + w * (f === 1 ? 0.78 : 0.22);
+      c.fillStyle = e.def.color;
+      c.beginPath();
+      c.moveTo(hd, y + h * 0.36);
+      c.lineTo(hd + f * w * 0.24, y + h * 0.5);
+      c.lineTo(hd, y + h * 0.64);
+      c.closePath();
+      c.fill();
+      c.fillStyle = "#1c1408";
+      c.fillRect(hd + f * w * 0.06 - 1.5, y + h * 0.42, 3, 3);
+    } else if (look === "sporeling") {
+      // mushroom imp: domed cap over a pale stem body
+      c.fillStyle = "#d8cfa8";
+      c.fillRect(x + w * 0.2 + step * 2, y + h * 0.78, w * 0.22, h * 0.22);
+      c.fillRect(x + w * 0.58 - step * 2, y + h * 0.78, w * 0.22, h * 0.22);
+      c.beginPath();
+      c.ellipse(
+        x + w * 0.5,
+        y + h * 0.58,
+        w * 0.3,
+        h * 0.28,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      c.fill();
+      c.fillStyle = e.def.color;
+      c.beginPath();
+      c.moveTo(x - w * 0.08, y + h * 0.44);
+      c.quadraticCurveTo(
+        x + w * 0.5,
+        y - h * 0.14,
+        x + w * 1.08,
+        y + h * 0.44,
+      );
+      c.closePath();
+      c.fill();
+      c.fillStyle = "#c8e8a8";
+      c.fillRect(x + w * 0.3, y + h * 0.16, 3, 3);
+      c.fillRect(x + w * 0.62, y + h * 0.22, 3, 3);
+      c.fillStyle = "#2a2018";
+      c.fillRect(x + (f === 1 ? w * 0.54 : w * 0.32), y + h * 0.54, 2.5, 4);
+      c.fillRect(x + (f === 1 ? w * 0.68 : w * 0.46), y + h * 0.54, 2.5, 4);
     } else {
       // crawler: low, wide blood spider
       c.strokeStyle = "#701a1a";
@@ -2168,6 +3010,311 @@
     }
   }
 
+  function drawSnapvine(c, e) {
+    const x = e.x,
+      y = e.y,
+      w = e.w,
+      h = e.h;
+    const f = e.facing || 1;
+    const biting = e.astate === "bite";
+    // jaw openness: idle breathing, wide through the wind-up, snap at release
+    const g = biting
+      ? Math.max(0.1, Math.sin((1 - e.teleTimer / 0.32) * Math.PI) * 0.95)
+      : 0.14 + Math.sin(clock * 2 + e.phase) * 0.06;
+
+    // root pod anchoring the stalk
+    c.fillStyle = "#6a4a2c";
+    c.beginPath();
+    c.ellipse(x + w / 2, y + h * 0.88, w * 0.52, h * 0.16, 0, 0, Math.PI * 2);
+    c.fill();
+
+    // curling stalk leaning toward its facing
+    c.strokeStyle = "#3a6a2c";
+    c.lineWidth = 4;
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(x + w / 2, y + h * 0.86);
+    c.quadraticCurveTo(
+      x + w / 2 - f * w * 0.22,
+      y + h * 0.58,
+      x + w / 2 + f * w * 0.08,
+      y + h * 0.42,
+    );
+    c.stroke();
+
+    // head bulb with a wedge maw aimed at the player
+    const hx = x + w / 2 + f * w * 0.08,
+      hy = y + h * 0.34,
+      hr = w * 0.46;
+    c.save();
+    c.translate(hx, hy);
+    c.rotate(f * 0.14);
+    c.fillStyle = e.def.color;
+    c.beginPath();
+    c.arc(0, 0, hr, 0, Math.PI * 2);
+    c.fill();
+    const ma = 0.18 + g * 0.7; // half-angle of the open mouth
+    const a0 = f > 0 ? -ma : Math.PI - ma;
+    c.fillStyle = "#2a1414";
+    c.beginPath();
+    c.moveTo(0, 0);
+    c.arc(0, 0, hr * 1.02, a0, a0 + ma * 2);
+    c.closePath();
+    c.fill();
+    // teeth flanking the maw
+    const bx = f > 0 ? 1 : -1;
+    c.fillStyle = "#e8e4c8";
+    c.fillRect(bx * hr * 0.62 - 1.5, -hr * 0.3, 3, 5);
+    c.fillRect(bx * hr * 0.62 - 1.5, hr * 0.18, 3, 5);
+    // crest leaf
+    c.strokeStyle = "#79b04a";
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(-bx * hr * 0.2, -hr * 0.9);
+    c.quadraticCurveTo(-bx * hr * 0.9, -hr * 1.5, -bx * hr * 1.3, -hr * 0.8);
+    c.stroke();
+    c.restore();
+  }
+
+  function drawVoidWisp(c, e) {
+    const cx = e.x + e.w / 2,
+      cy = e.y + e.h / 2,
+      r = e.w / 2;
+    const sp = Math.hypot(e.vx, e.vy);
+    const bx = sp > 10 ? -e.vx / sp : 0,
+      by = sp > 10 ? -e.vy / sp : -0.4;
+
+    // trailing tendrils stream behind the motion
+    c.strokeStyle = hexA("#7a5af5", 0.5);
+    c.lineWidth = 2;
+    c.lineCap = "round";
+    for (let i = -1; i <= 1; i++) {
+      const wob = Math.sin(clock * 4 + i * 2.1 + e.phase) * r * 0.5;
+      c.beginPath();
+      c.moveTo(cx, cy);
+      c.quadraticCurveTo(
+        cx + bx * r * 1.4 - by * wob,
+        cy + by * r * 1.4 + bx * wob,
+        cx + bx * r * (2.2 + i * 0.35),
+        cy + by * r * (2.2 + i * 0.35),
+      );
+      c.stroke();
+    }
+
+    // layered glow body around a dark core
+    const flick = 0.85 + Math.sin(clock * 7 + e.phase) * 0.15;
+    c.fillStyle = hexA("#8f7ff0", 0.22 * flick);
+    c.beginPath();
+    c.arc(cx, cy, r * 1.6, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = hexA(e.def.color, 0.8 * flick);
+    c.beginPath();
+    c.arc(cx, cy, r, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = "#241238";
+    c.beginPath();
+    c.arc(cx, cy, r * 0.6, 0, Math.PI * 2);
+    c.fill();
+
+    // single pale eye tracks the player
+    let tx = e.facing || 1,
+      ty = 0;
+    const p = TC.player;
+    if (p) {
+      const dx = p.x + p.w / 2 - cx,
+        dy = p.y + p.h / 2 - cy;
+      const d = Math.hypot(dx, dy) || 1;
+      tx = dx / d;
+      ty = dy / d;
+    }
+    c.fillStyle = "#bfe8ff";
+    c.beginPath();
+    c.arc(cx + tx * r * 0.22, cy + ty * r * 0.22, r * 0.2, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = "rgba(255,255,255,0.8)";
+    c.fillRect(cx + tx * r * 0.22 - 1, cy + ty * r * 0.22 - 2, 2, 2);
+  }
+
+  function drawStormJelly(c, e) {
+    const x = e.x,
+      y = e.y,
+      w = e.w,
+      h = e.h;
+    const cx = x + w / 2;
+    const tele = e.bstate === "tele";
+    const ph3 = !!e.phase3;
+    const domeH = h * 0.55;
+    const pulse = 0.5 + Math.sin(clock * (tele ? 22 : 3)) * 0.5;
+    const tint = ph3 ? "#c09aff" : "#8f7ff0";
+
+    const bellPath = () => {
+      c.beginPath();
+      c.moveTo(x, y + domeH);
+      c.quadraticCurveTo(x - w * 0.02, y - h * 0.08, cx, y - h * 0.08);
+      c.quadraticCurveTo(x + w * 1.02, y - h * 0.08, x + w, y + domeH);
+      c.quadraticCurveTo(x + w * 0.5, y + domeH + 6, x, y + domeH);
+      c.closePath();
+    };
+
+    c.save();
+    if (tele) c.translate(Math.sin(clock * 55) * 1.6, 0); // charge shudder
+
+    // trailing tentacles sway beneath the bell
+    c.strokeStyle = hexA(tint, 0.65);
+    c.lineWidth = 3;
+    c.lineCap = "round";
+    for (let i = 0; i < 5; i++) {
+      const tx = x + w * (0.16 + i * 0.17);
+      const sw = Math.sin(clock * 2.4 + i * 1.7 + e.phase) * 7;
+      c.beginPath();
+      c.moveTo(tx, y + domeH * 0.8);
+      c.quadraticCurveTo(
+        tx + sw * 0.6,
+        y + domeH + (h - domeH) * 0.4,
+        tx + sw,
+        y + h * (0.92 + ((i * 7) % 3) * 0.03),
+      );
+      c.stroke();
+    }
+
+    // translucent violet-blue bell with a bright rim
+    c.fillStyle = hexA(tint, 0.42);
+    bellPath();
+    c.fill();
+    c.strokeStyle = hexA("#bdafff", 0.75);
+    c.lineWidth = 2;
+    bellPath();
+    c.stroke();
+
+    // inner glow + rim frill
+    c.fillStyle = hexA("#cdbfff", 0.3 + pulse * 0.15);
+    c.beginPath();
+    c.ellipse(cx, y + domeH * 0.6, w * 0.28, domeH * 0.32, 0, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = hexA("#6a5ad0", 0.5);
+    c.fillRect(x + 2, y + domeH - 3, w - 4, 4);
+
+    // eyes
+    c.fillStyle = "#241a4a";
+    c.fillRect(cx - 10, y + domeH * 0.38, 4, 6);
+    c.fillRect(cx + 6, y + domeH * 0.38, 4, 6);
+
+    // lightning telegraph washes the whole bell in warning yellow
+    if (tele) {
+      c.fillStyle = "rgba(255,233,138," + (0.2 + pulse * 0.35).toFixed(2) + ")";
+      bellPath();
+      c.fill();
+    }
+
+    // dash streaks trail opposite the motion
+    if (e.bstate === "dash") {
+      c.strokeStyle = "rgba(190,175,255,0.5)";
+      c.lineWidth = 2;
+      for (let i = 0; i < 3; i++) {
+        c.beginPath();
+        c.moveTo(cx - e.vx * 0.05, y + domeH * (0.3 + i * 0.25));
+        c.lineTo(cx - e.vx * 0.12, y + domeH * (0.3 + i * 0.25));
+        c.stroke();
+      }
+    }
+    c.restore();
+  }
+
+  function drawMossMother(c, e) {
+    const x = e.x,
+      y = e.y,
+      w = e.w,
+      h = e.h;
+    const f = e.facing || 1;
+    const walking = Math.abs(e.vx) > 6 && e.onGround;
+    const step = walking ? Math.sin(clock * 6 + e.phase) : 0;
+    const enr = !!e.phase3;
+    const winding = e.astate === "slamWind" || e.astate === "breathWind";
+
+    c.save();
+    if (e.astate === "slamWind") c.translate(Math.sin(clock * 40) * 1.5, 0);
+
+    // root legs
+    c.strokeStyle = "#4a3826";
+    c.lineWidth = 6;
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(x + w * 0.28, y + h * 0.72);
+    c.lineTo(x + w * 0.24 + step * 4, y + h);
+    c.moveTo(x + w * 0.68, y + h * 0.72);
+    c.lineTo(x + w * 0.72 - step * 4, y + h);
+    c.stroke();
+
+    // bark body mound
+    c.fillStyle = "#5a4632";
+    c.beginPath();
+    c.moveTo(x, y + h * 0.78);
+    c.quadraticCurveTo(x - w * 0.02, y + h * 0.2, x + w * 0.3, y + h * 0.12);
+    c.lineTo(x + w * 0.7, y + h * 0.12);
+    c.quadraticCurveTo(x + w * 1.02, y + h * 0.2, x + w, y + h * 0.78);
+    c.closePath();
+    c.fill();
+
+    // mossy cap with lighter clumps
+    c.fillStyle = e.def.color;
+    c.beginPath();
+    c.moveTo(x - w * 0.02, y + h * 0.34);
+    c.quadraticCurveTo(x + w * 0.2, y - h * 0.08, x + w * 0.5, y - h * 0.02);
+    c.quadraticCurveTo(x + w * 0.8, y - h * 0.06, x + w * 1.02, y + h * 0.34);
+    c.quadraticCurveTo(x + w * 0.5, y + h * 0.18, x - w * 0.02, y + h * 0.34);
+    c.closePath();
+    c.fill();
+    c.fillStyle = enr ? "#9ac86a" : "#79b04a";
+    for (let i = 0; i < 4; i++) {
+      c.beginPath();
+      c.ellipse(
+        x + w * (0.18 + i * 0.2),
+        y + h * (0.1 + ((i * 13) % 3) * 0.04),
+        w * 0.09,
+        h * 0.07,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      c.fill();
+    }
+
+    // face: amber eyes flare red once enraged
+    const ey = y + h * 0.48;
+    c.fillStyle = enr ? "#ff5a48" : "#ffb03a";
+    c.fillRect(x + w * (f === 1 ? 0.56 : 0.32), ey, w * 0.07, h * 0.07);
+    c.fillRect(x + w * (f === 1 ? 0.72 : 0.16), ey, w * 0.07, h * 0.07);
+    c.fillStyle = "#2a2018";
+    c.fillRect(x + w * 0.38, y + h * 0.64, w * 0.24, 3);
+
+    // claw arm raises while she winds up an attack
+    c.strokeStyle = "#4a3826";
+    c.lineWidth = 5;
+    const raise = winding ? -h * 0.18 : 0;
+    c.beginPath();
+    c.moveTo(x + w * (f === 1 ? 0.84 : 0.16), y + h * 0.5);
+    c.lineTo(x + w * (f === 1 ? 0.98 : 0.02), y + h * 0.66 + raise);
+    c.stroke();
+
+    // spore glow gathers while she charges a breath
+    if (e.astate === "breathWind") {
+      c.fillStyle =
+        "rgba(138,223,106," +
+        (0.25 + Math.sin(clock * 18) * 0.15).toFixed(2) +
+        ")";
+      c.beginPath();
+      c.arc(
+        x + w * (f === 1 ? 0.96 : 0.04),
+        y + h * 0.52,
+        w * 0.09,
+        0,
+        Math.PI * 2,
+      );
+      c.fill();
+    }
+    c.restore();
+  }
+
   function drawFlash(c, e) {
     c.globalAlpha = Math.min(1, e.flashTimer / FLASH_TIME) * 0.8;
     c.fillStyle = "#ffffff";
@@ -2231,6 +3378,10 @@
       else if (ai === "skele_hand") drawSkeleHand(ctx, e);
       else if (ai === "wof") drawWof(ctx, e);
       else if (ai === "hungry") drawHungry(ctx, e);
+      else if (ai === "stationary") drawSnapvine(ctx, e);
+      else if (ai === "teleporter") drawVoidWisp(ctx, e);
+      else if (ai === "storm_jelly") drawStormJelly(ctx, e);
+      else if (ai === "moss_mother") drawMossMother(ctx, e);
       else drawEye(ctx, e); // demon eye / eater of souls
       if (e.flashTimer > 0) drawFlash(ctx, e);
       ctx.restore();

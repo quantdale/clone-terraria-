@@ -22,15 +22,16 @@ const path = require("path");
 const { loadGame } = require("../helpers/load-game.js");
 
 // seed -> [tilesFNV, wallsFNV, surfaceY-FNV]
+// v3 corpus (W4 deepening: deep-caves + micro-biomes + ore tiers ON).
 const CORPUS = {
-  1: [2538759686, 1255116183, 2829768341],
-  7: [1003567923, 1519507840, 549136040],
-  13: [937311125, 2777605827, 3972995700],
-  29: [908054374, 2382601387, 1041091505],
-  41: [4184507965, 3323436263, 3770651900],
-  47: [2172474784, 3425488439, 2843995629],
-  987654321: [3544040153, 125538718, 4007195733],
-  2147483646: [1023206567, 680799694, 1146218019],
+  1: [3843834126, 1720879821, 693036416],
+  7: [4270697596, 2687228920, 4257121906],
+  13: [542696991, 2826979397, 2659819661],
+  29: [2446223780, 528112633, 1167194087],
+  41: [1391602659, 1896029963, 3469947526],
+  47: [110249289, 659154018, 3345760268],
+  987654321: [3236810763, 3648147452, 537474618],
+  2147483646: [1625095204, 2548096550, 2906557783],
 };
 
 function fnv(arr) {
@@ -210,34 +211,32 @@ test("worldgen corpus: structurally-heavy seed matches in a fresh process", () =
   );
 });
 
-test("worldgen CONFIG: flags default off; toggling is deterministic (currently inert)", () => {
+test("worldgen CONFIG: flags default ON (W4); each flag deterministically alters output", () => {
   assert.deepStrictEqual(
     { ...TC.WorldGen.CONFIG },
-    { deepCaves: false, microBiomes: false, richOres: false },
+    { deepCaves: true, microBiomes: true, richOres: true },
   );
   const baseline = TC.WorldGen.generate(41);
   try {
     for (const flag of ["deepCaves", "microBiomes", "richOres"]) {
-      TC.WorldGen.CONFIG[flag] = true;
-      const on1 = TC.WorldGen.generate(41);
-      const on2 = TC.WorldGen.generate(41);
+      TC.WorldGen.CONFIG[flag] = false;
+      const off1 = TC.WorldGen.generate(41);
+      const off2 = TC.WorldGen.generate(41);
       assert.ok(
-        byteEqual(on1.tiles, on2.tiles),
-        `CONFIG.${flag}=true made generation nondeterministic`,
+        byteEqual(off1.tiles, off2.tiles),
+        `CONFIG.${flag}=false made generation nondeterministic`,
       );
-      // CURRENT BEHAVIOR: no generation pass reads these flags yet, so output
-      // equals flag-off output. If someone implements a flag, this assertion
-      // fails and must be updated to assert deterministic-DIFFERENT output.
-      assert.strictEqual(
-        fnv(on1.tiles),
+      // W4 CONTRACT: each implemented pass must meaningfully (and
+      // deterministically) alter output when toggled.
+      assert.notStrictEqual(
+        fnv(off1.tiles),
         fnv(baseline.tiles),
-        `CONFIG.${flag} changed generation — update this contract to assert ` +
-          `the flag now meaningfully alters output (still deterministically)`,
+        `CONFIG.${flag}=false did not change output — pass not wired?`,
       );
     }
   } finally {
-    TC.WorldGen.CONFIG.deepCaves = false;
-    TC.WorldGen.CONFIG.microBiomes = false;
-    TC.WorldGen.CONFIG.richOres = false;
+    TC.WorldGen.CONFIG.deepCaves = true;
+    TC.WorldGen.CONFIG.microBiomes = true;
+    TC.WorldGen.CONFIG.richOres = true;
   }
 });

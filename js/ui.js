@@ -287,6 +287,34 @@
   }
   UI.toast = toast;
 
+  // ---- progression announcements (W5) ----
+  // WorldProgressChanged milestones surface as banner toasts: boss kills and
+  // biome discoveries. Observation only; a missing bus never breaks the UI.
+  const BIOME_TITLES = {
+    forest: 'The Verdant Reach', desert: 'the Amber Wastes', snow: 'the Frostbound Expanse',
+    jungle: 'the Tangled Deep', ocean: 'the Endless Blue', cave: 'the Underdeep',
+    underworld: 'the Cinder Abyss',
+  };
+  if (TC.Events && TC.Events.EVENT && typeof TC.Events.on === 'function') {
+    try {
+      TC.Events.on(TC.Events.EVENT.WorldProgressChanged, function (p) {
+        const key = p && p.key;
+        if (!key) return;
+        let boss = /^boss\.([a-z0-9_]+)\.defeated$/.exec(key);
+        if (boss) {
+          const nm = String(boss[1]).replace(/_/g, ' ');
+          toast('Victory! The ' + nm + ' has fallen.');
+          return;
+        }
+        let bio = /^biome\.([a-z0-9_]+)\.discovered$/.exec(key);
+        if (bio) {
+          const nm = BIOME_TITLES[bio[1]] || bio[1].replace(/_/g, ' ');
+          toast('Discovered: ' + nm + '.');
+        }
+      });
+    } catch (e) { /* listener errors are isolated by the bus */ }
+  }
+
   // NPC speech box (npcs.js calls this on RMB over an NPC). A new call
   // replaces the content and restarts the auto-dismiss timer.
   UI.showDialog = function (name, text) {

@@ -62,6 +62,16 @@
 
   function has(key) { return validKey(key) && flags.has(key); }
 
+  // One-way world discovery milestone (W5): 'biome.<name>.discovered'.
+  // Idempotent like set(); returns true only on first discovery so callers
+  // can announce it. Unknown names are sanitized into lowercase-dash keys.
+  function discoverBiome(name) {
+    if (typeof name !== 'string' || !name.length) return false;
+    const key = 'biome.' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_') +
+      '.discovered';
+    return set(key);
+  }
+
   // Sorted snapshot — deterministic order for saves and debug output.
   function all() { return Array.from(flags).sort(); }
 
@@ -108,6 +118,7 @@
     set: set,
     has: has,
     all: all,
+    discoverBiome: discoverBiome,
     resetForNewWorld: resetForNewWorld,
     spawnMultiplier: spawnMultiplier
   };

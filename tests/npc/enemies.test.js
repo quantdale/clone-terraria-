@@ -56,7 +56,9 @@ test('enemies: killEnemy rolls def.drops deterministically (chance gate + min/ma
     assert.equal(gel.length, 1, 'expected exactly one gel stack');
     assert.equal(gel[0].count, 2, '1 + floor(0.5*(2-1+1)) must be 2');
 
-    // chance gate can fail: harpy feather chance 0.9 with rng 0.95 -> no drop
+    // chance gate can fail: harpy feather chance 0.9 with rng 0.95 -> no
+    // feather; W2 economy coins are a separate always-on roll, so the only
+    // drops may be coin_* stacks (harpy coins [30,60] -> silver+copper).
     restore();                                   // swap the pinned value
     restore = patchRandom(g, () => 0.95);
     TC.Items.clearDrops();
@@ -64,7 +66,11 @@ test('enemies: killEnemy rolls def.drops deterministically (chance gate + min/ma
     const h = fakeEnemy(TC, 'harpy');                  // [{feather, 1..2, chance:0.9}]
     TC.Enemies.list.push(h);
     TC.Enemies.damageEnemy(h, 9999, 1, 0);
-    assert.equal(TC.Items.drops.length, 0, 'rng 0.95 >= chance 0.9 must skip the drop');
+    const nonCoin = TC.Items.drops.filter((d) => String(d.id).indexOf('coin_') !== 0);
+    assert.equal(nonCoin.length, 0,
+      'rng 0.95 >= chance 0.9 must skip the feather drop');
+    assert.ok(TC.Items.drops.every((d) => String(d.id).indexOf('coin_') === 0),
+      'only coin_* drops may accompany a failed chance roll');
   } finally { restore(); }
 
   // Whole min..max range reachable and never exceeded (blue_slime gel 1..3):

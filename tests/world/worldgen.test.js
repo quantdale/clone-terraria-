@@ -21,10 +21,10 @@ function fnv(arr) {
   return h >>> 0;
 }
 
-test('worldgen: CONFIG feature flags default false', () => {
+test('worldgen: CONFIG feature flags default on (W4 deepening)', () => {
   const g = loadGame();
   assert.deepStrictEqual({ ...g.TC.WorldGen.CONFIG },
-    { deepCaves: false, microBiomes: false, richOres: false });
+    { deepCaves: true, microBiomes: true, richOres: true });
 });
 
 test('worldgen: runPass("nope") throws; known pass runs', () => {
