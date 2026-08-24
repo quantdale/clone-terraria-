@@ -69,9 +69,13 @@ npm run validate    # syntax + tests + build + build-verify + browser suite
 ### Systems
 
 - Canonical content registry (`core:` stable IDs), event bus, command transactions
-  (mine/place/craft/equip/buy…), contributor-based stat resolver, versioned save
-  envelope (SaveCore) with atomic writes, backups, export/import and legacy-save
-  migration; per-system save providers.
+  (mine/place/craft/equip/buy…) with a deterministic per-tick command queue,
+  contributor-based stat resolver, versioned save envelope (SaveCore) with atomic
+  writes, backups, export/import and legacy-save migration; per-system save providers.
+- One production runtime authority: the fixed-step scheduler (`TC.Runtime` →
+  `TC.Systems`) sequences every subsystem; render layers (`TC.RenderLayers`) own the
+  draw pipeline; a headless simulation boundary runs the full game loop without
+  Canvas/DOM/rAF for deterministic tests and `tools/bench-runtime.js` benchmarks.
 - NPCs with housing validation, move-in unlocks, context-aware dialog and an economy
   shop (canonical coin currency); the Guide sells progression hints, not stock.
 - Wiring mechanisms (switches, levers, pressure plates, timers, dart traps, actuators),
@@ -88,7 +92,8 @@ See `docs/ARCHITECTURE.md` for the module/capability matrix and contracts, and
 index.html            script wiring (fixed load order)
 css/style.css         minimal page styles
 js/constants.js       lead-owned data tables & tuning (tiles, items, recipes, physics)
-js/main.js            boot, fixed-step loop, camera, update/draw order
+js/main.js            browser host: canvas lifecycle, transitions, system/layer registration
+js/runtime.js         canonical fixed-step host + headless simulation boundary
 js/utils.js           seeded RNG, hashes, noise
 js/registry.js        stable namespaced content registry + fingerprint
 js/events.js          deferred event bus

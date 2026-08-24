@@ -14,6 +14,7 @@ python -m http.server 8000
 ```
 
 Syntax-check any module: `node --check js/<file>.js`
+Headless runtime benchmark: `node tools/bench-runtime.js [ticks]`
 
 ## Architecture
 
@@ -24,15 +25,36 @@ so load order is not critical, but guard optional dependencies (`if (TC.Audio) .
 Coordinate conventions: world pixels unless a name ends in `Tx/Ty` (tile coords).
 Tile size `TC.CONST.TS = 16`. +y is down. Camera `TC.camera = {x, y, zoom}`.
 
-Update order per fixed 1/60s step (see `js/main.js`):
-`Sky → Player → Enemies(spawn+update) → Items(drops) → Combat → Particles → World(chunk rebuild) → Lighting → Save(autosave)`.
+Update order per fixed 1/60s step is owned by the scheduler — `TC.Runtime.tick()` →
+`TC.Systems.updateAll(dt)` over the phases declared in `js/systems.js`: input (UI +
+player-intent creation) → commands (queue drain) → environment → movement (grapple-pre
+→ player → grapple-post → loot) → physics → projectiles (driven inside combat) → ai
+(fishing, spawn-director → enemies, npcs) → items → combat (projectiles/accessories/
+gear/magic/particles) → liquidsWiring (world → wiring → liquids) → progression
+(lighting, music, minimap, autosave) → eventsFlush. Systems may declare `when` gates:
+title/paused run only UI + event flush. main.js registers systems and drawers; it no
+longer sequences updates manually.
 
-Draw order: `Sky(screen) → World → Items → Enemies → Player → Combat → Particles (all world-space via TC.applyCam) → Lighting(screen) → Input cursor(screen) → UI(screen)`.
-
-World-space draw functions must wrap drawing with `TC.applyCam(ctx)` / `TC.clearCam(ctx)`
-from main.js. Screen-space functions (Sky, Lighting overlay, Input cursor, UI) must not.
+Draw order per frame is owned by `TC.RenderLayers` (declared in `js/systems.js`): the
+browser host draws only the sky/background clear, then `drawWorld` runs world-space
+layers under the camera transform (tiles → liquids → decor → wiring overlay → items →
+enemies → npcs → player → projectiles/combatFx → particles), then `drawScreen` runs
+screen layers (biome tint → lighting → minimap/cursor overlays → HUD/magic/accessories
+→ debug). World-space draw functions wrap drawing with `TC.applyCam(ctx)` /
+`TC.clearCam(ctx)` from main.js when invoked outside the pipeline.
 
 ## Module API contract
+
+```js
+const PHASES = ['input', 'commands', 'environment', 'movement', 'physics', 'projectiles',
+                'ai', 'items', 'combat', 'liquidsWiring', 'progression', 'eventsFlush'];
+```
+
+Systems may declare `when(state)` gates; the production loop gates simulation systems
+to `playing && !UI.paused` (pause genuinely freezes the world), while UI and event
+flush always run. Registration order breaks ties inside a phase. Observability:
+`currentPhase()`, `tickCount()`, `getCounts()/getPerTickCounts()/resetCounts()`.
+Per-drawer call/error counters live on `TC.RenderLayers.list()` entries.
 
 | Module (file) | Exposes |
 |---|---|
@@ -47,8 +69,8 @@ from main.js. Screen-space functions (Sky, Lighting overlay, Input cursor, UI) m
 | audio.js | `TC.Audio.play(name)`, `toggleMuted()`, `muted` |
 | particles.js | `TC.Particles.spawn/burst/floatText/update/draw/clear` |
 | items.js | `class TC.Inventory` (50 slots, `add/remove/count/get/serialize/deserialize`), `TC.Items`: `drops[]`, `spawnDrop(x,y,id,count,scatter?)`, `update(dt,player)`, `draw(ctx,cam)`, `clearDrops()`, `iconFor(id)→canvas`; `TC.Chests`: per-position 20-slot containers — `get(tx,ty)→slot array (lazy-created)`, `spill(tx,ty)` (scatter contents as drops), `serialize()/load(data)` |
-| player.js | `class TC.Player` (instance at `TC.player`): `update/draw/damage/heal/giveStarterKit/serialize`, static `deserialize(data)`. Equipment: `equipment{head,body,feet}` (armor items from ITEM_DEFS kind 'armor'; using one equips it, swapping with any worn piece), `totalDefense()→n`; summon items (kind 'summon') call `TC.Enemies.spawnBoss(def.boss,…)` with declarative `summon:{time,biome,requires,placement}` (time `night|day|any`, biome is CURRENT `TC.Biomes.current` not `biome.X.discovered`, requires is W14 grammar, placement `underworld_wall` for Wall) — the charge is consumed ONLY on success (time/biome/progression/MAX_BOSSES/placement failure all give feedback and consume nothing, exactly one consumed on valid encounter). Right-click interacts: toggles DOOR_CLOSED↔DOOR_OPEN via world.set, opens chests via TC.UI.openChest(tx,ty); breaking a CHEST calls TC.Chests.spill first. Mining AIR tiles with a wall behind (pick equipped) mines the wall via world.applyWallDamage. Standing in LAVA burns (LAVA_TICK/LAVA_DMG through Combat.hurtPlayer src 'lava'); head underwater drains breath over BREATH_SECONDS then drowns at DROWN_DMG/s (field `breath` 0..1 for the UI bubble row) |
-| ui.js | `TC.UI.update(dt)`, `draw(ctx,w,h)`; title screen, HUD, inventory + equipment slots (with defense readout), crafting panel, pause menu, death overlay, boss health bar while a boss lives, chest panel via `openChest(tx,ty)`/`closeChest()` when a chest is open (drag between chest and bag), NPC dialog box via `showDialog(name,text)`/auto-close, breath bubble row under hearts while the player's head is underwater; sets `TC.Input.uiHover` |
+ | player.js | `class TC.Player` (instance at `TC.player`): `update/draw/damage/heal/giveStarterKit/serialize`, static `deserialize(data)`. Held-use and right-click INTENT is created by the scheduler's input phase ('player-intent', main.js) and executed by the canonical UseItem/InteractTile transactions in the same tick's commands phase — the player never mutates the world directly from input (legacy `useHeld/interact` remain as fallbacks for embeds without commands). Equipment: `equipment{head,body,feet}` (armor items from ITEM_DEFS kind 'armor'; equipping swaps with any worn piece via EquipItem), `totalDefense()→n`; summon items (kind 'summon') call `TC.Enemies.spawnBoss(def.boss,…)` with declarative `summon:{time,biome,requires,placement}` — charge consumed ONLY on success, exactly once on valid encounter. Breaking a CHEST calls TC.Chests.spill first. Mining AIR tiles with a wall behind (pick equipped) mines the wall via MineWall. Standing in LAVA burns (through Combat.hurtPlayer src 'lava'); head underwater drains breath over BREATH_SECONDS then drowns (field `breath` 0..1 for the UI bubble row) |
+| ui.js | `TC.UI.update(dt)`, `draw(ctx,w,h)`; title screen, HUD, inventory + equipment slots (with defense readout), crafting panel (craft clicks submit the CraftRecipe transaction), pause menu, death overlay, boss health bar while a boss lives, chest panel via `openChest(tx,ty)`/`closeChest()` when a chest is open (drag between chest and bag), NPC dialog box via `showDialog(name,text)`/auto-close, shop rows transacting through ShopBuy/ShopSell, breath bubble row under hearts while the player's head is underwater; sets `TC.Input.uiHover` |
 | enemies.js | `TC.Enemies` (ENTITY lifecycle only — W13 split): `list[]`, `update/draw/clear`, `damageEnemy(e,finalDmg,dir,kb,crit)` applies RESOLVER-final damage and is the single emitter of EntityDamaged/EntityKilled/BossDefeated (death exactly once), `spawnBoss(type,x,y,opts)→enemy|null` (respects MAX_BOSSES; null = full; `opts:{dir,band}` for Wall), `spawnEnemy(type,x,y)`, `spawnDirector(dt)` facade → TC.EnemySpawn; additive seams: `makeEnemy`, `trackHostileShot(pr,shooter,dmg)`, `spawnServantOf(boss,type,bx,by)`, `clearHostileShotsOf(boss)`, `getWofEncounter()→{state,phase,elapsed,hpFrac,servants,peakServants,peakProjectiles,transitions,despawnReason,dir,hostile}`, `clearEncounter()`. Wall is noclip sweeping wall with direction-locked band, explicit despawn, and F3 observability. Rendering for all archetypes lives here |
 | combat.js | CANONICAL hit resolution (W12): `TC.Combat.resolveHit(spec)→{ok,damage,crit,kb,cls,source,defenseApplied,mitigated,statuses,rejected}` — pure, injectable `spec.rng`; classes generic/melee/ranged/magic/summon via `DAMAGE_CLASSES` (statField per class); player-owned attacks scale through TC.Stats, everything else deals declared base; target defense + flat `pen`; min damage 1; `registerMitigation(key,fn)` content policies. `hitEnemy(target,dir,spec)` resolve+apply via Enemies.damageEnemy. `meleeStrike/shootArrow/update/draw/clear`, `hurtPlayer(dmg,kbx,kby,src)→{finalDamage,defenseApplied,crit,rejected}` (environmental policy: 'fall'/'void' bypass defense; lava burning via TC.Buffs.statusForSource), `shockwave(...)` |
 | crafting.js | `TC.Crafting`: `stationsNearby(px,py)→Set`, `available(inv,stations)`, `canCraft(r,inv,st)`, `craft(r,inv,st)→bool`, plus W14 progression gating — recipes may declare `requires` (shared condition grammar); `lockReason(r,inv,st)→null|'progression'|'station'|'costs'` for UI hints |
@@ -71,15 +93,16 @@ from main.js. Screen-space functions (Sky, Lighting overlay, Input cursor, UI) m
 | loot.js | (see above) |
 | registry.js | `TC.Registry`: stable namespaced content ids (`core:dirt`) across kinds tile/wall/item/recipe/enemy/npc/buff/projectileType/biome/station; auto-mirrors TILE_DEFS/ITEM_DEFS/RECIPES/ENEMY_DEFS at load (`syncFromTables()`), legacy numeric aliases, `validate()` throws on problems, deterministic `fingerprint()`, `stableToIndex/byIndex/legacyToStable` |
 | events.js | `TC.Events`: on/off/once/emit immediate + queue/flush deferred per-frame bus; frozen `EVENT` name map (TileChanged/TileBroken/WallChanged/LiquidChanged/EntitySpawned/EntityDamaged/EntityKilled/BossDefeated/ProjectileSpawned/InventoryChanged/BuffApplied/BuffExpired/CraftCompleted/WorldProgressChanged/NpcMovedIn/WirePulse/DayChanged/WorldLoaded…); '*' wildcard; listener errors isolated |
-| systems.js | `TC.Systems`: fixed update phases (input→commands→movement→physics→projectiles→ai→combat→environment→liquidsWiring→items→progression→eventsFlush) with register/initAll/updateAll + boot/runBoot explicit init; `TC.RenderLayers`: named world/screen draw layers with register/drawWorld/drawScreen |
-| commands.js | `TC.Commands`: canonical transactions `submit(name,ctx)→{ok}|{error}` — MineTile/MineWall/PlaceTile/PlaceWall/UseItem/MoveItem/EquipItem/CraftRecipe/InteractTile mirroring current behavior; validate-then-apply with event emission |
+| systems.js | `TC.Systems`: THE production fixed-step scheduler — phases per the block above, register(phase,name,{init?,update?},{after/before/when}) with state gates, initAll/updateAll/resolved-order constraints/cycle isolation + boot/runBoot explicit init; observability `currentPhase()/tickCount()/getCounts()/getPerTickCounts()/resetCounts()`; `TC.RenderLayers`: named world/screen draw layers (register/drawWorld/drawScreen/clear/list) with per-drawer call+error counters |
+| runtime.js | `TC.Runtime` (alias `TC.Simulation`): canonical fixed-step host — `tick(dt)/advanceTicks(n)` drive Systems.updateAll (guarded legacy direct-call sequence only when systems.js is absent); state gating (title/paused run UI + event flush only), camera follow, tick/phase/command observability; headless boundary: `createWorld(seed)`, `advanceTicks`, `reset`, `getState()` run meaningful simulation with no Canvas/DOM/rAF; tick count + queue reset on WorldLoaded |
+| commands.js | `TC.Commands`: canonical transactions `submit(name,ctx)→{ok,result}|{ok:false,error}` — MineTile/MineWall/PlaceTile/PlaceWall/UseItem (full live dispatch incl. integration hooks, hammer shaping, actuator, honest used/reason results)/MoveItem/EquipItem/CraftRecipe/InteractTile/ShopBuy/ShopSell; PLUS deterministic FIFO queue: `enqueue/drain/pending/clearQueue/stats` drained once per tick in the scheduler's commands phase (snapshot semantics, bounded 256, cleared on WorldLoaded) |
 | savecore.js | `TC.SaveCore`: versioned envelope {formatVersion:2, gameVersion, generationVersion, registryFingerprint, metadata, world{}, character{}, systems{}}; provider registry `register('section.key',{serialize,deserialize,version})`; migrations; atomic saveNow (tmp→bak→swap); loadFrom with .bak + legacy-blob fallback; export/import |
 | stats.js | `TC.Stats`: contributor-based stat resolver — `registerSource(name,priority,fn(player,out))`, `resolve(player)`→frozen snapshot (maxHealth/regen/mana/defense/moveSpeed/melee|ranged|magic damage/critChance/miningSpeed/fishingPower…), `explain(player)`, `invalidate()`; built-ins: armor, accessories+prefixes, buffs, life crystals. player.totalDefense/movement/combat consume it |
 | progression.js | `TC.Progression`: world flag store + W14 declarative condition grammar — `set/has/all/discoverBiome/resetForNewWorld`, `test(cond)→bool` (pure, fail-closed; flag strings / all-any-not compounds / {boss|event|biome} shorthands — THE shared gate for recipes, NPC unlocks, shop stock, loot entries, spawn entries, boss summons), FLAGS incl. storm_jelly/moss_mother boss flags, BOSS_FLAG map (BossDefeated → canonical key); auto-records BossDefeated (wof also sets `world.infernal_gateway.opened`/`event.underworld_frontier.completed`); SaveCore provider 'systems.core.progression'; `spawnMultiplier()` scales spawn rate per defeated boss |
 | liquids.js | `TC.Liquids`: THE single runtime liquid authority (W1 migration — legacy WATER/LAVA tiles are worldgen/legacy-save representation only, imported into the volume layer at build time by main.buildWorld; no tile-water simulation exists). Type Uint8 + amount Uint8 arrays (water/lava/honey), budgeted settling with equalize/evaporation, water×lava→stone contact; `init/reset/update/wake/set/sampleAt/queryAt/displace/collectAt/placeAt/onUseHeld/columnSurface/draw/importFromWorld/stats/mode/isLiquid`; SaveCore provider 'world.core.liquids'; buckets are kind-'bucket' items converting in place |
 | economy.js | `TC.Economy`: canonical currency (coin_copper/silver/gold = 1/100/10000 copper); `total/pay/give/dropCoins/format/DENOMS`; pay is atomic with exact change; shop transactions live in TC.Commands ShopBuy/ShopSell (validate-then-apply, emit ShopBuy/ShopSell events); sell price = 1/5 of ITEM_DEFS[].value |
 | grapple.js | `TC.Grapple`: grappling-hook state machine (flying/latched/retracting) driven by kind-'grapple' item defs `{grapple:{range,pull,speed}}` (hook_basic, hook_gemshot); pull thrust pre-player-update + rope constraint post-update via main.step hooks; `onUseHeld/preUpdate/postUpdate/drawWorld/release/active/resetForNewWorld/phase()/anchor()`; solid-tile anchors only, velocity capped |
-| debug.js | `TC.Debug`: rolling timings (mark/endMark/frame/stats), counters/snapshot, F3 overlay `drawHud` (fps buckets, liquids, projectiles, flags, wof encounter `state/phase/elapsed/hpFrac/servants/peakServants/peakProjectiles/transitions/despawnReason`), `window.__TEST__` hooks only under location.hash '#test' (`getWofEncounter/setWofHp` for Wall) |
+| debug.js | `TC.Debug`: rolling timings (mark/endMark/frame/stats), counters/snapshot, F3 overlay `drawHud` (fps buckets, tick/phase/command-queue stats, liquids, projectiles, flags, wof encounter fields), `window.__TEST__` hooks only under location.hash '#test' (`getWofEncounter/setWofHp/getRuntimeState` — read-only runtime authority snapshot) |
 
 main.js (lead-owned) exposes: `TC.newGame(seed?)`, `TC.continueGame()`, `TC.quitToTitle()`,
 `TC.applyCam/clearCam`, `TC.state`, `TC.world`, `TC.worldSeed`, `TC.player`, `TC.camera`,

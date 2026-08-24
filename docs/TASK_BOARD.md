@@ -22,35 +22,47 @@ DONE      acceptance criteria proven
 
 ---
 
-# Status snapshot (authoritative, W17 truth-sync)
+# Status snapshot (authoritative, W18 truth-sync)
 
-Reconciled against the implementation on the W17 Underworld Frontier checkpoint. Consult
-docs/ARCHITECTURE.md §19 (capability matrix) and §21 (W17 contracts) for per-module ownership detail.
+Reconciled against the implementation on the W18 Runtime Authority Convergence
+checkpoint. Consult docs/ARCHITECTURE.md §19 (capability matrix), §22 (W18 runtime
+contracts) and §21 (W17 contracts) for per-module ownership detail.
 
 | Area | Tasks | Status |
 |---|---|---|
 | Baseline/build/tests | FND-001, FND-002, FND-006 | DONE |
 | Framework adoption | FND-003, FND-004, FND-005 | SUPERSEDED (static build + node:test chosen; rationale above) |
 | CI quality gate | FND-007 | DONE (GitHub Actions .github/workflows/ci.yml mirrors npm run validate) |
-| Registry/save/commands/events/layers/stats | ARC-001..ARC-009 | DONE (ARC-008 render layers registered but main.js still draws via direct calls — acceptable dual path) |
+| Registry/save/commands/events/layers/stats | ARC-001..ARC-009 | DONE (ARC-008 render layers are now THE production draw pipeline; command phase drains live player intents) |
+| Runtime authority convergence (W18) | scheduler/commands/render cutover + headless boundary | DONE (`TC.Runtime` canonical host; FIFO command queue; RenderLayers pipeline; pause freezes simulation; `tests/core/runtime-authority.test.js`, `tests/core/headless-sim.test.js`, browser `runtime-authority.spec.js`, `tools/bench-runtime.js`) |
 | Advanced-module integration | INT-001..INT-006 | DONE |
 | Tile shapes/traversal/grapple | PHY-001..PHY-005 | DONE |
 | Liquids | LIQ-001..LIQ-005 | DONE (LIQ-006 pumps remains TODO) |
 | Worldgen platform | WGEN-001..WGEN-005 | DONE (v3 passes incl. deep caves + micro-biomes) |
 | Combat & progression | COM-001..COM-007 | DONE (canonical resolveHit, generic statuses, enemy defs/AI/spawn split, LootTables, Progression conditions+graph, Storm Jelly vertical arc, **W17 Wall of Flesh production gateway**: environment-aware summon, direction-locked wall, multi-phase state machine, bounded hungry/servant/projectile lifecycle, infernal_core loot, post-Wall recipes/NPC stock/spawn gateway) |
-| Inventory/crafting | INV-001/002, CRF-001/002 | DONE (progression-aware recipe conditions included) |
+| Inventory/crafting | INV-001/002, CRF-001/002 | DONE (progression-aware recipe conditions included; craft clicks route through CraftRecipe transactions) |
 | NPCs/towns | NPC-001..NPC-004 | DONE (housing, shops, context dialog; condition-gated unlocks/stock) |
 | Localization | LOC-001..LOC-003 | TODO |
 | Rendering/lighting/audio depth | VIS/LGT/ART/AUD epics | LGT-002 done (dynamic lights); rest TODO/P2 |
-| Performance | PERF-001 | DONE (TC.Debug instrumentation + F3 overlay); PERF-002..005 TODO |
-| Multiplayer | NET-001..004 | TODO (P2; preconditions tracked in ARCHITECTURE §17) |
+| Performance | PERF-001 | DONE (TC.Debug instrumentation + F3 overlay); PERF-002 partially covered by `tools/bench-runtime.js` fixed-step benchmark; PERF-003..005 TODO |
+| Multiplayer | NET-001..004 | TODO (P2; W18 delivered the NET-001 precondition: headless simulation via TC.Runtime — full runner/networking still TODO) |
 | Extensibility/mods | MOD-001..004 | TODO |
 
-### Newly discovered follow-ups (from the same audit, updated W17)
+### Newly discovered follow-ups (from the same audit, updated W18)
 
-- Wall of Flesh is now production-ready (W17): direction-locked sweeping wall with enter→combat→phase2→enrage, telegraphed projectile fans, bounded hungry tether, explicit despawn/cleanup, infernal_core gateway, and full test/browser/release qualification. No longer stub-quality.
-- Enemy rendering still lives beside lifecycle in enemies.js (acceptable; revisit if file regrows past ~2k lines).
-- Command transactions cover player actions but the live step loop still routes player input directly through player.js — migrating input->commands phase is future work.
+- W18 closed the dual update/render paths: `TC.Runtime.tick → TC.Systems.updateAll`
+  and `TC.RenderLayers.drawWorld/drawScreen` ARE the production loop. Remaining
+  deliberate fallbacks: direct `Player.useHeld/interact` only when js/commands.js is
+  absent; guarded legacy tick sequence only when js/systems.js is absent.
+- Known pre-existing flake (reproduced on the W17 base commit, not caused by W18):
+  `journey-i-progression.spec.js` storm-core pickup can fail when the player dies
+  during the real-time boss-damage loop (magnet requires a living player);
+  `journey-j-underworld-frontier.spec.js` can observe wof `state: 'combat'` instead of
+  'enter' on slow machines (tick-count race vs rAF frames). Both warrant deterministic
+  harness hardening.
+- UI cursor-stack drag/drop and bulk helpers (sort/quick stack/split) remain
+  presentation-layer inventory rearrangements with conservation covered by Inventory
+  invariants; converting them to MoveItem batches is optional future work.
 
 ---
 

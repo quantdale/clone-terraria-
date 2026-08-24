@@ -134,24 +134,32 @@ Events are not a substitute for ordered simulation phases. If two systems must e
 
 ## 6. Update phases
 
-Target conceptual order:
+Canonical order (declared in `js/systems.js` `PHASES`, driven by `TC.Runtime.tick` →
+`TC.Systems.updateAll`):
 
 ```text
-1 collect input intents
-2 process commands
-3 player/entity movement intent
-4 physics and collision
-5 projectiles
-6 enemies/NPC AI
-7 combat/status resolution
-8 liquids/wiring/environment
-9 pickup/container/state maintenance
-10 progression/spawn rules
-11 event flush
-12 presentation snapshot/render
+input         TC.UI.update (runs on title too) + player-intent creation
+commands      TC.Commands queue drain (transactions execute here)
+environment   TC.Sky, TC.Biomes
+movement      Grapple pre → Player.update → grapple post → Loot
+physics       collision resolution (folded into entity updates today)
+projectiles   (driven inside combat/core.combat via TC.Projectiles)
+ai            Fishing → spawn director → Enemies → NPCs
+items         TC.Items magnet/pickup
+combat        core.combat (projectiles) → accessories/buffs → gear → magic → particles
+liquidsWiring World.update → wiring → liquids
+progression   Lighting → Music → MiniMap → autosave
+eventsFlush   drain the deferred event queue after all mutation
 ```
 
-The exact sequence may evolve, but changes to authoritative ordering must be documented and regression-tested.
+Systems may declare `when(state)` gates; production gates simulation systems to
+`playing && !UI.paused` (pause freezes the world; UI and event flush keep running).
+Registration order breaks ties within a phase; `after`/`before` constraints refine it.
+The browser host (`main.js`) registers systems and drawers but does not sequence them;
+headless consumers call `TC.Runtime.createWorld/advanceTicks` directly.
+
+Changes to authoritative ordering must be documented here and regression-tested
+(`tests/core/runtime-authority.test.js`).
 
 ---
 
@@ -403,8 +411,9 @@ phase under `TC.Systems` (or `main.js` direct call when noted).
 | utils.js | Seeded RNG/hash/noise | `TC.Utils` | — | — | — |
 | registry.js | Stable `ns:name` content ids; mirrors shared tables; legacy aliases; validate/fingerprint | `TC.Registry` | fingerprint in envelope | — | boot |
 | events.js | Deferred per-frame bus, frozen EVENT names, wildcard, isolated listener errors | `TC.Events` | — | all | eventsFlush |
-| systems.js | Update-phase scheduler, render layers, boot tasks | `TC.Systems`, `TC.RenderLayers` | — | — | all |
-| commands.js | Canonical validate-then-apply transactions incl. ShopBuy/ShopSell | `TC.Commands.submit` | — | emits per command | commands (future home) |
+| systems.js | Update-phase scheduler (THE production authority), render layers, boot tasks, per-system/drawer counters | `TC.Systems`, `TC.RenderLayers` | — | — | all |
+| runtime.js | Canonical fixed-step host + headless boundary (tick/advanceTicks/createWorld/reset/getState), state gating, camera follow | `TC.Runtime` (`TC.Simulation`) | — | — | host |
+| commands.js | Canonical validate-then-apply transactions incl. ShopBuy/ShopSell + deterministic FIFO queue drained in the commands phase | `TC.Commands.submit/enqueue/drain/pending/clearQueue/stats` | — | emits per command | commands (live) |
 | savecore.js | Versioned envelope {formatVersion:2}, providers, atomic tmp→bak→swap, migrations | `TC.SaveCore` | owns envelope | — | progression (autosave) |
 | save.js | Facade: v2 envelope via SaveCore; legacy v1 blob fallback load; export/import; autosave timer | `TC.Save` | 'world.core'/'character.core' | — | progression |
 | worldgen.js | Deterministic named passes v3 (terrain→…→validation), CONFIG flags | `TC.WorldGen.generate` | — | — | load-time |
@@ -454,9 +463,12 @@ phase under `TC.Systems` (or `main.js` direct call when noted).
 
 ### Remaining architectural debt (tracked)
 
-See `docs/TASK_BOARD.md` status column. Highlights: localization layer absent (English strings inline);
-render layers registered but main.js still draws via direct calls; command phase not
-yet wired into the live step loop for player actions. Wall of Flesh is now a production frontier gateway (W17).
+See `docs/TASK_BOARD.md` status column. Highlights: localization layer absent (English
+strings inline). The former dual update/render paths are closed: the scheduler,
+command phase and render layers ARE the production path (W18 convergence); remaining
+legacy fallbacks are deliberate compatibility seams (direct `useHeld`/`interact` when
+commands module absent; guarded legacy tick sequence when systems.js is absent).
+Wall of Flesh is a production frontier gateway (W17).
 
 ---
 
@@ -537,5 +549,62 @@ The Wall is a direction-locked, noclip sweeping wall, not a flying tracker. `Pla
 
 ### Remaining limitations
 
-Localization absent; render-layer dual path with direct draw calls remains; command transactions not yet wired to live
-player input. Wall of Flesh is now production-ready; remaining Hardmode-equivalent expansion is deferred.
+Localization absent. Wall of Flesh is production-ready; remaining Hardmode-equivalent
+expansion is deferred.
+
+---
+
+## 22. Campaign contracts (W18 — Runtime Authority Convergence)
+
+### Canonical runtime (runtime.js + systems.js, W18)
+
+`TC.Runtime.tick(dt)` is the ONE fixed-step host: the browser rAF loop and headless
+tests both drive it; it executes `TC.Systems.updateAll` exclusively (a guarded legacy
+direct-call sequence remains only for embeds without js/systems.js). Systems carry
+`when(state)` gates: title/pause run only `input/ui`, `input/player-intent` (playing-
+gated) and `eventsFlush/core.flush`; pause genuinely freezes the simulation (intentional
+semantic fix — enemies/time-of-day/autosave halt while paused). Observability:
+`Runtime.getState()` (read-only snapshot incl. per-tick system counts and render-layer
+counters), F3 line `tick N phase X cmds p/ok rej R`, `__TEST__.getRuntimeState`
+(#test only).
+
+### Command intake (commands.js, W18)
+
+Discrete player mutations flow input/UI → intent → `TC.Commands.enqueue(name, ctx)` →
+drain in the scheduler's commands phase → canonical transaction → events. Queue
+contract: FIFO; commands enqueued during a drain wait for the next tick (snapshot
+semantics); bounded at 256 (overflow drops newest, counted); `clearQueue()` runs on
+WorldLoaded and quitToTitle so intents never cross worlds; rejected commands mutate
+nothing and increment `stats().rejected`. Held-use cadence stays fixed-step: the input
+phase enqueues one UseItem intent per tick with its own dt; click-edge consumers
+(fishing) are preserved because intent creation precedes the drain in the same tick.
+UseItem results distinguish `used/reason` (cooldown, invalid target, inert,
+player-cannot-X) instead of blanket success.
+
+### Render authority (main.js + systems.js, W18)
+
+`TC.RenderLayers.drawWorld/drawScreen` are THE production pipeline; main.js registers
+every drawer (layer vocabulary extended minimally: `liquids`, `worldDecor` world
+layers; `ambient`, `overlays` screen layers) and draws only the sky/background clear
+itself. Per-drawer `calls/errors` counters on `list()` power exactly-once regression
+proofs (`tests/core/runtime-authority.test.js`).
+
+### Headless boundary (runtime.js, W18)
+
+`TC.Runtime.createWorld(seed)` / `advanceTicks(n)` / `reset()` / `getState()` run the
+full game loop — scheduler phases, command queue, SaveCore persistence — without
+Canvas drawing, DOM layout or requestAnimationFrame. Determinism proof:
+`tests/core/headless-sim.test.js` runs identical seed+command scripts across two VM
+boots and requires identical world digest, physics outcome, inventory and progression.
+This is a simulation foundation only; no networking was added (NET preconditions §17
+now partially satisfied: simulation without Canvas/DOM ✓, world mutations as commands ✓).
+
+### Save impact
+
+None: no schema/provider changes; all W18 state is execution-path state. v1 blobs and
+v2 envelopes keep loading unchanged.
+
+### Test coverage added
+
+runtime-authority.test.js (9), headless-sim.test.js (3), runtime-authority.spec.js (3
+browser), tools/bench-runtime.js benchmark.
