@@ -106,11 +106,41 @@
       atkTimer: rand(2.5, 4.5), // harpy dive / hand lunge / wof spawn countdown
       astate: "idle", // generic attack sub-state (harpy/hand/wof)
       dir: 1, // wof travel direction (+1 = right)
+      // WOF encounter state (lazy-init in AI, but defaults here for shape)
+      wofState: null,
+      wofDir: 1,
+      wofBand: null,
+      wofPhase: 1,
+      wofTimer: 0,
+      wofTele: 0,
+      wofAttack: null,
+      wofElapsed: 0,
+      wofEnterTime: 0.9,
+      wofPeakServants: 0,
+      wofPeakProjectiles: 0,
+      wofTransitions: 0,
+      wofDespawnReason: null,
     };
   }
 
   // ---- physics: integrate with tile collision (flyers reflect instead of stopping) ----
   function moveAndCollide(e, dt) {
+    // WOF is a noclip sweeping wall: ignore tile solidity and just clamp to world bounds.
+    // Its vertical band is pre-validated as free at spawn; horizontal sweep must not be deflected by terrain.
+    if (e.def.ai === 'wof') {
+      e.hitWall = false;
+      const w = TC.world;
+      e.x += e.vx * dt;
+      e.y += e.vy * dt;
+      if (w) {
+        const maxX = w.width * TC.CONST.TS - e.w;
+        const maxY = w.height * TC.CONST.TS - e.h;
+        e.x = clamp(e.x, 0, Math.max(0, maxX));
+        e.y = clamp(e.y, 0, Math.max(0, maxY));
+      }
+      e.onGround = false;
+      return;
+    }
     e.hitWall = false;
     const w = TC.world;
     if (!w || typeof w.isSolid !== "function") {
@@ -367,6 +397,31 @@
     hostileShots.push({ p: pr, type: pr.type, dmg: dmg, src: shooter.def.name });
   }
 
+  function clearHostileShotsOf(boss) {
+    for (let i = hostileShots.length - 1; i >= 0; i--) {
+      const h = hostileShots[i];
+      if (h.src === (boss.def && boss.def.name) || h.p === boss || (h.src && boss.def && h.src === boss.def.name)) {
+        // also match by shooter reference if available via closure
+        hostileShots.splice(i, 1);
+        if (h.p && h.p.active) h.p.age = (h.p.maxAge || 1) + 1;
+      } else if (h.p && !h.p.active) {
+        hostileShots.splice(i, 1);
+      }
+    }
+    // fallback: any shot whose shooter was the boss and now orphaned
+    for (let i = hostileShots.length - 1; i >= 0; i--) {
+      const h = hostileShots[i];
+      if (h.p && h.p.active && h.p.owner == null && boss && boss.def) {
+        // wof shots are owner:null; we cannot reliably filter, but if boss is despawning we clear all wof-typed shots
+        // This is safe because wof is the only wall boss using magic_bolt with owner null in underworld
+        if (h.type === 'magic_bolt' && h.src === boss.def.name) {
+          hostileShots.splice(i, 1);
+          h.p.age = (h.p.maxAge || 1) + 1;
+        }
+      }
+    }
+  }
+
   function updateHostileShots() {
     for (let i = hostileShots.length - 1; i >= 0; i--) {
       const h = hostileShots[i];
@@ -414,6 +469,8 @@
   function spawnServantOf(boss, type, bx, by) {
     const def = TC.ENEMY_DEFS && TC.ENEMY_DEFS[type];
     if (!def) return null;
+    // W17: wof hungry cap is 6; enforce at the factory so direct test calls cannot overflow
+    if (boss && boss.def && boss.def.ai === 'wof' && type === 'hungry' && boss.servants >= 6) return null;
     for (let t = 0; t < 6; t++) {
       const x = bx + rand(-56, 24),
         y = by + rand(-56, 24);
@@ -439,8 +496,9 @@
   // Summon boss `type` at (x,y) at full hp. Returns the enemy, or null when
   // MAX_BOSSES bosses already live (or the type is not a boss).
   // Special case: type '__blood_moon__' (blood_sigil item) starts the Blood
-  // Moon event instead of spawning anything.
-  function spawnBoss(type, x, y) {
+  // Moon event instead of spawning anything. `opts` carries optional
+  // encounter profile (e.g. wof dir/band) from Player.doSummon.
+  function spawnBoss(type, x, y, opts) {
     if (type === "__blood_moon__") {
       if (TC.EnemySpawn && typeof TC.EnemySpawn.setBloodMoon === "function") {
         TC.EnemySpawn.setBloodMoon(true);
@@ -484,8 +542,31 @@
         list.push(h);
       }
     } else if (type === "wof") {
-      // slide in from whichever side the player is closer to
-      e.dir = p && p.x + p.w / 2 >= x + def.w / 2 ? 1 : -1;
+      // W17 direction-locked wall: honour the summon placement profile when present,
+      // otherwise fall back to the legacy side heuristic (preserves old saves/tests).
+      if (opts && typeof opts.dir === 'number' && (opts.dir === 1 || opts.dir === -1)) {
+        e.dir = opts.dir;
+        e.wofDir = opts.dir;
+      } else {
+        e.dir = p && p.x + p.w / 2 >= x + def.w / 2 ? 1 : -1;
+        e.wofDir = e.dir;
+      }
+      if (opts && opts.band && typeof opts.band.minY === 'number') {
+        e.wofBand = { minY: opts.band.minY, maxY: opts.band.maxY, centerY: opts.band.centerY || y + def.h / 2 };
+      } else {
+        const UW_START = (TC.CONST.GEN.underworld.startY || 355) * TC.CONST.TS;
+        const minY = UW_START + TC.CONST.TS;
+        const maxY = (TC.world ? TC.world.height * TC.CONST.TS - e.h - 4 * TC.CONST.TS : y + 100);
+        e.wofBand = { minY: minY, maxY: maxY, centerY: y };
+      }
+      e.wofState = 'enter';
+      e.wofPhase = 1;
+      e.wofElapsed = 0;
+      e.wofEnterTime = 0.9;
+      e.wofPeakServants = 0;
+      e.wofPeakProjectiles = 0;
+      e.wofTransitions = 0;
+      e.wofDespawnReason = null;
       e.summonTimer = 7;
     } else if (type === "storm_jelly") {
       e.cycleTimer = 2.2; // first attack after a short settle
@@ -1364,6 +1445,12 @@
       w = e.w,
       h = e.h;
     const rage = 1 - e.hp / e.maxHp;
+    // W17 telegraph overlay: flash the wall pale when about to fire
+    if (e.wofTele && e.wofTele > 0) {
+      const k = e.wofTele / 0.45; // 1..0
+      c.fillStyle = 'rgba(255,233,138,' + (0.18 + (1 - k) * 0.22).toFixed(2) + ')';
+      c.fillRect(x - 4, y - 4, w + 8, h + 8);
+    }
 
     // fleshy slab with deterministic mottling
     c.fillStyle = "#a83232";
@@ -1881,6 +1968,41 @@
     }
   }
 
+  // ---- WOF encounter observability (W17) ----
+  function getWofEncounter() {
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      if (e.def && e.def.ai === 'wof') {
+        return {
+          state: e.wofState || 'unknown',
+          phase: e.wofPhase || 1,
+          elapsed: e.wofElapsed || 0,
+          hpFrac: e.maxHp ? e.hp / e.maxHp : 0,
+          servants: e.servants || 0,
+          peakServants: e.wofPeakServants || 0,
+          peakProjectiles: e.wofPeakProjectiles || 0,
+          transitions: e.wofTransitions || 0,
+          despawnReason: e.wofDespawnReason || null,
+          dir: e.wofDir || e.dir || 1,
+          hostile: hostileShots.length,
+        };
+      }
+    }
+    return null;
+  }
+  function clearEncounter() {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const e = list[i];
+      if (e.def && e.def.ai === 'wof') {
+        for (let k = list.length - 1; k >= 0; k--) {
+          const s = list[k];
+          if (s !== e && s.master === e) list.splice(k, 1);
+        }
+        clearHostileShotsOf(e);
+        list.splice(i, 1);
+      }
+    }
+  }
   TC.Enemies = {
     list,
     update,
@@ -1908,5 +2030,36 @@
     makeEnemy,           // entity factory for the director
     trackHostileShot,    // boss shots register player-contact tracking
     spawnServantOf,      // minion spawning linked to a boss's servant budget
+    clearHostileShotsOf,
+    getWofEncounter,
+    clearEncounter,
   };
+  // ---- WOF lifecycle hooks (world unload / quitToTitle) ----
+  if (TC.Systems && typeof TC.Systems.boot === 'function') {
+    TC.Systems.boot('core.wof-cleanup', {
+      init: function() {
+        const origQuit = TC.quitToTitle;
+        if (typeof origQuit === 'function' && !origQuit._wofWrapped) {
+          TC.quitToTitle = function() {
+            try { clearEncounter(); } catch (err) {}
+            return origQuit.apply(this, arguments);
+          };
+          TC.quitToTitle._wofWrapped = true;
+        }
+        if (TC.Events && typeof TC.Events.on === 'function' && TC.Events.EVENT && TC.Events.EVENT.WorldLoaded) {
+          TC.Events.on(TC.Events.EVENT.WorldLoaded, function() {
+            // transient encounter state never survives a world load
+            try {
+              for (let i = list.length - 1; i >= 0; i--) {
+                const e = list[i];
+                if (e.def && e.def.ai === 'wof' && e.wofState === 'enter') {
+                  // keep entering wall? No, fresh world starts clean via TC.Enemies.clear()
+                }
+              }
+            } catch (err) {}
+          });
+        }
+      }
+    });
+  }
 })();

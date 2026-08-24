@@ -159,6 +159,10 @@
       const t = payload && payload.type;
       if (!validKey(t)) return;
       set(BOSS_FLAG[t] || ('boss.' + t + '.defeated'));
+      if (t === 'wof') {
+        set('world.infernal_gateway.opened');
+        set('event.underworld_frontier.completed');
+      }
     });
   }
 

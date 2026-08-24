@@ -66,6 +66,9 @@
     underworld: [['demon_eye', 2], ['cave_bat', 2], ['zombie', 1]],
     cave: null // use vanilla cave table
   };
+  // W17: post-Wall underworld supplement — ember wraith joins the mix once
+  // the Wall falls (condition-gated, not a full replacement).
+  const UNDERWORLD_POST_WALL = [['ember_wraith', 1.6]];
 
   let current = 'forest';
   let raw = 'forest';
@@ -242,7 +245,11 @@
     // BLOOD_MOON_TABLE precedence.
     getSpawnOverride: function () {
       if (current === 'forest' || current === 'cave') return null;
-      return SPAWN_OVERRIDE[current] || null;
+      const base = SPAWN_OVERRIDE[current] || null;
+      if (current === 'underworld' && base && TC.Progression && typeof TC.Progression.has === 'function') {
+        try { if (TC.Progression.has('boss.wall_of_flesh.defeated')) return base.concat(UNDERWORLD_POST_WALL); } catch (e) {}
+      }
+      return base;
     },
     // Per-step tick: detection scan + hysteresis + tint blend + ambience.
     update: tick,

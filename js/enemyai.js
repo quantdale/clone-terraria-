@@ -824,43 +824,268 @@
     return true;
   };
 
-  // ---- archetype: wof ----
+  // ---- archetype: hungry (W17 dedicated servant) ----
+  ai["hungry"] = function (e, ctx, dt) {
+    const p = TC.player;
+    const m = e.master;
+    if (!m || m.hp <= 0 || (TC.Enemies && TC.Enemies.list.indexOf(m) < 0)) return false;
+    const mcx = m.x + m.w / 2, mcy = m.y + m.h / 2;
+    const ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
+    const pcx = p ? p.x + p.w / 2 : ecx, pcy = p ? p.y + p.h / 2 : ecy;
+    const tether = 132; // max reach from master before pull-back
+    const dxM = mcx - ecx, dyM = mcy - ecy;
+    const dM = Math.hypot(dxM, dyM) || 1;
+    // lunge state: short dart toward player, then re-tether
+    if (e.hungryState === 'lunge') {
+      e.hungryLungeT -= dt;
+      if (e.hungryLungeT <= 0 || dM > tether * 1.25) {
+        e.hungryState = 'orbit';
+        e.hungryCooldown = rand(1.2, 2.2);
+      }
+      return true;
+    }
+    // tether pull-back when too far from wall
+    if (dM > tether) {
+      e.vx += (dxM / dM) * 520 * dt;
+      e.vy += (dyM / dM) * 520 * dt;
+      const sp = Math.hypot(e.vx, e.vy);
+      if (sp > 210) { e.vx *= 210 / sp; e.vy *= 210 / sp; }
+      e.facing = e.vx >= 0 ? 1 : -1;
+      return true;
+    }
+    // orbit around master with gentle wobble
+    e.phase += dt * 3.6;
+    if (p && !p.dead) {
+      e.hungryCooldown = (e.hungryCooldown || rand(1.0, 2.0)) - dt;
+      const distToPlayer = Math.hypot(pcx - ecx, pcy - ecy);
+      if (e.hungryCooldown <= 0 && distToPlayer < 7 * TC.CONST.TS && dM < tether * 0.85) {
+        // telegraph then lunge
+        const dx = pcx - ecx, dy = pcy - ecy;
+        const d = Math.hypot(dx, dy) || 1;
+        e.vx = (dx / d) * 260;
+        e.vy = (dy / d) * 260;
+        e.hungryState = 'lunge';
+        e.hungryLungeT = 0.55;
+        e.facing = e.vx >= 0 ? 1 : -1;
+        return true;
+      }
+      // gentle orbit pursuit
+      const ang = ctx.clock * 1.4 * (e.orbitDir || 1) + e.phase * 0.4;
+      const orbR = 44 + Math.sin(e.phase * 0.9) * 14;
+      const gx = mcx + Math.cos(ang) * orbR;
+      const gy = mcy + Math.sin(ang) * orbR * 0.7 + Math.sin(e.phase * 1.7) * 10;
+      const dx = gx - ecx, dy = gy - ecy;
+      const d = Math.hypot(dx, dy) || 1;
+      e.vx += (dx / d) * 340 * dt;
+      e.vy += (dy / d) * 340 * dt;
+      const sp = Math.hypot(e.vx, e.vy);
+      if (sp > 165) { e.vx *= 165 / sp; e.vy *= 165 / sp; }
+    } else {
+      e.vx = approach(e.vx, 0, 1.6, dt);
+      e.vy = approach(e.vy, 0, 1.6, dt);
+    }
+    e.facing = e.vx >= 0 ? 1 : -1;
+    return true;
+  };
+
+  // ---- WOF projectile helpers (canonical hostile ownership) ----
+  function fireWofBolt(e) {
+    if (!(TC.Projectiles && typeof TC.Projectiles.spawn === 'function')) return;
+    const p = TC.player;
+    if (!p || p.dead) return;
+    const sx = e.wofDir === 1 ? e.x + e.w - 6 : e.x + 6;
+    const sy = e.y + e.h * 0.32;
+    const tx = p.x + p.w / 2, ty = p.y + p.h / 2;
+    const ang = Math.atan2(ty - sy, tx - sx);
+    const dmg = Math.round(e.def.dmg * 0.62);
+    const pr = TC.Projectiles.spawn('magic_bolt', sx, sy, ang, { owner: null, speed: 320, dmg: dmg, kb: 3, life: 2.6, hitRadius: 10, color: '#ff6a3a' });
+    if (TC.Enemies && typeof TC.Enemies.trackHostileShot === 'function') TC.Enemies.trackHostileShot(pr, e, dmg);
+  }
+  function fireWofFan(e, n) {
+    if (!(TC.Projectiles && typeof TC.Projectiles.spawn === 'function')) return;
+    const p = TC.player;
+    if (!p || p.dead) return;
+    const sx = e.wofDir === 1 ? e.x + e.w - 6 : e.x + 6;
+    const sy = e.y + e.h * 0.32;
+    const base = Math.atan2(p.y + p.h / 2 - sy, p.x + p.w / 2 - sx);
+    const spread = n === 3 ? 0.52 : 0.78; // radians total
+    const dmg = Math.round(e.def.dmg * (n === 3 ? 0.55 : 0.48));
+    for (let k = 0; k < n; k++) {
+      const t = n === 1 ? 0 : (k / (n - 1) - 0.5);
+      const ang = base + t * spread;
+      const pr = TC.Projectiles.spawn('magic_bolt', sx, sy, ang, { owner: null, speed: 300 + Math.random() * 22, dmg: dmg, kb: 2.5, life: 2.8, hitRadius: 9, color: '#ff7a3a' });
+      if (TC.Enemies && typeof TC.Enemies.trackHostileShot === 'function') TC.Enemies.trackHostileShot(pr, e, dmg);
+    }
+    puffAt(sx, sy, ['#ff7a3a', '#ffb86a']);
+  }
+
+  // ---- archetype: wof (W17 production wall) ----
   ai["wof"] = function (e, ctx, dt) {
     const p = TC.player;
-    const ecx = e.x + e.w / 2,
-      ecy = e.y + e.h / 2;
+    const w = TC.world;
+    const TS = TC.CONST.TS;
+    const ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
     const pcy = p ? p.y + p.h / 2 : ecy;
-      // stub: a relentless wall that slides toward the player, speeding up
-      // as it takes damage; sheds hungry servants; bounces off world edges
-      if (!e.phase2 && e.hp <= e.maxHp * 0.5) e.phase2 = true;
-      const rage = 1 - e.hp / e.maxHp; // 0..1
-      e.vx = e.dir * (55 + 95 * rage);
-      if (p && !p.dead) {
-        // trail the player's height band
-        const targetY = p.y + p.h / 2 - e.h / 2;
-        e.vy = approach(e.vy, clamp((targetY - e.y) * 1.2, -60, 60), 3, dt);
+    // lazy init encounter lifecycle
+    if (e.wofState == null) {
+      e.wofState = 'enter';
+      e.wofEnterTime = 0.9;
+      e.wofPhase = 1;
+      e.wofTimer = 2.2;
+      e.wofTele = 0;
+      e.wofAttack = null;
+      e.phase2 = false; e.phase3 = false;
+      e.wofDir = (typeof e.dir === 'number' && (e.dir === 1 || e.dir === -1)) ? e.dir : 1;
+      e.dir = e.wofDir;
+      if (!e.wofBand) {
+        const UW_START = (TC.CONST.GEN.underworld.startY || 355) * TS;
+        const minY = UW_START + TS;
+        const maxY = w ? w.height * TS - e.h - 4 * TS : e.y + 100;
+        e.wofBand = { minY: minY, maxY: maxY, centerY: e.y };
       }
-      const w = TC.world;
-      if (w) {
-        if (e.x <= 2) e.dir = 1;
-        if (e.x + e.w >= w.width * TC.CONST.TS - 2) e.dir = -1;
+      e.wofElapsed = 0;
+      e.wofPeakServants = 0;
+      e.wofPeakProjectiles = 0;
+      e.wofTransitions = 0;
+      e.wofDespawnReason = null;
+      e._wofSummonTimer = rand(5, 7);
+      e.facing = e.wofDir;
+    }
+    e.wofElapsed = (e.wofElapsed || 0) + dt;
+    const frac = e.hp / e.maxHp;
+    if (e.wofPhase === 1 && frac <= 0.66) {
+      e.wofPhase = 2; e.phase2 = true; e.wofTransitions++;
+      e.wofTimer = Math.min(e.wofTimer, 1.2);
+      puffAt(ecx, ecy, [e.def.color, '#ffffff']);
+    }
+    if (e.wofPhase === 2 && frac <= 0.33) {
+      e.wofPhase = 3; e.phase3 = true; e.wofTransitions++;
+      e.wofTimer = Math.min(e.wofTimer, 0.9);
+      puffAt(ecx, ecy, [e.def.color, '#ff3040']);
+    }
+    // ---- explicit despawn / failure handling (documented) ----
+    let despawnReason = null;
+    if (!w || TC.state !== 'playing') despawnReason = 'world_unload';
+    else if (!p || p.dead) despawnReason = 'player_dead';
+    else {
+      const curBiome = (TC.Biomes && TC.Biomes.current) ? TC.Biomes.current : null;
+      const rawBiome = (TC.Biomes && TC.Biomes.raw) ? TC.Biomes.raw : null;
+      const inUnderworld = (curBiome === 'underworld' || rawBiome === 'underworld');
+      let deepEnough = false;
+      try { const uy = (TC.CONST.GEN.underworld.startY || 355) * TS; deepEnough = p.y + p.h / 2 >= uy - 2 * TS; } catch (err) {}
+      if (!inUnderworld && !deepEnough) {
+        const dxTiles = Math.abs(pcx - ecx) / TS;
+        if (dxTiles > 85) despawnReason = 'escaped_range';
+        else {
+          const surfY = w.surfaceY ? w.surfaceY[Math.floor(pcx / TS)] : 110;
+          if ((p.y + p.h / 2) / TS < surfY + 30) despawnReason = 'escaped_biome';
+          else if ((p.y + p.h / 2) / TS < (TC.CONST.GEN.underworld.startY || 355) - 10) despawnReason = 'escaped_biome';
+        }
+      } else {
+        // in underworld: do not despawn merely for being far ahead; the wall is supposed to close distance
+        // only despawn if the wall has clearly passed the player and is now far behind (player escaped ahead by >100 tiles beyond wall's trailing edge)
+        const dxTiles = (ecx - pcx) / TS; // positive if wall is to the right of player
+        const behind = (e.wofDir === 1 && pcx < ecx - 100 * TS) || (e.wofDir === -1 && pcx > ecx + e.w + 100 * TS);
+        if (behind) despawnReason = 'escaped_range';
       }
-      e.facing = e.dir;
-      if (p && !p.dead) {
-        // shed hungries, max 3 alive
-        e.summonTimer -= dt;
-        if (e.summonTimer <= 0) {
-          e.summonTimer = rand(6, 8);
-          if (e.servants < 3)
-            spawnServantOf(
-              e,
-              "hungry",
-              ecx + rand(-20, 20),
-              ecy + rand(-40, 40),
-            );
+      if (!despawnReason && w) {
+        if (e.wofDir === 1 && e.x + e.w >= w.width * TS - 2) despawnReason = 'world_edge';
+        if (e.wofDir === -1 && e.x <= 2) despawnReason = 'world_edge';
+      }
+    }
+    if (despawnReason) {
+      e.wofDespawnReason = despawnReason;
+      try { if (typeof window !== 'undefined') window.__wofLastDespawn = despawnReason + ' at ' + Math.round(e.x) + ',' + Math.round(e.y) + ' player ' + Math.round(pcx) + ',' + Math.round(pcy) + ' biome ' + (TC.Biomes ? TC.Biomes.current : '?'); } catch (err) {}
+      if (TC.Enemies && TC.Enemies.list) {
+        for (let k = TC.Enemies.list.length - 1; k >= 0; k--) {
+          const s = TC.Enemies.list[k];
+          if (s !== e && s.master === e) TC.Enemies.list.splice(k, 1);
         }
       }
+      if (TC.Enemies && typeof TC.Enemies.clearHostileShotsOf === 'function') {
+        try { TC.Enemies.clearHostileShotsOf(e); } catch (err) {}
+      }
+      return false;
+    }
+    // ---- entrance (readable) ----
+    if (e.wofState === 'enter') {
+      e.wofEnterTime -= dt;
+      e.vx = e.wofDir * 68;
+      const targetY = e.wofBand.centerY;
+      e.vy = approach(e.vy, clamp((targetY - e.y) * 1.4, -55, 55), 4, dt);
+      e.facing = e.wofDir;
+      if (e.wofEnterTime <= 0) {
+        e.wofState = 'combat';
+        e.wofTimer = e.wofPhase === 1 ? rand(2.0, 2.8) : e.wofPhase === 2 ? rand(1.6, 2.2) : rand(1.2, 1.8);
+      }
+      return true;
+    }
+    // ---- active combat movement (direction-locked, band-constrained) ----
+    const speedByPhase = e.wofPhase === 1 ? 72 : e.wofPhase === 2 ? 96 : 124;
+    e.vx = e.wofDir * speedByPhase;
+    let targetY;
+    if (p && !p.dead) {
+      const playerCenterY = p.y + p.h / 2 - e.h / 2;
+      targetY = clamp(playerCenterY, e.wofBand.minY, e.wofBand.maxY);
+      targetY += Math.sin(ctx.clock * 0.7 + e.phase) * 6;
+    } else {
+      targetY = e.wofBand.centerY;
+    }
+    targetY = clamp(targetY, e.wofBand.minY, e.wofBand.maxY);
+    e.vy = approach(e.vy, clamp((targetY - e.y) * 1.3, -70, 70), 3.5, dt);
+    e.facing = e.wofDir;
+    // ---- telegraphed attacks ----
+    if (e.wofTele > 0) {
+      e.wofTele -= dt;
+      e.flashTimer = 0.12;
+      if (e.wofTele <= 0) {
+        const atk = e.wofAttack;
+        if (atk) {
+          const liveProj = TC.Projectiles ? TC.Projectiles.activeCount() : 0;
+          const cap = 12;
+          if (liveProj < cap) {
+            if (atk === 'bolt') fireWofBolt(e);
+            else if (atk === 'fan') fireWofFan(e, 3);
+            else if (atk === 'spread') fireWofFan(e, 5);
+          }
+        }
+        e.wofAttack = null;
+        const next = e.wofPhase === 1 ? rand(2.8, 3.8) : e.wofPhase === 2 ? rand(1.9, 2.7) : rand(1.3, 2.0);
+        e.wofTimer = next;
+      }
+      return true;
+    }
+    e.wofTimer -= dt;
+    if (e.wofTimer <= 0 && p && !p.dead) {
+      let choice;
+      if (e.wofPhase === 1) choice = 'bolt';
+      else if (e.wofPhase === 2) choice = Math.random() < 0.55 ? 'fan' : 'bolt';
+      else choice = Math.random() < 0.6 ? 'spread' : 'fan';
+      e.wofAttack = choice;
+      e.wofTele = e.wofPhase === 1 ? 0.42 : e.wofPhase === 2 ? 0.36 : 0.30;
+      puffAt(ecx + e.wofDir * 12, ecy - e.h * 0.22, ['#ff5a48', '#ffe0a0']);
+    }
+    // ---- servant shedding (bounded) ----
+    if (p && !p.dead) {
+      if (e._wofSummonTimer == null) e._wofSummonTimer = rand(5, 7);
+      e._wofSummonTimer -= dt;
+      if (e._wofSummonTimer <= 0) {
+        const maxServ = e.wofPhase === 1 ? 4 : e.wofPhase === 2 ? 5 : 6;
+        const interval = e.wofPhase === 1 ? rand(5.5, 7.0) : e.wofPhase === 2 ? rand(4.0, 5.5) : rand(3.2, 4.5);
+        e._wofSummonTimer = interval;
+        if (e.servants < maxServ) {
+          const sx = e.wofDir === 1 ? e.x + e.w - 8 : e.x + 8;
+          const sy = e.y + e.h * 0.28 + rand(-18, 18);
+          spawnServantOf(e, 'hungry', sx, sy);
+        }
+        if (e.servants > (e.wofPeakServants || 0)) e.wofPeakServants = e.servants;
+      }
+    }
+    if (TC.Projectiles) {
+      const cur = TC.Projectiles.activeCount();
+      if (cur > (e.wofPeakProjectiles || 0)) e.wofPeakProjectiles = cur;
+    }
     return true;
   };
 

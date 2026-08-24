@@ -88,6 +88,77 @@
     return -1;
   }
 
+  // ---- summon requirement helpers (W17 Underworld frontier) ----
+  // Normalized summon contract: every summon item declares its activation
+  // requirements declaratively. Legacy items use plain `boss` + optional
+  // `condition` (progression gate) and default to night-only; new items use
+  // `summon:{time,biome,requires,placement}`. `biome` is the CURRENT biome
+  // (TC.Biomes.current), not the discovered flag `biome.X.discovered`.
+  // `time` is 'night'|'day'|'any'. `placement` selects a custom spawn profile.
+  function summonReqOf(def) {
+    let time = null, biome = null, requires = null, placement = null;
+    if (def.summon && typeof def.summon === 'object') {
+      if (typeof def.summon.time === 'string') time = def.summon.time;
+      if (typeof def.summon.biome === 'string') biome = def.summon.biome;
+      if (def.summon.requires != null) requires = def.summon.requires;
+      if (typeof def.summon.placement === 'string') placement = def.summon.placement;
+      if (def.summon.condition != null && requires == null) requires = def.summon.condition;
+    }
+    if (time == null && typeof def.summonTime === 'string') time = def.summonTime;
+    if (biome == null && typeof def.summonBiome === 'string') biome = def.summonBiome;
+    if (requires == null && def.requires != null) requires = def.requires;
+    if (requires == null && def.condition != null) requires = def.condition;
+    if (placement == null && typeof def.placement === 'string') placement = def.placement;
+    if (placement == null && typeof def.spawnProfile === 'string') placement = def.spawnProfile;
+    if (time == null) time = 'night';
+    time = String(time).toLowerCase();
+    if (time !== 'night' && time !== 'day' && time !== 'any') time = 'night';
+    if (biome) biome = String(biome).toLowerCase();
+    else biome = null;
+    return { time: time, biome: biome, requires: requires, placement: placement };
+  }
+  function currentBiomeTag() {
+    const w = TC.world;
+    const p = TC.player;
+    if (w && p && TC.CONST && TC.CONST.GEN && TC.CONST.GEN.underworld) {
+      const uy = TC.CONST.GEN.underworld.startY * TC.CONST.TS;
+      const py = p.y + p.h / 2;
+      if (py >= uy - 4 * TC.CONST.TS) return 'underworld';
+    }
+    if (TC.Biomes && typeof TC.Biomes.current === 'string' && TC.Biomes.current) {
+      return TC.Biomes.current.toLowerCase();
+    }
+    if (TC.Biomes && typeof TC.Biomes.raw === 'string' && TC.Biomes.raw) {
+      return TC.Biomes.raw.toLowerCase();
+    }
+    return 'forest';
+  }
+  function capBiome(s) {
+    if (!s) return '';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  function computeWofPlacement(player) {
+    const w = TC.world;
+    if (!w || !TC.CONST) return null;
+    const TS = TC.CONST.TS;
+    const def = TC.ENEMY_DEFS && TC.ENEMY_DEFS.wof;
+    if (!def) return null;
+    const worldWpx = w.width * TS;
+    const worldHpx = w.height * TS;
+    const UW_START = (TC.CONST.GEN.underworld.startY || 355) * TS;
+    const px = player.x + player.w / 2;
+    const dir = px < worldWpx / 2 ? 1 : -1;
+    const margin = 4 * TS;
+    const spawnX = dir === 1 ? margin : worldWpx - def.w - margin;
+    let wantY = player.y + player.h / 2 - def.h / 2;
+    const minY = UW_START + TS;
+    const maxY = worldHpx - def.h - margin;
+    wantY = Math.max(minY, Math.min(maxY, wantY));
+    const bestY = wantY;
+    const band = { minY: Math.max(minY, bestY - 40), maxY: Math.min(maxY, bestY + 40), centerY: bestY };
+    return { x: spawnX, y: bestY, dir: dir, band: band };
+  }
+
   class Player {
     constructor(px, py) {
       this.x = typeof px === "number" && isFinite(px) ? px : 0;
@@ -1297,12 +1368,17 @@
       sfx("pickup");
     }
 
-    // Summon items (kind 'summon'): wake the boss at night. W15 contract:
+    // Summon items (kind 'summon'): environment-aware activation (W17).
+    // W15/W17 contract:
     //   - understandable requirements, useful feedback when blocked;
     //   - the item is consumed ONLY when something actually happened
     //     (boss spawned or event started) — never on a failed attempt;
-    //   - duplicate bosses are impossible (spawnBoss enforces MAX_BOSSES).
-    // An optional def.condition (W14 grammar) gates summons declaratively.
+    //   - duplicate bosses are impossible (spawnBoss enforces MAX_BOSSES);
+    //   - failure to create a valid encounter consumes zero items.
+    // Requirements are declarative via `summon:{time,biome,requires,placement}`
+    // where `biome` is the CURRENT biome (TC.Biomes.current), not the
+    // discovered flag `biome.X.discovered` (checked via Progression.test).
+    // Legacy `condition`/`requires` aliases are honored.
     doSummon(def, itemId) {
       if (this.swing && this.swing.item === def) return; // waiting on useTime
       if (!def.boss) return;
@@ -1328,31 +1404,46 @@
           id: ++this.swingSeq,
         };
       };
-      if (dl >= 0.5) {
+      const req = summonReqOf(def);
+      if (req.time === 'night' && dl >= 0.5) {
         reject("The " + nm + " only stirs at night...");
         return;
       }
-      if (
-        def.condition != null &&
-        TC.Progression &&
-        typeof TC.Progression.test === "function"
-      ) {
+      if (req.time === 'day' && dl < 0.5) {
+        reject("The " + nm + " only stirs by day...");
+        return;
+      }
+      if (req.biome) {
+        const cur = currentBiomeTag();
+        if (cur !== req.biome) {
+          if (req.biome === 'underworld') {
+            reject("The " + nm + " only stirs in the Underworld...");
+          } else {
+            reject("The " + nm + " only stirs in the " + capBiome(req.biome) + "...");
+          }
+          return;
+        }
+      }
+      if (req.requires != null && TC.Progression && typeof TC.Progression.test === "function") {
         let ok = false;
-        try {
-          ok = TC.Progression.test(def.condition);
-        } catch (e) {}
+        try { ok = !!TC.Progression.test(req.requires); } catch (e) {}
         if (!ok) {
           reject("The " + nm + " lies silent... its moment has not come.");
           return;
         }
       }
       const TS = CONST.TS;
-      let bx2 = cx,
-        by2 = this.y + this.h / 2 - 400; // boss enters above the player
-      if (TC.world) {
-        // clamp inside world bounds
-        const lo = 8,
-          hiX = Math.max(lo, TC.world.width * TS - 8);
+      let bx2 = cx, by2 = this.y + this.h / 2 - 400;
+      let spawnOpts = null;
+      if (req.placement === 'underworld_wall' || def.boss === 'wof') {
+        const plc = computeWofPlacement(this);
+        if (!plc) {
+          reject("The " + nm + " cannot find a stable wall...");
+          return;
+        }
+        bx2 = plc.x; by2 = plc.y; spawnOpts = { dir: plc.dir, band: plc.band };
+      } else if (TC.world) {
+        const lo = 8, hiX = Math.max(lo, TC.world.width * TS - 8);
         const hiY = Math.max(lo, TC.world.height * TS - 8);
         bx2 = Math.min(Math.max(bx2, lo), hiX);
         by2 = Math.min(Math.max(by2, lo), hiY);
@@ -1360,13 +1451,17 @@
       const isEventStart = def.boss === "__blood_moon__";
       let spawned = null;
       try {
-        spawned = TC.Enemies.spawnBoss(def.boss, bx2, by2);
+        spawned = TC.Enemies.spawnBoss(def.boss, bx2, by2, spawnOpts);
       } catch (e) {}
-      // spawnBoss toasts '<name> has awoken!' itself; a null return means
-      // MAX_BOSSES is full — nothing happened, nothing is consumed.
       if (!spawned && !isEventStart) {
         reject("A boss already stalks this world...");
         return;
+      }
+      // Event start (__blood_moon__) with null return is still success when the
+      // event actually began: verify the event flag flipped to avoid consuming
+      // on a no-op duplicate call.
+      if (isEventStart && TC.EnemySpawn && typeof TC.EnemySpawn.isBloodMoon === "function") {
+        try { if (!TC.EnemySpawn.isBloodMoon()) { reject("The Blood Moon already rises..."); return; } } catch (e) {}
       }
       if (!consumeFromSlot(this.inventory, this.hotbarIndex, itemId, 1)) return;
       sfx("die");
