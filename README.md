@@ -60,8 +60,11 @@ npm run validate    # syntax + tests + build + build-verify + browser suite
   skeletons, granite golems, snapvines, frost wolves, void wisps…), Blood Moon events,
   accessory equipment slots with stat prefixes, potion buffs/debuffs (incl. burning).
 - Bosses: Eye of the Void, King Slime, Skeletron (+ hands), Storm Jelly, Moss Mother,
-  and a Wall of Flesh frontier fight. Boss kills persist progression flags that unlock
-  recipes, shop stock and spawn scaling.
+  and a production Wall of Flesh gateway — a direction-locked sweeping wall with
+  enter→phase2→enrage, telegraphed bolt fans, tethered Hungry servants and
+  `infernal_core` loot. Boss kills persist progression flags that unlock recipes
+  (Hellforged Blade, Infernal Greaves/Hook), Guide/Merchant stock, and Underworld
+  spawns (Ember Wraith).
 
 ### Systems
 

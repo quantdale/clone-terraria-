@@ -22,10 +22,10 @@ DONE      acceptance criteria proven
 
 ---
 
-# Status snapshot (authoritative, W11 truth-sync)
+# Status snapshot (authoritative, W17 truth-sync)
 
-Reconciled against the implementation on the W11 campaign checkpoint. Consult
-docs/ARCHITECTURE.md §19 (capability matrix) for per-module ownership detail.
+Reconciled against the implementation on the W17 Underworld Frontier checkpoint. Consult
+docs/ARCHITECTURE.md §19 (capability matrix) and §21 (W17 contracts) for per-module ownership detail.
 
 | Area | Tasks | Status |
 |---|---|---|
@@ -37,7 +37,7 @@ docs/ARCHITECTURE.md §19 (capability matrix) for per-module ownership detail.
 | Tile shapes/traversal/grapple | PHY-001..PHY-005 | DONE |
 | Liquids | LIQ-001..LIQ-005 | DONE (LIQ-006 pumps remains TODO) |
 | Worldgen platform | WGEN-001..WGEN-005 | DONE (v3 passes incl. deep caves + micro-biomes) |
-| Combat & progression | COM-001..COM-007 | DONE (canonical resolveHit, generic statuses, enemy defs/AI/spawn split, LootTables, Progression conditions+graph, Storm Jelly vertical arc) |
+| Combat & progression | COM-001..COM-007 | DONE (canonical resolveHit, generic statuses, enemy defs/AI/spawn split, LootTables, Progression conditions+graph, Storm Jelly vertical arc, **W17 Wall of Flesh production gateway**: environment-aware summon, direction-locked wall, multi-phase state machine, bounded hungry/servant/projectile lifecycle, infernal_core loot, post-Wall recipes/NPC stock/spawn gateway) |
 | Inventory/crafting | INV-001/002, CRF-001/002 | DONE (progression-aware recipe conditions included) |
 | NPCs/towns | NPC-001..NPC-004 | DONE (housing, shops, context dialog; condition-gated unlocks/stock) |
 | Localization | LOC-001..LOC-003 | TODO |
@@ -46,9 +46,9 @@ docs/ARCHITECTURE.md §19 (capability matrix) for per-module ownership detail.
 | Multiplayer | NET-001..004 | TODO (P2; preconditions tracked in ARCHITECTURE §17) |
 | Extensibility/mods | MOD-001..004 | TODO |
 
-### Newly discovered follow-ups (from the same audit)
+### Newly discovered follow-ups (from the same audit, updated W17)
 
-- Wall of Flesh fight remains stub-quality (no proper arena/flesh-wall mechanics) — keep as frontier content task, do not advertise as production-ready.
+- Wall of Flesh is now production-ready (W17): direction-locked sweeping wall with enter→combat→phase2→enrage, telegraphed projectile fans, bounded hungry tether, explicit despawn/cleanup, infernal_core gateway, and full test/browser/release qualification. No longer stub-quality.
 - Enemy rendering still lives beside lifecycle in enemies.js (acceptable; revisit if file regrows past ~2k lines).
 - Command transactions cover player actions but the live step loop still routes player input directly through player.js — migrating input->commands phase is future work.
 

@@ -454,10 +454,9 @@ phase under `TC.Systems` (or `main.js` direct call when noted).
 
 ### Remaining architectural debt (tracked)
 
-See `docs/TASK_BOARD.md` status column. Highlights: Wall of Flesh fight remains a
-stub-quality frontier boss; localization layer absent (English strings inline);
+See `docs/TASK_BOARD.md` status column. Highlights: localization layer absent (English strings inline);
 render layers registered but main.js still draws via direct calls; command phase not
-yet wired into the live step loop for player actions.
+yet wired into the live step loop for player actions. Wall of Flesh is now a production frontier gateway (W17).
 
 ---
 
@@ -516,8 +515,27 @@ shape unchanged, statuses unchanged). v1 blobs keep loading via restoreLegacy.
 resolver.test.js, status.test.js, lootables.test.js, enemy-archetypes.test.js,
 conditions.test.js, summon.test.js, journey-i-progression.spec.js (full arc).
 
+---
+
+## 21. Campaign contracts (W17 — Underworld Frontier)
+
+### Summon contract (player.js, W17)
+
+Every summon item declares `summon:{time,biome,requires,placement}` where `time` is `night|day|any` (default `night` for legacy), `biome` is the CURRENT biome (`TC.Biomes.current`, not `biome.X.discovered`), `requires` is the W14 condition grammar, and `placement` selects a custom spawn profile (`underworld_wall` for the Wall). Legacy `condition`/`requires` aliases are honored. `currentBiomeTag()` prefers depth-derived underworld detection to avoid hysteresis lag. Invalid summons (wrong time/biome/progression/duplicate boss/placement failure) emit a clear toast and consume **zero** items; exactly one item is consumed only after `TC.Enemies.spawnBoss` succeeds (or the Blood Moon event starts). Existing night-only bosses retain their `night` gate.
+
+### Wall encounter lifecycle (enemies.js + enemyai.js, W17)
+
+The Wall is a direction-locked, noclip sweeping wall, not a flying tracker. `Player.doSummon` computes an `underworld_wall` placement (`x` at world edge, `y` clamped to the underworld band, `dir` chosen by player side, `band` as `{minY,maxY,centerY}`) and `spawnBoss('wof',x,y,{dir,band})` stores `wofDir/wofBand/wofState/wofPhase/wofEnterTime`. `enemyai.js` `wof` is a state machine: `enter (0.9s, 68 px/s) -> combat (phase1 72 px/s -> phase2 96 px/s at 66% -> phase3 124 px/s at 33%)` with telegraphed attacks (`bolt` single, `fan` 3, `spread` 5 via `TC.Projectiles.spawn('magic_bolt',...,{owner:null})` + `TC.Enemies.trackHostileShot`), bounded servant shedding (phase caps 4/5/6, `spawnServantOf('hungry',...)`), and explicit despawn for `world_unload/player_dead/escaped_biome/escaped_range/world_edge` (no casual edge reversal). Vertical motion stays within `wofBand` with a slight player-tracking lerp and sine wobble. Servants use the dedicated `hungry` archetype (tethered orbit/lunge, `master` link, `tether 132`, `cap 6`, orphan `false` return). `moveAndCollide` treats `wof` as noclip (world-bounds clamp only). `clearHostileShotsOf` and `clearEncounter` ensure no orphan projectiles/servants on despawn/death/quitToTitle/world reset.
+
+### Loot & progression gateway (enemydefs.js + progression.js + biomes.js + npcs.js, W17)
+
+`wof` loot is data-driven via `TC.LootTables` (unique `infernal_core 6-10` + `blood_shard` + `gold_bar` + coins, validated, exactly-once via `killEnemy`). Post-Wall gateway is gated on `boss.wall_of_flesh.defeated` (canonical) plus companion flags `world.infernal_gateway.opened`/`event.underworld_frontier.completed` set by `progression.js` BossDefeated listener. Unlocks: `hellforged_blade`/`infernal_greaves`/`infernal_hook` recipes (`requires: 'boss.wall_of_flesh.defeated'`), Guide `dialogFlags` and Merchant `shopOf` rows gated on the same flag, `Biomes.getSpawnOverride()` underworld post-Wall supplement (`ember_wraith 1.6` when flag set), and `Enemyspawn`/`Biomes`/`Progression.spawnMultiplier` already respect the flag. All ride existing providers; no save-format bump.
+
+### Observability & perf (debug.js + enemies.js + tools/perf-probe-w17-wof.js, W17)
+
+`TC.Enemies.getWofEncounter()` exposes `{state,phase,elapsed,hpFrac,servants,peakServants,peakProjectiles,transitions,despawnReason,dir,hostile}` for `TC.Debug.drawHud` (F3) and `window.__TEST__.getWofEncounter/setWofHp` (#test). `TC.Debug` also counts `wof_despawn_*`. `tools/perf-probe-w17-wof.js` measures `wof AI`, `wof+hungry`, `hostile projectile load`, `full Enemies.update`, `arena placement`, and `Biomes.getSpawnOverride` with hard caps (projectiles 12, servants 6) and no per-frame world scans. Frame budget remains <0.5ms for the encounter.
+
 ### Remaining limitations
 
-Wall of Flesh is still a frontier stub; localization absent; render-layer dual
-path with direct draw calls remains; command transactions not yet wired to live
-player input.
+Localization absent; render-layer dual path with direct draw calls remains; command transactions not yet wired to live
+player input. Wall of Flesh is now production-ready; remaining Hardmode-equivalent expansion is deferred.
