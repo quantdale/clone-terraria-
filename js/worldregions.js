@@ -131,10 +131,22 @@
     return n;
   }
   function bump(idx, bit) {
+    // Which consumers were CURRENT before the revision moves? Exactly they
+    // become stale now — their pending counters grow by one. Already-stale
+    // consumers keep their single outstanding entry (coalescing).
+    const wasCurrent = [];
+    for (const rec of R.consumers.values()) {
+      wasCurrent.push(rec.seen[idx] === R.rev[idx]);
+    }
     R.rev[idx]++;
     R.bumps++;
     R.outstanding[idx] = R.consumers.size;
     R.kinds[idx] |= bit;
+    let k = 0;
+    for (const rec of R.consumers.values()) {
+      if (wasCurrent[k]) rec.pending++;
+      k++;
+    }
     if (R._touchedFlag) pushTouched(idx);
   }
   function markIdx(idx, reason) {
@@ -207,8 +219,21 @@
 
   // ---- consumers ----
   function allocConsumer(rec) {
-    rec.seen = new Uint32Array(R.count); // rev[] starts at 0; init() markAll bumps to 1
-    rec.pending = R.count;               // everything stale right after (re)bind
+    // Fresh cursors start at revision zero: every region whose rev has moved
+    // is stale for THIS consumer. Reconcile the shared bookkeeping here so
+    // consumers registering after a world build (init's markAll runs with
+    // zero consumers) still make their stale regions outstanding and
+    // visible to incremental delivery.
+    rec.seen = new Uint32Array(R.count);
+    rec.pending = 0;
+    const rev = R.rev;
+    for (let i = 0; i < R.count; i++) {
+      if (rec.seen[i] !== rev[i]) {
+        rec.pending++;
+        R.outstanding[i]++;
+        pushTouched(i);
+      }
+    }
     rec._bumpAtLastSweep = -1;
     rec._clean = false;
     rec._fullScan = true;                // first sweep reads every region
