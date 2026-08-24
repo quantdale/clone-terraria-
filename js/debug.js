@@ -145,6 +145,14 @@
 
     const flags = guardedCall('Progression', 'all');
     if (flags) lines.push('flags ' + (flags.length ? flags.join(', ') : 'none'));
+    // WOF encounter observability (W17): state/phase/elapsed/servants/projectiles
+    try {
+      const wof = (TC.Enemies && typeof TC.Enemies.getWofEncounter === 'function') ? TC.Enemies.getWofEncounter() : null;
+      if (wof) {
+        lines.push('wof ' + wof.state + ' p' + wof.phase + ' ' + (wof.elapsed || 0).toFixed(1) + 's hp' + (wof.hpFrac * 100 | 0) + '% dir' + (wof.dir > 0 ? '→' : '←'));
+        lines.push('wof servants ' + wof.servants + '/' + wof.peakServants + ' proj ' + (TC.Projectiles ? TC.Projectiles.activeCount() : '?') + '/' + wof.peakProjectiles + ' trans ' + wof.transitions + (wof.despawnReason ? ' despawn:' + wof.despawnReason : ''));
+      }
+    } catch (e) {}
     return lines;
   }
 
@@ -251,6 +259,27 @@
     try { return !!TC.Save.save(); }
     catch (err) { warnOnce('saveNow: ' + err); return null; }
   }
+  function getWofEncounter() {
+    try {
+      if (TC.Enemies && typeof TC.Enemies.getWofEncounter === 'function') return TC.Enemies.getWofEncounter();
+    } catch (e) {}
+    return null;
+  }
+  function setWofHp(frac) {
+    try {
+      const list = TC.Enemies && TC.Enemies.list;
+      if (!list) return false;
+      for (let i = 0; i < list.length; i++) {
+        const e = list[i];
+        if (e.def && e.def.ai === 'wof') {
+          const f = Math.max(0, Math.min(1, Number(frac)));
+          e.hp = Math.max(1, Math.round(e.maxHp * f));
+          return true;
+        }
+      }
+    } catch (e) {}
+    return false;
+  }
 
   if (testMode()) {
     // loadFixture deliberately absent — no fixture system exists yet; harnesses
@@ -261,7 +290,9 @@
       giveItem: giveItem,
       spawnEnemy: spawnEnemy,
       getStateSnapshot: getStateSnapshot,
-      saveNow: saveNow
+      saveNow: saveNow,
+      getWofEncounter: getWofEncounter,
+      setWofHp: setWofHp
     };
   }
 

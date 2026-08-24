@@ -197,16 +197,20 @@ test('boss storm_jelly: three-phase escalation with lightning volleys', () => {
   const p = TC.player;
   const e = TC.Enemies.spawnBoss('storm_jelly', p.x, p.y - 300);
   assert.ok(e);
-  // force the deepest phase and a volley
+  // force the deepest phase and a volley — deterministic random forces bolt pick
   e.hp = Math.floor(e.maxHp * 0.3);
   e.cycleTimer = 0.05;
   let boltsSeen = 0;
-  for (let i = 0; i < 60 * 6; i++) {
-    const before = TC.Projectiles.activeCount();
-    TC.Enemies.update(DT);
-    boltsSeen += Math.max(0, TC.Projectiles.activeCount() - before);
-    if (e.bstate === 'hover' && boltsSeen >= 3) break;
-  }
+  const realRandom = Math.random;
+  Math.random = () => 0.12; // forces weightedPick to choose bolt (1.4 vs 2.2)
+  try {
+    for (let i = 0; i < 60 * 6; i++) {
+      const before = TC.Projectiles.activeCount();
+      TC.Enemies.update(DT);
+      boltsSeen += Math.max(0, TC.Projectiles.activeCount() - before);
+      if (e.bstate === 'hover' && boltsSeen >= 3) break;
+    }
+  } finally { Math.random = realRandom; }
   assert.ok(e.phase3 === true, 'phase 3 reached');
   assert.ok(e.phase2 === true);
   assert.ok(boltsSeen >= 1, 'lightning volley fired pooled projectiles');
