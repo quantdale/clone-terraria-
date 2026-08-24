@@ -22,13 +22,45 @@ DONE      acceptance criteria proven
 
 ---
 
+# Status snapshot (authoritative, W11 truth-sync)
+
+Reconciled against the implementation on the W11 campaign checkpoint. Consult
+docs/ARCHITECTURE.md §19 (capability matrix) for per-module ownership detail.
+
+| Area | Tasks | Status |
+|---|---|---|
+| Baseline/build/tests | FND-001, FND-002, FND-006 | DONE |
+| Framework adoption | FND-003, FND-004, FND-005 | SUPERSEDED (static build + node:test chosen; rationale above) |
+| CI quality gate | FND-007 | DONE (GitHub Actions .github/workflows/ci.yml mirrors npm run validate) |
+| Registry/save/commands/events/layers/stats | ARC-001..ARC-009 | DONE (ARC-008 render layers registered but main.js still draws via direct calls — acceptable dual path) |
+| Advanced-module integration | INT-001..INT-006 | DONE |
+| Tile shapes/traversal/grapple | PHY-001..PHY-005 | DONE |
+| Liquids | LIQ-001..LIQ-005 | DONE (LIQ-006 pumps remains TODO) |
+| Worldgen platform | WGEN-001..WGEN-005 | DONE (v3 passes incl. deep caves + micro-biomes) |
+| Combat & progression | COM-001..COM-007 | DONE (canonical resolveHit, generic statuses, enemy defs/AI/spawn split, LootTables, Progression conditions+graph, Storm Jelly vertical arc) |
+| Inventory/crafting | INV-001/002, CRF-001/002 | DONE (progression-aware recipe conditions included) |
+| NPCs/towns | NPC-001..NPC-004 | DONE (housing, shops, context dialog; condition-gated unlocks/stock) |
+| Localization | LOC-001..LOC-003 | TODO |
+| Rendering/lighting/audio depth | VIS/LGT/ART/AUD epics | LGT-002 done (dynamic lights); rest TODO/P2 |
+| Performance | PERF-001 | DONE (TC.Debug instrumentation + F3 overlay); PERF-002..005 TODO |
+| Multiplayer | NET-001..004 | TODO (P2; preconditions tracked in ARCHITECTURE §17) |
+| Extensibility/mods | MOD-001..004 | TODO |
+
+### Newly discovered follow-ups (from the same audit)
+
+- Wall of Flesh fight remains stub-quality (no proper arena/flesh-wall mechanics) — keep as frontier content task, do not advertise as production-ready.
+- Enemy rendering still lives beside lifecycle in enemies.js (acceptable; revisit if file regrows past ~2k lines).
+- Command transactions cover player actions but the live step loop still routes player input directly through player.js — migrating input->commands phase is future work.
+
+---
+
 # EPIC FND — Baseline, build, tests and CI
 
 ## FND-001 — Freeze repository capability map
 
 **Priority:** P0  
 **Effort:** Medium  
-**Status:** TODO
+**Status:** DONE
 
 ### Scope
 
@@ -67,6 +99,8 @@ Select fixed seeds representing normal, biome-edge, structure-heavy and regressi
 
 ## FND-003 — Add Vite dev/build shell
 
+**SUPERSEDED (W11 truth-sync):** No bundler/dev shell will be introduced. The project ships as plain static files; the release path is the reproducible `tools/release-build.js` assembly + `tools/verify-dist.js` Chromium launch gate (`npm run build` / `npm run verify:build`).
+
 **Priority:** P0  
 **Depends on:** FND-001  
 **Effort:** Medium
@@ -86,6 +120,8 @@ Introduce package tooling and Vite while preserving gameplay behavior.
 
 ## FND-004 — Add incremental JS type checking
 
+**SUPERSEDED (W11 truth-sync):** Incremental JS type checking is covered by `node --check` on every module (`npm run check`, also enforced per-file by the release build) plus registry schema validation at boot; a JSDoc/checkJs pass was rejected as churn without payoff for this codebase.
+
 **Priority:** P0  
 **Depends on:** FND-003  
 **Effort:** Medium
@@ -103,7 +139,9 @@ Do not convert the whole repository to TypeScript in one task.
 
 ---
 
-## FND-005 — Establish Vitest suite
+## FND-005 — Establish unit test suite (done as node:test)
+
+**SUPERSEDED (W11 truth-sync):** Superseded in favor of the built-in `node:test` runner (zero-dependency, deterministic VM full-boot loader in tests/helpers/load-game.js). All former smoke scripts are superseded by suites under tests/.
 
 **Priority:** P0  
 **Depends on:** FND-003  

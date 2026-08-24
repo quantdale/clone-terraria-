@@ -385,3 +385,76 @@ Any change that alters one of the following should update this document or creat
 - mod security/capability model.
 
 Architecture documentation is part of the implementation contract, not post-hoc commentary.
+
+---
+
+## 19. Capability matrix (authoritative state)
+
+This matrix reflects the code that actually exists. When it disagrees with older prose
+in this file or in `docs/terraria-parity/*`, this table and the implementation win.
+Update it whenever ownership, persistence, events or phases change.
+
+Legend — Persist: SaveCore provider key; Events ▸ produced / ◂ consumed; Phase: update
+phase under `TC.Systems` (or `main.js` direct call when noted).
+
+| Module | Canonical responsibility | Public API (abridged) | Persist | Events ▸ / ◂ | Phase |
+|---|---|---|---|---|---|
+| constants.js (lead) | Shared tuning + TILE/TILE_DEFS/WALL/WALL_DEFS/ITEM_DEFS/RECIPES/ENEMY_DEFS tables | `TC.CONST/TILE/TILE_DEFS/WALL/WALL_DEFS/ITEM_DEFS/RECIPES/ENEMY_DEFS` | — | — | — |
+| utils.js | Seeded RNG/hash/noise | `TC.Utils` | — | — | — |
+| registry.js | Stable `ns:name` content ids; mirrors shared tables; legacy aliases; validate/fingerprint | `TC.Registry` | fingerprint in envelope | — | boot |
+| events.js | Deferred per-frame bus, frozen EVENT names, wildcard, isolated listener errors | `TC.Events` | — | all | eventsFlush |
+| systems.js | Update-phase scheduler, render layers, boot tasks | `TC.Systems`, `TC.RenderLayers` | — | — | all |
+| commands.js | Canonical validate-then-apply transactions incl. ShopBuy/ShopSell | `TC.Commands.submit` | — | emits per command | commands (future home) |
+| savecore.js | Versioned envelope {formatVersion:2}, providers, atomic tmp→bak→swap, migrations | `TC.SaveCore` | owns envelope | — | progression (autosave) |
+| save.js | Facade: v2 envelope via SaveCore; legacy v1 blob fallback load; export/import; autosave timer | `TC.Save` | 'world.core'/'character.core' | — | progression |
+| worldgen.js | Deterministic named passes v3 (terrain→…→validation), CONFIG flags | `TC.WorldGen.generate` | — | — | load-time |
+| world.js | Tile+wall layers, chunk canvases, damage maps, support-pop, liquid import hook | `TC.World` | diffs via save.js | ▸ TileChanged | liquidsWiring |
+| tiles.js | Tile/wall/crack rendering, shapes (platform/half/slope), hammer variants | `TC.Tiles` | shapes via world | — | render |
+| liquids.js | THE runtime liquid authority: type+amount arrays, settling, buckets, water×lava | `TC.Liquids` | 'world.core.liquids' | ▸ LiquidChanged/InventoryChanged | liquidsWiring |
+| lighting.js | Flood-fill light + multiply overlay, dynamic lights pool | `TC.Lighting` | — | ◂ TileChanged | progression |
+| sky.js | Day/night clock, celestial draw, daylight() | `TC.Sky` | time via save.js | ▸ DayChanged | environment |
+| biomes.js | Player-centered biome detection w/ hysteresis, tints, spawn override, music tag | `TC.Biomes` | — | ▸ (discovery via Progression) | environment |
+| input.js | Keyboard/mouse state, uiHover, barrier, cursor draw | `TC.Input` | — | — | input |
+| audio.js / music.js | SFX synthesis / generative mood score | `TC.Audio`, `TC.Music` | — | — | environment (music) |
+| particles.js | Particle pool + float text | `TC.Particles` | — | — | render |
+| items.js | Inventory (50 slots), drops+magnet, icons, Chests containers | `TC.Inventory`, `TC.Items`, `TC.Chests` | chests via 'world.core' | ▸ InventoryChanged | items |
+| economy.js | Canonical copper currency; pay/give/drop/format | `TC.Economy` | purse via player | ▸ InventoryChanged | — |
+| player.js | Movement/physics, item use switch, armor equip, summons, intake, breath/lava/fall | `TC.Player` | 'character.core' | ◂ many | movement/physics |
+| accessories.js | 5 accessory slots + prefixes; TC.Buffs timed statuses; potions | `TC.Accessories`, `TC.Buffs` | 'character.core.accessories' | ▸ BuffApplied/BuffExpired | combat (tick) |
+| stats.js | Contributor-based stat resolver (armor/accessories/buffs/crystals), explain() | `TC.Stats` | — | ◂ stat-invalidating events | — |
+| magic.js | Mana pool, regen stars, potion sickness, magic weapons | `TC.Magic` | 'character.core.magic' | — | combat |
+| fishing.js | Rods+bait→power, bite windows, zone loot, crates, quests | `TC.Fishing` | 'systems.core.fishing' | — | ai |
+| enemydefs.js | Enemy/item/recipe content extensions (pure data) | mutates ENEMY_DEFS/ITEM_DEFS/RECIPES at load | — | — | load-time |
+| enemyai.js | Reusable AI archetypes (slime/zombie/eye/bat/walker/harpy/stationary/teleporter + boss AIs) | `TC.EnemyAI` | — | — | ai |
+| enemyspawn.js | Spawn director, zone tables, Blood Moon lifecycle, findSpot | `TC.EnemySpawn` | — | — | ai |
+| enemies.js | Entity lifecycle: makeEnemy/update/contact, damage/death (events), spawnBoss, rendering | `TC.Enemies` | — | ▸ EntityDamaged/EntityKilled/BossDefeated ◂ WorldLoaded | ai |
+| npcs.js | NPC kinds, housing validator/claiming, dialog pools, unlock eval, shops | `TC.NPCs` | 'world.core.npcs' | ▸ NpcMovedIn/Entity* | ai |
+| projectiles.js | Pooled typed projectiles (arrow/bolt/yoyo/boomerang/grenade/star/dart), explosions, lights | `TC.Projectiles` | — | ▸ ProjectileSpawned | projectiles |
+| grapple.js | Hook flight/latch/retract state machine | `TC.Grapple` | — | — | movement/pre+post |
+| combat.js | CANONICAL hit resolution (`resolveHit`) + melee arcs, arrows facade, player intake policy | `TC.Combat` | — | — | combat |
+| lootables.js | Canonical loot-table roll/validate (chance/min-max/coins/conditions) | `TC.LootTables` | — | — | — |
+| loot.js | Pot tiles, life crystals, chest population deterministic post-pass | `TC.Loot` | 'character.core.loot' | ◂ TileBroken | ai |
+| crafting.js | Station detection/tags, recipe index, transactional craft | `TC.Crafting` | — | ▸ CraftCompleted | — |
+| gear.js | Yoyo/boomerang/grenade/falling-star held-item behaviors | `TC.Gear` | — | — | combat/render |
+| minimap.js | Toggleable downscaled map | `TC.MiniMap` | — | — | environment |
+| ui.js | Title/HUD/inventory/chest/shop/dialog/pause/death, toasts, boss bar | `TC.UI` | — | ◂ WorldProgressChanged etc. | input |
+| wiring.js | Wire tiles, mechanisms, BFS pulses, actuators, trap darts | `TC.Wiring` | 'systems.core.wiring' | ▸ WirePulse ◂ TileChanged | liquidsWiring |
+| debug.js | Timings/counters/F3 overlay, `#test` hooks only | `TC.Debug` | — | — | — |
+| progression.js | World flag store + declarative condition evaluator (`test`) + spawn multiplier | `TC.Progression` | 'systems.core.progression' | ▸ WorldProgressChanged ◂ BossDefeated | — |
+
+### Known fallback/legacy paths (deliberate)
+
+- `save.js` loads legacy `tc_save_v1` blobs and bridges them into providers
+  (`restoreLegacy` on accessories/fishing/magic); v2 envelope is canonical.
+- `combat.js` keeps a legacy arrow fallback used only when `TC.Projectiles` is absent;
+  the pooled system is canonical.
+- WATER/LAVA tile ids exist only as worldgen/save representation, imported once into
+  `TC.Liquids` by `main.buildWorld`.
+- `debug.js __TEST__` exists exclusively under `location.hash === '#test'`.
+
+### Remaining architectural debt (tracked)
+
+See `docs/TASK_BOARD.md` status column. Highlights: Wall of Flesh fight remains a
+stub-quality frontier boss; localization layer absent (English strings inline);
+render layers registered but main.js still draws via direct calls; command phase not
+yet wired into the live step loop for player actions.

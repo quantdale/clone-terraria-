@@ -2,8 +2,15 @@
 
 **Repository:** `quantdale/clone-terraria-`  
 **Audit date:** 2026-08-21  
-**Scope:** documentation and implementation planning only  
+**Scope:** documentation and planning (the implementation waves it planned have since landed)  
 **Target:** substantially improve mechanical depth, presentation, cohesion, reliability, and extensibility while keeping original code/assets and avoiding a literal copyrighted-content clone.
+
+> **W11 truth-sync:** the audit documents below describe the pre-campaign prototype.
+> The architecture waves they proposed (registry/events/commands/SaveCore/stats,
+> canonical projectiles and liquids, tile shapes/grapple/economy/shops/housing) are
+> implemented. For the current state read `docs/ARCHITECTURE.md` (§19 capability
+> matrix) and `docs/TASK_BOARD.md` (status snapshot); treat stale claims in these
+> parity files as historical analysis, not as the contract.
 
 ## Executive conclusion
 
