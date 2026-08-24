@@ -298,6 +298,33 @@
     catch (e) { return null; }
   }
 
+  // ---- W20 localization hooks (#test only) ----
+  // Narrow surface for journeys: read state, switch locale through the same
+  // public setLocale players would exercise, translate a key, pull stats.
+  // No access to catalog internals.
+  function getLocale() {
+    try { return (TC.Localization && typeof TC.Localization.getLocale === 'function') ? TC.Localization.getLocale() : null; }
+    catch (e) { return null; }
+  }
+  function setLocale(locale) {
+    try {
+      if (!(TC.Localization && typeof TC.Localization.setLocale === 'function')) return false;
+      return !!TC.Localization.setLocale(locale);
+    } catch (e) { warnOnce('setLocale: ' + e); return false; }
+  }
+  function translate(key, vars) {
+    try { return (TC.Localization && typeof TC.Localization.t === 'function') ? TC.Localization.t(key, vars) : null; }
+    catch (e) { return null; }
+  }
+  function getLocalizationStats() {
+    try { return (TC.Localization && typeof TC.Localization.stats === 'function') ? TC.Localization.stats() : null; }
+    catch (e) { return null; }
+  }
+  function getMissingKeys() {
+    try { return (TC.Localization && typeof TC.Localization.missing === 'function') ? TC.Localization.missing() : null; }
+    catch (e) { return null; }
+  }
+
   if (testMode()) {
     // loadFixture deliberately absent — no fixture system exists yet; harnesses
     // must feature-detect ('loadFixture' in window.__TEST__ === false).
@@ -310,7 +337,12 @@
       saveNow: saveNow,
       getWofEncounter: getWofEncounter,
       setWofHp: setWofHp,
-      getRuntimeState: getRuntimeState
+      getRuntimeState: getRuntimeState,
+      getLocale: getLocale,
+      setLocale: setLocale,
+      translate: translate,
+      getLocalizationStats: getLocalizationStats,
+      getMissingKeys: getMissingKeys
     };
   }
 

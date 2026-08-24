@@ -363,8 +363,9 @@
         updateDocumentLocale();
         emitLocaleChanged(prev, saved);
       } else if (saved != null && !isRegistered(saved)) {
-        warnOnce('stored locale "' + saved + '" is not registered; keeping ' + FALLBACK);
-        try { if (TC.Settings) TC.Settings.set('locale', FALLBACK); } catch (e) {}
+        // Session falls back safely, but the STORED choice is preserved:
+        // a locale arriving later (install/refresh) must still win.
+        warnOnce('stored locale "' + saved + '" is not registered; using ' + FALLBACK);
       }
     }
     updateDocumentLocale();
@@ -394,6 +395,12 @@
       if (loc === FALLBACK) continue;
       const cat = catalogs[loc];
       if (meta[loc] && meta[loc].pseudo) continue; // derived, not compared
+      // structural checks apply to every real locale, not just the fallback
+      for (const key in cat) {
+        const v2 = cat[key];
+        if (v2 == null || typeof v2 !== 'object') continue;
+        if (!v2.other) errors.push('plural entry "' + key + '" in "' + loc + '" lacks the required "other" form');
+      }
       for (const key in cat) {
         const v = cat[key];
         if (v == null) continue;
@@ -476,4 +483,14 @@
     restore: restore,
     isRegistered: isRegistered,
   };
+
+  // Dev/test harness: the synthetic stress locale joins the registry ONLY
+  // when the page boots with '#test' (same restricted gate as window.__TEST__).
+  // Normal players can never select it.
+  try {
+    if (typeof window.location !== 'undefined' &&
+        window.location.hash === '#test') {
+      registerPseudoLocale('en-XA');
+    }
+  } catch (e) { /* headless contexts without location stay clean */ }
 })();
