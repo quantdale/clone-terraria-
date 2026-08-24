@@ -93,9 +93,16 @@
       unlocks: null,
       home: { spanTiles: DEFAULT_SPAN_TILES },
       shop: null,
-      // W15: progression-aware hints — first entry whose `requires` passes
+      // W15/W17: progression-aware hints — first entry whose `requires` passes
       // wins over the base cycle, so advice follows the player's milestones.
       dialogFlags: [
+        {
+          requires: 'boss.wall_of_flesh.defeated',
+          lines: [
+            'You have torn the Wall itself. Infernal Cores at the anvil become a Hellforged Blade and Infernal Greaves.',
+            'The Underworld no longer holds you back. Ember Wraiths now stir where the Wall once stood.'
+          ]
+        },
         {
           requires: { boss: 'moss_mother' },
           lines: [
@@ -189,7 +196,12 @@
         // W15 slice: post-Storm-Jelly purchase with the shared condition
         // grammar - an alternative to hand-forging the hook.
         { itemId: 'hook_gemshot', price: 400,
-          requires: { boss: 'storm_jelly' } }
+          requires: { boss: 'storm_jelly' } },
+        // W17 frontier gateway: post-Wall stock proves the boss matters
+        { itemId: 'infernal_core', price: 180,
+          requires: 'boss.wall_of_flesh.defeated' },
+        { itemId: 'infernal_hook', price: 650,
+          requires: 'boss.wall_of_flesh.defeated' }
       ],
       look: { hair: '#5a4632', robe: '#8a5a2b', robeTrim: '#6a441f', sleeve: '#7a4e24' }
     }

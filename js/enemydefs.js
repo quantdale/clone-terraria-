@@ -175,15 +175,27 @@
       },
       hungry: {
         name: "Hungry",
-        hp: 36,
-        dmg: 22,
-        kbResist: 0.2,
-        ai: "eye",
+        hp: 48,
+        dmg: 24,
+        kbResist: 0.35,
+        ai: "hungry",
         w: 22,
         h: 22,
         color: "#b04a4a",
         drops: [],
-      }, // Wall of Flesh servant
+      }, // Wall of Flesh servant — dedicated tethered archetype (W17)
+      ember_wraith: {
+        name: "Ember Wraith",
+        hp: 88,
+        dmg: 26,
+        kbResist: 0.4,
+        ai: "teleporter",
+        w: 26,
+        h: 26,
+        color: "#d85a2a",
+        drops: [{ id: "shadow_shard", min: 1, max: 1, chance: 0.4 }],
+        coins: [35, 70],
+      },
 
       // ---- wave 6-7 regulars ----
       dune_stalker: {
@@ -352,7 +364,7 @@
       },
       wof: {
         name: "Wall of Flesh",
-        hp: 2400,
+        hp: 3200,
         dmg: 34,
         kbResist: 1,
         ai: "wof",
@@ -362,10 +374,11 @@
         boss: true,
         defense: 12,
         drops: [
-          { id: "blood_shard", min: 15, max: 25, chance: 1 },
+          { id: "blood_shard", min: 12, max: 20, chance: 1 },
           { id: "gold_bar", min: 8, max: 12, chance: 1 },
+          { id: "infernal_core", min: 6, max: 10, chance: 1 },
         ],
-        coins: [1200, 2400],
+        coins: [1400, 2600],
       },
 
       // ---- wave 6-7 bosses ----
@@ -423,29 +436,37 @@
       blood_shard: I_MAT("Blood Shard", {}),
       shadow_shard: I_MAT("Shadow Shard", {}),
       granite_shard: I_MAT("Granite Shard", {}),
+      infernal_core: I_MAT("Infernal Core", { value: 80 }),
+      hellforged_blade: { name: "Hellforged Blade", kind: "weapon", maxStack: 1, damage: 38, knockback: 6, useTime: 0.24, value: 900 },
+      infernal_greaves: { name: "Infernal Greaves", kind: "armor", maxStack: 1, slot: "feet", defense: 4, value: 600 },
+      infernal_hook: { name: "Infernal Hook", kind: "grapple", maxStack: 1, grapple: { range: 480, pull: 720, speed: 960 }, value: 500 },
       slime_crown: {
         name: "Slime Crown",
         kind: "summon",
         maxStack: 20,
         boss: "king_slime",
+        summon: { time: "night", biome: null, requires: null, placement: null },
       },
       skull_sigil: {
         name: "Skull Sigil",
         kind: "summon",
         maxStack: 20,
         boss: "skeletron",
+        summon: { time: "night", biome: null, requires: null, placement: null },
       },
       flesh_sigil: {
         name: "Flesh Sigil",
         kind: "summon",
         maxStack: 20,
         boss: "wof",
+        summon: { time: "any", biome: "underworld", requires: null, placement: "underworld_wall" },
       },
       blood_sigil: {
         name: "Blood Sigil",
         kind: "summon",
         maxStack: 20,
         boss: "__blood_moon__",
+        summon: { time: "night", biome: null, requires: null, placement: null },
       },
       // NOTE: storm_bell / moss_heart summons are lead-owned in constants.js
       // (already wired to boss ids 'storm_jelly' / 'moss_mother' with their
@@ -456,6 +477,18 @@
 
   function I_MAT(name, o) {
     return Object.assign({ name, kind: "material", maxStack: 999 }, o);
+  }
+
+  // Retrofit lead-owned summon items with explicit declarative requirements
+  // (W17): they were historically night-only with no biome gate.
+  if (TC.ITEM_DEFS) {
+    const patchSummon = (id, summon) => {
+      const d = TC.ITEM_DEFS[id];
+      if (d && !d.summon) d.summon = summon;
+    };
+    patchSummon('void_charm', { time: 'night', biome: null, requires: null, placement: null });
+    patchSummon('storm_bell', { time: 'night', biome: null, requires: null, placement: null });
+    patchSummon('moss_heart', { time: 'night', biome: null, requires: null, placement: null });
   }
 
   // -- crafting recipes for the summon items (appended to lead-owned table) --
@@ -485,6 +518,46 @@
         station: "workbench",
         cost: { blood_shard: 5 },
       },
+      // Post-Wall progression package (W17): gated behind boss.wall_of_flesh.defeated
+      {
+        out: "hellforged_blade",
+        n: 1,
+        station: "anvil",
+        requires: "boss.wall_of_flesh.defeated",
+        cost: { infernal_core: 6, gold_bar: 8, crystal: 4 },
+      },
+      {
+        out: "infernal_greaves",
+        n: 1,
+        station: "anvil",
+        requires: "boss.wall_of_flesh.defeated",
+        cost: { infernal_core: 5, silver_bar: 6 },
+      },
+      {
+        out: "infernal_hook",
+        n: 1,
+        station: "anvil",
+        requires: "boss.wall_of_flesh.defeated",
+        cost: { infernal_core: 4, iron_bar: 8, shadow_shard: 4 },
+      }
     );
+  }
+
+  // W17 frontier gateway: environmental/event capability unlocked on first Wall defeat.
+  // The boss flag itself is handled by TC.Progression's BossDefeated listener;
+  // this companion flag marks the frontier as breached for future systems.
+  if (TC.Systems && typeof TC.Systems.boot === 'function') {
+    TC.Systems.boot('core.wof-gateway', {
+      init: function() {
+        if (TC.Events && typeof TC.Events.on === 'function' && TC.Events.EVENT && TC.Events.EVENT.BossDefeated) {
+          TC.Events.on(TC.Events.EVENT.BossDefeated, function(payload) {
+            if (payload && payload.type === 'wof') {
+              try { if (TC.Progression && typeof TC.Progression.set === 'function') TC.Progression.set('world.infernal_gateway.opened'); } catch (e) {}
+              try { if (TC.Progression && typeof TC.Progression.set === 'function') TC.Progression.set('event.underworld_frontier.completed'); } catch (e) {}
+            }
+          });
+        }
+      }
+    });
   }
 })();
