@@ -134,9 +134,22 @@
     }
     return 'forest';
   }
-  function capBiome(s) {
-    if (!s) return '';
-    return s.charAt(0).toUpperCase() + s.slice(1);
+  // Localized player-facing summon feedback (W20): templates live in the
+  // catalog; {charm} resolves to the item's display name, {biome} to the
+  // biome's. Falls back to frozen English when Localization is absent.
+  function summonMsg(key, vars, fallback) {
+    if (TC.Localization && typeof TC.Localization.t === 'function') {
+      try { return TC.Localization.t(key, vars); } catch (e) {}
+    }
+    let out = fallback;
+    for (const k in (vars || {})) out = out.split('{' + k + '}').join(String(vars[k]));
+    return out;
+  }
+  function contentNameOf(kind, ref) {
+    if (TC.Localization && typeof TC.Localization.contentName === 'function') {
+      try { return TC.Localization.contentName(kind, ref); } catch (e) {}
+    }
+    return String(ref == null ? '' : ref);
   }
   function computeWofPlacement(player) {
     const w = TC.world;
@@ -1411,7 +1424,8 @@
       const cx = this.x + this.w / 2;
       const dl =
         TC.Sky && typeof TC.Sky.daylight === "function" ? TC.Sky.daylight() : 1;
-      const nm = def.name || "charm";
+      const req = summonReqOf(def);
+      const charm = contentNameOf('item', itemId);
       const reject = (msg) => {
         pText(
           cx,
@@ -1429,22 +1443,23 @@
           id: ++this.swingSeq,
         };
       };
-      const req = summonReqOf(def);
       if (req.time === 'night' && dl >= 0.5) {
-        reject("The " + nm + " only stirs at night...");
+        reject(summonMsg('feedback.summon.night', { charm: charm }, 'The {charm} only stirs at night...'));
         return;
       }
       if (req.time === 'day' && dl < 0.5) {
-        reject("The " + nm + " only stirs by day...");
+        reject(summonMsg('feedback.summon.day', { charm: charm }, 'The {charm} only stirs by day...'));
         return;
       }
       if (req.biome) {
         const cur = currentBiomeTag();
         if (cur !== req.biome) {
           if (req.biome === 'underworld') {
-            reject("The " + nm + " only stirs in the Underworld...");
+            reject(summonMsg('feedback.summon.underworld', { charm: charm }, 'The {charm} only stirs in the Underworld...'));
           } else {
-            reject("The " + nm + " only stirs in the " + capBiome(req.biome) + "...");
+            reject(summonMsg('feedback.summon.biome',
+              { charm: charm, biome: contentNameOf('biome', req.biome) },
+              'The {charm} only stirs in the {biome}...'));
           }
           return;
         }
@@ -1453,7 +1468,7 @@
         let ok = false;
         try { ok = !!TC.Progression.test(req.requires); } catch (e) {}
         if (!ok) {
-          reject("The " + nm + " lies silent... its moment has not come.");
+          reject(summonMsg('feedback.summon.progression', { charm: charm }, 'The {charm} lies silent... its moment has not come.'));
           return;
         }
       }
@@ -1463,7 +1478,7 @@
       if (req.placement === 'underworld_wall' || def.boss === 'wof') {
         const plc = computeWofPlacement(this);
         if (!plc) {
-          reject("The " + nm + " cannot find a stable wall...");
+          reject(summonMsg('feedback.summon.wall', { charm: charm }, 'The {charm} cannot find a stable wall...'));
           return;
         }
         bx2 = plc.x; by2 = plc.y; spawnOpts = { dir: plc.dir, band: plc.band };
@@ -1479,14 +1494,14 @@
         spawned = TC.Enemies.spawnBoss(def.boss, bx2, by2, spawnOpts);
       } catch (e) {}
       if (!spawned && !isEventStart) {
-        reject("A boss already stalks this world...");
+        reject(summonMsg('feedback.summon.boss_active', {}, 'A boss already stalks this world...'));
         return;
       }
       // Event start (__blood_moon__) with null return is still success when the
       // event actually began: verify the event flag flipped to avoid consuming
       // on a no-op duplicate call.
       if (isEventStart && TC.EnemySpawn && typeof TC.EnemySpawn.isBloodMoon === "function") {
-        try { if (!TC.EnemySpawn.isBloodMoon()) { reject("The Blood Moon already rises..."); return; } } catch (e) {}
+        try { if (!TC.EnemySpawn.isBloodMoon()) { reject(summonMsg('feedback.summon.blood_moon_active', {}, 'The Blood Moon already rises...')); return; } } catch (e) {}
       }
       if (!consumeFromSlot(this.inventory, this.hotbarIndex, itemId, 1)) return;
       sfx("die");

@@ -343,10 +343,13 @@ test('npcs: shop purchase with no currency degrades gracefully (no crash)', () =
   const inv = TC.player.inventory;
 
   // A merchant stands next to the player and talks -> shop rows appear.
+  // W20 dialog contract: showDialog(npcType, lineKey) — STABLE type identity
+  // plus a catalog key, never the localized display name.
   const p = TC.player;
   const m = TC.NPCs.spawn('merchant', p.x + 24, p.y);
   assert.ok(m, 'merchant spawn failed');
-  assert.doesNotThrow(() => TC.UI.showDialog('Merchant', 'Fine wares here.'));
+  const lineKey = 'npc.core.merchant.dialogue.base_01';
+  assert.doesNotThrow(() => TC.UI.showDialog('merchant', lineKey));
 
   const ctxStub = TC.canvas.getContext('2d');
   const mouse = TC.Input.mouse;
@@ -358,7 +361,7 @@ test('npcs: shop purchase with no currency degrades gracefully (no crash)', () =
   outer:
   for (let y = 400; y <= 660; y += 12) {
     for (let x = 420; x <= 860; x += 20) {
-      TC.UI.showDialog('Merchant', 'Fine wares here.');
+      TC.UI.showDialog('merchant', lineKey);
       mouse.x = x; mouse.y = y;
       mouse.clicked = true; mouse.rightClicked = false;
       assert.doesNotThrow(() => TC.UI.draw(ctxStub, 1280, 720),

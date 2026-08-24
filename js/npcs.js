@@ -52,42 +52,45 @@
   // shop: [{itemId, price}] exposed for the lead's shop panel.
   const NPC_KINDS = {
     guide: {
-      type: 'guide', nameKey: 'npc.guide', name: 'Guide',
+      // W20 LOC-003: display strings live in js/locales/en.js under these
+      // keys; pools below hold CATALOG KEYS so deterministic cycling picks
+      // the same line index in every locale.
+      type: 'guide', nameKey: 'npc.core.guide.name', name: 'Guide',
       hp: BASE_HP,
       dialogLines: [
-        'Progression: craft a Workbench from wood, then a Furnace, then an Anvil from iron bars.',
-        'Torches need Gel - slimes drop it. One wood plus one gel crafts 3 torches.',
-        'Armor reduces damage you take. Forge a Copper set at the Anvil and equip it.',
-        'The Void Charm summons the Eye of the Void - use it only at night.',
-        'Chests hold 20 stacks. Right-click to open one; mine it to spill the contents.',
-        'Background walls need a pickaxe - aim at open tiles to pry them off.',
-        'Press N to toggle the minimap.',
-        'Press M to mute or unmute the sound.'
+        'npc.core.guide.dialogue.base_01',
+        'npc.core.guide.dialogue.base_02',
+        'npc.core.guide.dialogue.base_03',
+        'npc.core.guide.dialogue.base_04',
+        'npc.core.guide.dialogue.base_05',
+        'npc.core.guide.dialogue.base_06',
+        'npc.core.guide.dialogue.base_07',
+        'npc.core.guide.dialogue.base_08',
       ],
       dialogNight: [
-        'Grappling hooks and buckets, friend: the hook carries you over pits, the bucket carries water and lava away.',
-        'Nights run long. Seal the door, keep a torch lit, and craft something useful while you wait.',
-        'The dark bites hardest after sundown. A closed door beats a hero\'s luck.'
+        'npc.core.guide.dialogue.night_01',
+        'npc.core.guide.dialogue.night_02',
+        'npc.core.guide.dialogue.night_03',
       ],
       dialogBiome: {
         snow: [
-          'Snow packs hard underfoot and the caves below freeze solid. Carry spare torches.',
-          'Ice over water holds right up until it does not. Rope and a bucket, always.'
+          'npc.core.guide.dialogue.biome_snow_01',
+          'npc.core.guide.dialogue.biome_snow_02',
         ],
         desert: [
-          'Sand pours like water when you dig it. Shore the walls or swim in dunes.'
+          'npc.core.guide.dialogue.biome_desert_01',
         ],
         jungle: [
-          'The canopy eats torchlight here. Mark your trail with rope or torches.'
+          'npc.core.guide.dialogue.biome_jungle_01',
         ],
         corruption: [
-          'This purple rot spreads after dark. Do not build your house on cursed ground.'
+          'npc.core.guide.dialogue.biome_corruption_01',
         ],
         underworld: [
-          'It only gets hotter below this line. A full bucket outvalues any sword down there.'
+          'npc.core.guide.dialogue.biome_underworld_01',
         ],
         cave: [
-          'Listen for drips when you dig - moving water means ore nearby, or trouble ahead.'
+          'npc.core.guide.dialogue.biome_cave_01',
         ]
       },
       unlocks: null,
@@ -99,64 +102,64 @@
         {
           requires: 'boss.wall_of_flesh.defeated',
           lines: [
-            'You have torn the Wall itself. Infernal Cores at the anvil become a Hellforged Blade and Infernal Greaves.',
-            'The Underworld no longer holds you back. Ember Wraiths now stir where the Wall once stood.'
+            'npc.core.guide.dialogue.flag_01_01',
+            'npc.core.guide.dialogue.flag_01_02'
           ]
         },
         {
           requires: { boss: 'moss_mother' },
           lines: [
-            'A Verdant Core still hums in your bag. A workbench weaves it into a fine cloak.',
-            'You have felled storm and spore both. The deep caves hold gleam for a blade to outlast them.'
+            'npc.core.guide.dialogue.flag_02_01',
+            'npc.core.guide.dialogue.flag_02_02'
           ]
         },
         {
           requires: { boss: 'storm_jelly' },
           lines: [
-            'Storm Cores ring like bells. An anvil and silver forge them into a Storm Blade.',
-            'With the skies settled, the Merchant now stocks a Gemshot Hook - reach without ropes.'
+            'npc.core.guide.dialogue.flag_03_01',
+            'npc.core.guide.dialogue.flag_03_02'
           ]
         },
         {
           requires: { all: [{ biome: 'snow' }, { biome: 'desert' }] },
           lines: [
-            'Frost and dune both bow to a silver pick. Smelt what you mine.'
+            'npc.core.guide.dialogue.flag_04_01'
           ]
         }
       ],
       look: { hair: '#b9bdc9', robe: '#3f8f46', robeTrim: '#2e6e35', sleeve: '#357a3c' }
     },
     merchant: {
-      type: 'merchant', nameKey: 'npc.merchant', name: 'Merchant',
+      type: 'merchant', nameKey: 'npc.core.merchant.name', name: 'Merchant',
       hp: BASE_HP,
       dialogLines: [
-        'Bars, torches, arrows - everything a delver needs, at honest prices.',
-        'Give me a house with a door, a light and a flat floor and I will stay.',
-        'Smelt your ore. Bars are worth more than rocks, always.',
-        'Surplus gear weighing you down? Right-click a bag slot while browsing my stock to sell it for coins.'
+        'npc.core.merchant.dialogue.base_01',
+        'npc.core.merchant.dialogue.base_02',
+        'npc.core.merchant.dialogue.base_03',
+        'npc.core.merchant.dialogue.base_04',
       ],
       dialogNight: [
-        'My stall stays lit after dark - honest coin spends exactly the same by moonlight.',
-        'Lamp-lit stalls draw fewer slimes. Trust me, I have counted.'
+        'npc.core.merchant.dialogue.night_01',
+        'npc.core.merchant.dialogue.night_02',
       ],
       dialogBiome: {
         snow: [
-          'Cold thickens the oil in my scales. Warm customers get warm prices.'
+          'npc.core.merchant.dialogue.biome_snow_01',
         ],
         desert: [
-          'Sand gets into everything, even the coin purse. Rare goods turn up near dunes, though.'
+          'npc.core.merchant.dialogue.biome_desert_01',
         ],
         jungle: [
-          'Jungle fruit ferments on the vine. I move it by the barrelful, quietly.'
+          'npc.core.merchant.dialogue.biome_jungle_01',
         ],
         corruption: [
-          'No stall stays open long in the rot. Buy what you need and keep moving.'
+          'npc.core.merchant.dialogue.biome_corruption_01',
         ],
         underworld: [
-          'Everything burns down there except a fair bargain. Fireproof your pockets first.'
+          'npc.core.merchant.dialogue.biome_underworld_01',
         ],
         cave: [
-          'Underground I sell rope, torches, and honest directions back to daylight.'
+          'npc.core.merchant.dialogue.biome_cave_01',
         ]
       },
       unlocks: function () {          // moves in once the player owns any metal bar
@@ -334,6 +337,19 @@
     spawn('guide', num(px) != null ? px : 0, num(py) != null ? py : 0);
   }
 
+  // Localized display name for an NPC kind (W20): presentation resolves
+  // through TC.Localization; def.name stays frozen English identity text.
+  function displayName(type) {
+    if (TC.Localization && typeof TC.Localization.contentName === 'function') {
+      try {
+        const ln = TC.Localization.contentName('npc', type);
+        if (ln && ln.charAt(0) !== '[') return ln;
+      } catch (e) {}
+    }
+    const def = NPC_KINDS[type];
+    return (def && def.name) || String(type);
+  }
+
   // ---- unlock evaluation ------------------------------------------------
 
   function unlocked(def) {
@@ -393,6 +409,7 @@
       const spot = homeSpot(def);
       if (spawn(type, spot.x, spot.y)) {
         movedIn.push(type);
+        // `name` kept for legacy listeners; localized rendering uses `type`.
         emitSafe('NpcMovedIn', { type: type, name: def.name || type });
       }
     });
@@ -579,9 +596,9 @@
     const mx = inp.mouse.x, my = inp.mouse.y;
     if (mx < sx || mx > sx + n.w * z || my < sy || my > sy + n.h * z) return;
     n.dialogTimer = DIALOG_CD;
-    const line = dialogLineFor(n);
+    const line = dialogLineFor(n);   // a catalog KEY; ui.js resolves text
     if (TC.UI && typeof TC.UI.showDialog === 'function') {
-      try { TC.UI.showDialog(n.name, line); } catch (e) {}
+      try { TC.UI.showDialog(n.type, line); } catch (e) {}
     }
   }
 
@@ -683,10 +700,11 @@
     c.font = '8px monospace';
     c.textAlign = 'center';
     const tx = n.x + n.w / 2, ty = n.y - 5;
+    const nm = displayName(n.type);
     c.fillStyle = 'rgba(0,0,0,0.55)';
-    c.fillText(n.name, tx + 1, ty + 1);
+    c.fillText(nm, tx + 1, ty + 1);
     c.fillStyle = '#e8e2d0';
-    c.fillText(n.name, tx, ty);
+    c.fillText(nm, tx, ty);
     c.restore();
   }
 
@@ -1079,7 +1097,7 @@
       return out.length ? out : null;
     },
     spawnGuide, spawn, evaluateUnlocks, validateHome, damage,
-    claimHouse, houseOf, dialogLineFor,
+    claimHouse, houseOf, dialogLineFor, displayName,
     update, draw, clear, serialize, load
   };
 })();

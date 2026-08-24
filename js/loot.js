@@ -197,6 +197,15 @@
       try { TC.Particles.floatText(x, y, str, color); } catch (e) {}
     }
   }
+  // Localized player feedback (W20).
+  function fmsg(key, vars, fallback) {
+    if (TC.Localization && typeof TC.Localization.t === 'function') {
+      try { return TC.Localization.t(key, vars || {}); } catch (e) {}
+    }
+    let out = fallback;
+    for (const k in (vars || {})) out = out.split('{' + k + '}').join(String(vars[k]));
+    return out;
+  }
   function spawnDrop(x, y, id, count) {
     if (TC.Items && typeof TC.Items.spawnDrop === 'function') {
       try { TC.Items.spawnDrop(x, y, id, count, true); } catch (e) {}
@@ -258,7 +267,7 @@
         bow: false, id: p.swingSeq };
     };
     if (((TC.CONST && TC.CONST.PLAYER_HP) || 100) + crystalBonus(p) >= CRYSTAL_MAX_HP) {
-      floatText(cx, p.y - 6, 'Health is maxed!', healCol);
+      floatText(cx, p.y - 6, fmsg('feedback.loot.hp_maxed', null, 'Health is maxed!'), healCol);
       swing();
       p._crystalCd = CRYSTAL_CD;
       return;                                    // nothing consumed at the cap
@@ -271,7 +280,7 @@
     p.hp = Math.min(p.maxHp, p.hp + CRYSTAL_STEP);
     sfx('pickup');
     pBurst(cx, p.y + p.h / 2, 10, ['#e23b48', '#ff8a94', '#ffffff'], 90);
-    floatText(cx, p.y - 6, '+' + CRYSTAL_STEP + ' max HP', healCol);
+    floatText(cx, p.y - 6, fmsg('feedback.loot.hp_up', { n: CRYSTAL_STEP }, '+{n} max HP'), healCol);
     swing();
     emit(TC.Events.EVENT.WorldProgressChanged,
       { kind: 'lifeCrystal', lifeCrystals: p.lifeCrystals, maxHp: p.maxHp });

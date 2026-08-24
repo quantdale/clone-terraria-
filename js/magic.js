@@ -90,6 +90,15 @@
       try { TC.Particles.floatText(x, y, text, color); } catch (e) {}
     }
   }
+  // Localized player feedback (W20): key + named vars, English fallback.
+  function fmsg(key, vars, fallback) {
+    if (TC.Localization && typeof TC.Localization.t === 'function') {
+      try { return TC.Localization.t(key, vars || {}); } catch (e) {}
+    }
+    let out = fallback;
+    for (const k in (vars || {})) out = out.split('{' + k + '}').join(String(vars[k]));
+    return out;
+  }
   function pSpawn(opts) {
     if (TC.Particles && typeof TC.Particles.spawn === 'function') {
       try { return TC.Particles.spawn(opts); } catch (e) { return null; }
@@ -470,7 +479,7 @@
     const ang = Math.atan2(m.worldY - cy, m.worldX - cx);
     if (!spendMana(p, def.mana || 0)) {
       if (noManaMsgT <= 0) {
-        pText(cx, p.y - 6, 'Not enough mana!', '#6ab0ff');
+        pText(cx, p.y - 6, fmsg('feedback.magic.no_mana', null, 'Not enough mana!'), '#6ab0ff');
         noManaMsgT = 0.9;
       }
       return;
@@ -491,7 +500,7 @@
   function drinkPotion(p, sel, def) {
     if (p.potionSickness > 0) {
       if (noManaMsgT <= 0) {
-        pText(p.x + p.w / 2, p.y - 6, 'Potion sickness!', '#b07ae8');
+        pText(p.x + p.w / 2, p.y - 6, fmsg('feedback.magic.potion_sickness', null, 'Potion sickness!'), '#b07ae8');
         noManaMsgT = 0.9;
       }
       return;
@@ -500,7 +509,7 @@
     if (!(got > 0)) return;            // already full: nothing consumed
     consumeOne(p.inventory, sel.id);
     p.potionSickness = POTION_SICKNESS;
-    pText(p.x + p.w / 2, p.y - 6, '+' + got + ' mana', '#6ab0ff');
+    pText(p.x + p.w / 2, p.y - 6, fmsg('feedback.magic.mana_gained', { n: got }, '+{n} mana'), '#6ab0ff');
     pBurst(p.x + p.w / 2, p.y + p.h / 2, 6, ['#3a78e0', '#6aa8ff'], 80, 120);
     sfx('pickup');
   }
@@ -508,7 +517,7 @@
   function useCrystal(p, sel) {
     if (p.maxMana >= MANA_CAP) {
       if (noManaMsgT <= 0) {
-        pText(p.x + p.w / 2, p.y - 6, 'Mana is at its limit', '#7dc4ff');
+        pText(p.x + p.w / 2, p.y - 6, fmsg('feedback.magic.mana_max', null, 'Mana is at its limit'), '#7dc4ff');
         noManaMsgT = 0.9;
       }
       return;
@@ -516,7 +525,7 @@
     if (!consumeOne(p.inventory, sel.id)) return;
     p.maxMana = Math.min(MANA_CAP, p.maxMana + CRYSTAL_GAIN);
     p.mana = Math.min(p.maxMana, p.mana + CRYSTAL_GAIN);
-    pText(p.x + p.w / 2, p.y - 6, '+' + CRYSTAL_GAIN + ' max mana', '#7dc4ff');
+    pText(p.x + p.w / 2, p.y - 6, fmsg('feedback.magic.crystal_gain', { n: CRYSTAL_GAIN }, '+{n} max mana'), '#7dc4ff');
     pBurst(p.x + p.w / 2, p.y + p.h / 2, 8, ['#e87af0', '#b05ae8', '#ffffff'], 90, 150);
     sfx('pickup');
   }

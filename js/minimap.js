@@ -158,8 +158,9 @@
       this.mctx.putImageData(this.img, 0, 0, x0, 0, count, h);
     },
 
-    // Player's biome label: TC.Biomes' stable tag when present, else the
-    // column guess at the player's position.
+    // Player's biome label: localized display name for TC.Biomes' stable
+    // tag when present (W20), else the column guess at the player's
+    // position. The machine tag itself never renders.
     biomeLabel() {
       let tag = null;
       try {
@@ -170,7 +171,13 @@
         const tx = Math.max(0, Math.min(world.width - 1, Math.round(this.ptx)));
         tag = classifyColumn(world, tx);
       }
-      return tag ? tag.charAt(0).toUpperCase() + tag.slice(1) : '';
+      if (!tag) return '';
+      try {
+        if (TC.Localization && typeof TC.Localization.contentName === 'function') {
+          return TC.Localization.contentName('biome', tag);
+        }
+      } catch (e) { /* fall through */ }
+      return tag.charAt(0).toUpperCase() + tag.slice(1);
     },
 
     update(dt) {
@@ -223,7 +230,8 @@
       ctx.font = '10px monospace';
       ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255,255,255,0.4)';
-      ctx.fillText('[N] map', px + PANEL_W / 2, py + PANEL_H + 12);
+      ctx.fillText((TC.Localization && typeof TC.Localization.t === 'function')
+        ? TC.Localization.t('ui.minimap.hint') : '[N] map', px + PANEL_W / 2, py + PANEL_H + 12);
       const bio = this.biomeLabel();
       if (bio) {
         ctx.fillStyle = 'rgba(255,255,255,0.8)';

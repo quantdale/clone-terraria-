@@ -73,6 +73,9 @@
       inventory: {
         title: 'INVENTORY',
         unavailable: '(inventory unavailable)',
+        btn_sort: 'Sort',
+        btn_stack: 'Quick Stack',
+        btn_split: 'Split',
       },
       chest: {
         title: 'CHEST',
@@ -125,6 +128,18 @@
         max_stack: 'max stack {n}',
         pin_hint: 'Ctrl+click: pin (kept by Quick Stack)',
         unpin_hint: 'Ctrl+click: unpin',
+      },
+      tool: {
+        pick: 'pick',
+        axe: 'axe',
+        hammer: 'hammer',
+        any: 'tool',
+        generic: 'tool',
+      },
+      title_screen: {
+        subtitle: 'an original-assets fan tribute',
+        controls_1: 'WASD move · Space jump · LMB mine / place / attack',
+        controls_2: 'E inventory · Esc menu · M mute · F3 debug',
       },
       craft: {
         requires: 'requires: {stations}',

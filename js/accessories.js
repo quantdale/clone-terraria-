@@ -482,9 +482,19 @@
     }
     if (list.length >= MAX_ACTIVE) list.shift();
     list.push({ id: id, time: t, dur: t, pool: 0 });
-    floatText(p.x + p.w / 2, p.y - 12, d.name, d.color);
+    floatText(p.x + p.w / 2, p.y - 12, buffName(id), d.color);
     emitBus('BuffApplied', 'BuffApplied', { id: id, time: t });
     return true;
+  }
+
+  // Localized buff/status display name (W20): the id stays a machine value;
+  // presentation resolves through the catalog with def.name as fallback.
+  function buffName(id) {
+    if (TC.Localization && typeof TC.Localization.contentName === 'function') {
+      try { return TC.Localization.contentName('buff', id); } catch (e) {}
+    }
+    const d = BUFF_DEFS[id];
+    return (d && d.name) || String(id);
   }
 
   function removeBuff(id) {
@@ -550,9 +560,11 @@
       ctx.lineWidth = 1;
       ctx.strokeStyle = d.color;
       ctx.strokeRect(x + 0.5, Y + 0.5, S - 1, S - 1);
-      const words = d.name.split(' ');
+      // two-letter glyph from the LOCALIZED name (W20): stays stable per
+      // locale and never derives from the machine id.
+      const words = buffName(b.id).split(' ');
       const glyph = (words.length > 1 ? words[0].charAt(0) + words[1].charAt(0)
-        : d.name.slice(0, 2)).toUpperCase();
+        : words[0].slice(0, 2)).toUpperCase();
       ctx.fillStyle = d.color;
       ctx.fillText(glyph, x + S / 2, Y + S / 2 - 2);
       const frac = clamp01(b.dur > 0 ? b.time / b.dur : 0);

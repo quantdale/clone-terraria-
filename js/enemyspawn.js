@@ -87,7 +87,9 @@
     bloodMoon = !!v;
     if (bloodMoon) {
       if (TC.UI && typeof TC.UI.toast === "function")
-        TC.UI.toast("The Blood Moon is rising...");
+        TC.UI.toast(TC.Localization
+          ? TC.Localization.t("event.blood_moon_rising")
+          : "The Blood Moon is rising...");
     } else {
       // the event ended (dawn or manual cancel): record it as completed
       if (TC.Progression && typeof TC.Progression.set === "function") {
@@ -101,7 +103,9 @@
         TC.Sky.daylight() >= 0.5
       ) {
         if (TC.UI && typeof TC.UI.toast === "function")
-          TC.UI.toast("The Blood Moon has set.");
+          TC.UI.toast(TC.Localization
+            ? TC.Localization.t("event.blood_moon_set")
+            : "The Blood Moon has set.");
       }
     }
   }

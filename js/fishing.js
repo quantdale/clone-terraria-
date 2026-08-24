@@ -153,6 +153,22 @@
       try { TC.Particles.floatText(x, y, str, color || '#ffffff'); } catch (e) {}
     }
   }
+  // Localized player feedback (W20): key + named vars, English fallback.
+  function fmsg(key, vars, fallback) {
+    if (TC.Localization && typeof TC.Localization.t === 'function') {
+      try { return TC.Localization.t(key, vars || {}); } catch (e) {}
+    }
+    let out = fallback;
+    for (const k in (vars || {})) out = out.split('{' + k + '}').join(String(vars[k]));
+    return out;
+  }
+  function iName(id) {
+    if (TC.Localization && typeof TC.Localization.contentName === 'function') {
+      try { return TC.Localization.contentName('item', id); } catch (e) {}
+    }
+    const d = iDef(id);
+    return (d && d.name) || String(id);
+  }
   function pBurst(x, y, n, colors, spd) {
     if (TC.Particles && typeof TC.Particles.burst === 'function') {
       try { TC.Particles.burst(x, y, n, { colors: colors, speed: spd }); } catch (e) {}
@@ -296,8 +312,7 @@
     const h = (u && typeof u.hash2 === 'function') ? u.hash2(TC.worldSeed | 0, d, 0xF155) : 0.5;
     const fish = QUEST_POOL[Math.floor(h * QUEST_POOL.length) % QUEST_POOL.length];
     S.quest = { day: d, fish: fish, done: false };
-    const def = iDef(fish);
-    toast('New fishing quest: ' + ((def && def.name) || fish));
+    toast(fmsg('feedback.fishing.quest_new', { fish: iName(fish) }, 'New fishing quest: {fish}'));
   }
 
   // ---- inventory helpers (slot-index consume with id fallback) ----
@@ -451,9 +466,11 @@
       if (q && !q.done && e.id === q.fish) {
         q.done = true;
         give(player, F.QUEST_REWARD_ID, F.QUEST_REWARD_N);
-        toast('Fishing quest complete! +' + F.QUEST_REWARD_N + ' ' +
-          ((iDef(F.QUEST_REWARD_ID) || {}).name || F.QUEST_REWARD_ID));
-        fText(player.x + player.w / 2, player.y - 8, 'Quest!',
+        toast(fmsg('feedback.fishing.quest_complete',
+          { n: F.QUEST_REWARD_N, reward: iName(F.QUEST_REWARD_ID) },
+          'Fishing quest complete! +{n} {reward}'));
+        fText(player.x + player.w / 2, player.y - 8,
+          fmsg('feedback.fishing.quest_float', null, 'Quest!'),
           (TC.CONST.COLORS && TC.CONST.COLORS.gold) || '#ffd24a');
         sfx('craft');
       }
@@ -474,7 +491,7 @@
       if (rng() < crateChance) {
         const crate = crateFor(b.zone, b.liquid);
         give(player, crate, 1);
-        toast('Caught a ' + ((iDef(crate) || {}).name || 'crate') + '!');
+        toast(fmsg('feedback.fishing.caught_crate', { crate: iName(crate) }, 'Caught a {crate}!'));
       } else {
         grantFromTable(player, LOOT[b.zone] || LOOT.surface);
       }

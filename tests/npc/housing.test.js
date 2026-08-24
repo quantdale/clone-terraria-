@@ -213,13 +213,19 @@ test('housing: night/biome dialog pools select deterministically', () => {
   const K = TC.NPCs.KINDS;
   const guide = TC.NPCs.list[0];
 
-  // Content requirements: guide covers grappling hooks + buckets; merchant
-  // covers selling spare stock (RMB a bag slot) for coins.
-  assert.ok(poolsOf(K.guide).some((l) => /grappling/i.test(l) && /bucket/i.test(l)),
+  // Content requirements (checked through the localization layer since W20:
+  // pools hold catalog KEYS; the English fallback must carry these topics):
+  // guide covers grappling hooks + buckets; merchant covers selling spare
+  // stock (RMB a bag slot) for coins.
+  const en = TC.Localization;
+  const say = (k) => (en && typeof en.t === 'function') ? en.t(k) : k;
+  assert.ok(poolsOf(K.guide).some((l) => { const s = say(l); return /grappling/i.test(s) && /bucket/i.test(s); }),
     'guide must mention grappling hooks and buckets');
-  assert.ok(poolsOf(K.merchant).some((l) =>
-    /right-click/i.test(l) && /bag slot/i.test(l) &&
-    /sell/i.test(l) && /coin/i.test(l)),
+  assert.ok(poolsOf(K.merchant).some((l) => {
+    const s = say(l);
+    return /right-click/i.test(s) && /bag slot/i.test(s) &&
+      /sell/i.test(s) && /coin/i.test(s);
+  }),
     'merchant must mention RMB-selling bag slots for coins');
 
   const sky = TC.Sky;

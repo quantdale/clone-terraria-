@@ -40,9 +40,6 @@
   const BREATH_FADE = 0.25;   // breath bubble row fade-in/out duration (seconds)
   const INV_BTN_H = 18;       // inventory panel action-button height
   const SHOP_ROW_H = 26;      // NPC shop row height
-  // Shop currency: ITEM_DEFS has no coin item today, so prices are shown as
-  // informational text and purchases only go through when this stack exists.
-  const CURRENCY_NAME = 'coin';
 
   const GOLD = '#ffd24a';
   const GOLD_DIM = '#a8863a';
@@ -50,6 +47,36 @@
   const PANEL_EDGE = 'rgba(255,210,74,0.35)';
   const TEXT = '#e8e2d0';
   const TEXT_DIM = '#9a927e';
+
+  // ---- localization helpers (W20 LOC-002) ----
+  // ALL normal user-facing text resolves through TC.Localization; machine
+  // ids (item ids, npc types, station ids, biome tags) are never shown raw
+  // when a display name exists. Guarded: a missing service never breaks UI.
+  function t(key, vars) {
+    if (TC.Localization && typeof TC.Localization.t === 'function') {
+      try { return TC.Localization.t(key, vars); } catch (e) {}
+    }
+    return '[' + String(key) + ']';
+  }
+  function hasKey(key) {
+    return !!(TC.Localization && typeof TC.Localization.has === 'function' &&
+      TC.Localization.has(key));
+  }
+  function contentName(kind, ref) {
+    if (TC.Localization && typeof TC.Localization.contentName === 'function') {
+      try { return TC.Localization.contentName(kind, ref); } catch (e) {}
+    }
+    return String(ref == null ? '' : ref);
+  }
+  // NPC display name via npcs.js (which owns kind metadata beyond registry)
+  function npcDisplayName(type) {
+    if (TC.NPCs && typeof TC.NPCs.displayName === 'function') {
+      try { return TC.NPCs.displayName(type); } catch (e) {}
+    }
+    return contentName('npc', type);
+  }
+  function itemName(id) { return contentName('item', id); }
+  function stationDisplayName(id) { return contentName('station', id); }
 
   // ---- runtime state ----
   let cursorStack = null;     // {id,count} held on the mouse cursor
@@ -60,7 +87,7 @@
   const toasts = [];          // {msg,life}
   let breathT = 0;            // breath bubble row fade (0..1)
   let craftShowAll = false;   // crafting panel: false = craftable only
-  let lastShop = null;        // {panel, rows:[{rect,entry}], npcName} from the last layout
+  let lastShop = null;        // {npcType, panel, rows:[{rect,entry}]} from the last layout
 
   // pixel heart bitmap, 7 wide x 6 tall
   const HEART_MAP = [
@@ -186,9 +213,10 @@
   }
 
   // ---- NPC shop resolution ----
-  // The dialog carries only a display name, so match it against live NPCs
-  // and prefer whoever stands closest to the player. Null while no shop NPC
-  // is speaking.
+  // The dialog carries the NPC's STABLE TYPE (W20 identity fix — display
+  // names are localized text and must never decide shop ownership), so the
+  // live NPC is matched by type; ties break by proximity to the player.
+  // Null while no shop NPC is speaking.
   function resolveShop() {
     if (!UI.dialog || !TC.NPCs || !Array.isArray(TC.NPCs.list)) return null;
     const stock = (typeof TC.NPCs.shopOf === 'function')
@@ -198,7 +226,7 @@
     let bestNpc = null, bestD2 = Infinity;
     for (let i = 0; i < TC.NPCs.list.length; i++) {
       const n = TC.NPCs.list[i];
-      if (!n || n.name !== UI.dialog.name) continue;
+      if (!n || n.type !== UI.dialog.npcType) continue;
       const entries = stock(n.type);
       if (!entries || !entries.length) continue;
       const dx = n.x - (p ? p.x : 0), dy = n.y - (p ? p.y : 0);
@@ -292,14 +320,11 @@
   }
   UI.toast = toast;
 
-  // ---- progression announcements (W5) ----
+  // ---- progression announcements (W5, localized W20) ----
   // WorldProgressChanged milestones surface as banner toasts: boss kills and
   // biome discoveries. Observation only; a missing bus never breaks the UI.
-  const BIOME_TITLES = {
-    forest: 'The Verdant Reach', desert: 'the Amber Wastes', snow: 'the Frostbound Expanse',
-    jungle: 'the Tangled Deep', ocean: 'the Endless Blue', cave: 'the Underdeep',
-    underworld: 'the Cinder Abyss',
-  };
+  // Message templates + content names resolve at render time so a locale
+  // switch re-renders future announcements without touching simulation.
   if (TC.Events && TC.Events.EVENT && typeof TC.Events.on === 'function') {
     try {
       TC.Events.on(TC.Events.EVENT.WorldProgressChanged, function (p) {
@@ -307,30 +332,36 @@
         if (!key) return;
         let boss = /^boss\.([a-z0-9_]+)\.defeated$/.exec(key);
         if (boss) {
-          const nm = String(boss[1]).replace(/_/g, ' ');
-          toast('Victory! The ' + nm + ' has fallen.');
+          toast(t('progress.boss_defeated', { boss: contentName('enemy', boss[1]) }));
           return;
         }
         let bio = /^biome\.([a-z0-9_]+)\.discovered$/.exec(key);
         if (bio) {
-          const nm = BIOME_TITLES[bio[1]] || bio[1].replace(/_/g, ' ');
-          toast('Discovered: ' + nm + '.');
+          const tag = bio[1];
+          const titleKey = 'biome.core.' + tag + '.title';
+          const nm = hasKey(titleKey)
+            ? t(titleKey)
+            : contentName('biome', tag).replace(/_/g, ' ');
+          toast(t('progress.biome_discovered', { biome: nm }));
         }
       });
       // W15: rare town milestone — a new neighbor only announces once.
       TC.Events.on(TC.Events.EVENT.NpcMovedIn, function (p) {
-        const nm = p && p.name;
-        if (nm) toast(nm + ' has moved in!');
+        if (!p) return;
+        const nm = p.type ? npcDisplayName(p.type) : (p.name || '');
+        if (nm) toast(t('progress.npc_moved_in', { npc: nm }));
       });
     } catch (e) { /* listener errors are isolated by the bus */ }
   }
 
-  // NPC speech box (npcs.js calls this on RMB over an NPC). A new call
-  // replaces the content and restarts the auto-dismiss timer.
-  UI.showDialog = function (name, text) {
+  // NPC speech box (npcs.js calls this on RMB over an NPC). Carries the
+  // NPC's stable TYPE plus the catalog KEY of the selected line: locale
+  // switches re-render text without changing who is speaking or which line
+  // index was picked. A new call replaces content + restarts auto-dismiss.
+  UI.showDialog = function (npcType, lineKey) {
     UI.dialog = {
-      name: String(name == null ? '' : name),
-      text: String(text == null ? '' : text),
+      npcType: String(npcType == null ? '' : npcType),
+      lineKey: String(lineKey == null ? '' : lineKey),
       t: DIALOG_T
     };
   };
@@ -424,46 +455,48 @@
   function actNewWorld() { TC.newGame(); resetPanels(); }
   function actContinue() { TC.continueGame(); resetPanels(); }
   function actCustomSeed() {
-    const s = window.prompt('Enter a world seed (integer):');
+    const s = window.prompt(t('ui.menu.seed_prompt'));
     if (s == null) return; // cancelled
     const n = parseInt(s, 10);
-    if (typeof n !== 'number' || !isFinite(n)) { toast('Invalid seed - enter an integer'); return; }
+    if (typeof n !== 'number' || !isFinite(n)) { toast(t('ui.menu.seed_invalid')); return; }
     TC.newGame(n);
     resetPanels();
   }
   function actSave() {
     const ok = TC.Save && typeof TC.Save.save === 'function' ? TC.Save.save() : false;
-    toast(ok ? 'Saved' : 'Save failed');
+    toast(ok ? t('ui.toast.saved') : t('ui.toast.save_failed'));
   }
   function actSaveQuit() { if (TC.quitToTitle) TC.quitToTitle(); resetPanels(); }
   function actToggleSound() {
     if (!TC.Audio || typeof TC.Audio.toggleMuted !== 'function') return;
-    toast(TC.Audio.toggleMuted() ? 'Sound off' : 'Sound on');
+    toast(TC.Audio.toggleMuted() ? t('ui.toast.sound_off') : t('ui.toast.sound_on'));
   }
   function actNewWorldConfirm() {
-    const ok = window.confirm('Generate a new world? Unsaved changes since the last save will be lost.');
+    const ok = window.confirm(t('ui.menu.new_world_confirm'));
     if (!ok) return;
     TC.newGame();
     resetPanels();
   }
   function soundLabel() {
-    return 'Sound: ' + ((TC.Audio && TC.Audio.muted) ? 'Off' : 'On');
+    return t('ui.pause.sound', {
+      state: (TC.Audio && TC.Audio.muted) ? t('ui.common.off') : t('ui.common.on'),
+    });
   }
 
   // ---- inventory panel actions (Sort / Quick Stack / Split buttons) ----
   function actSort(inv) {
     if (!inv || typeof inv.sort !== 'function') return;
     const n = inv.sort() | 0;
-    toast(n > 0 ? ('Sorted ' + n + ' stack' + (n === 1 ? '' : 's')) : 'Nothing to sort');
+    toast(n > 0 ? t('ui.toast.sorted', { n: n }) : t('ui.toast.nothing_to_sort'));
   }
 
   // Open chest panel wins; otherwise the nearest chest within reach.
   function actQuickStack(inv) {
     if (!inv || typeof inv.depositAll !== 'function') return;
     const cs = UI.chest ? chestSlots() : nearestChestSlots();
-    if (!cs) { toast('No chest nearby'); return; }
+    if (!cs) { toast(t('ui.toast.no_chest_nearby')); return; }
     const moved = inv.depositAll(cs) | 0;
-    toast(moved > 0 ? ('Stored ' + moved + ' items') : 'Nothing to store');
+    toast(moved > 0 ? t('ui.toast.stored', { n: moved }) : t('ui.toast.nothing_to_store'));
   }
 
   // Split half of the selected hotbar stack into the first FREE slot —
@@ -473,7 +506,7 @@
   function actSplit(inv) {
     if (!inv || typeof inv.stackSplit !== 'function') return;
     const half = inv.stackSplit(UI.selected);
-    if (!half) { toast('Select a hotbar slot holding a stack'); return; }
+    if (!half) { toast(t('ui.toast.select_hotbar_stack')); return; }
     let rest = half;
     if (typeof inv.swapOrPlace === 'function') {
       for (let i = 0; i < inv.slots.length && rest && rest.count > 0; i++) {
@@ -539,16 +572,18 @@
     const bagW = HOTBAR_N * SLOT + (HOTBAR_N - 1) * GAP + 16;
     const bagH = 22 + BAG_ROWS * SLOT + (BAG_ROWS - 1) * GAP + 8;
     L.bagPanel = { x: bagX, y: bagY, w: bagW, h: bagH };
-    // action buttons in the header row, right-aligned (Sort/Stack/Split)
+    // action buttons in the header row, right-aligned (Sort/Stack/Split).
+    // Widths measure the ACTUAL rendered label (W20: localized/pseudo text
+    // varies in length; a fixed per-char guess clips longer languages).
     if (UI.invOpen) {
       const defs = [
-        { id: 'sort', label: 'Sort' },
-        { id: 'stack', label: 'Quick Stack' },
-        { id: 'split', label: 'Split' }
+        { id: 'sort', label: t('ui.inventory.btn_sort') },
+        { id: 'stack', label: t('ui.inventory.btn_stack') },
+        { id: 'split', label: t('ui.inventory.btn_split') }
       ];
       let bx = bagX + bagW - 6;
       for (let i = defs.length - 1; i >= 0; i--) {
-        const bw2 = defs[i].label.length * 7 + 16;
+        const bw2 = measureLabel(ctx, defs[i].label, 11, true) + 16;
         bx -= bw2;
         L.invButtons.push({
           id: defs[i].id, label: defs[i].label,
@@ -613,10 +648,12 @@
       w: CRAFT_W,
       h: 44 + L.craftMaxRows * CRAFT_ROW_H + 6
     };
-    // craftable-only filter toggle, top-right of the panel header
+    // craftable-only filter toggle, top-right of the panel header.
+    // Fixed rect (click stability): long labels ellipsize rather than move
+    // the hit target.
     if (UI.invOpen) {
       L.craftToggle = {
-        label: craftShowAll ? 'All' : 'Craftable',
+        label: craftShowAll ? t('ui.crafting.toggle_all') : t('ui.crafting.toggle_craftable'),
         rect: { x: 8 + CRAFT_W - 82, y: craftTop + 6, w: 76, h: 17 }
       };
     }
@@ -673,12 +710,12 @@
       const bw = 300, bh = 48;
       let by = Math.max(h * 0.44, h / 2 - 100);
       const defs = [
-        { id: 'new', label: 'New World', act: actNewWorld },
-        { id: 'seed', label: 'Custom Seed', act: actCustomSeed }
+        { id: 'new', label: t('ui.menu.new_world'), act: actNewWorld },
+        { id: 'seed', label: t('ui.menu.custom_seed'), act: actCustomSeed }
       ];
       let hasSave = false;
       try { hasSave = !!(TC.Save && TC.Save.hasSave && TC.Save.hasSave()); } catch (e) {}
-      if (hasSave) defs.push({ id: 'continue', label: 'Continue World', act: actContinue });
+      if (hasSave) defs.push({ id: 'continue', label: t('ui.menu.continue_world'), act: actContinue });
       for (let i = 0; i < defs.length; i++) {
         L.buttons.push({
           id: defs[i].id, label: defs[i].label, act: defs[i].act,
@@ -692,11 +729,11 @@
       const px = w / 2 - pw / 2, py = Math.max(20, h / 2 - ph / 2);
       L.pausePanel = { x: px, y: py, w: pw, h: ph };
       const defs = [
-        { id: 'resume', label: 'Resume', act: function () { UI.paused = false; } },
-        { id: 'save', label: 'Save', act: actSave },
-        { id: 'quit', label: 'Save & Quit to Title', act: actSaveQuit },
+        { id: 'resume', label: t('ui.pause.resume'), act: function () { UI.paused = false; } },
+        { id: 'save', label: t('ui.pause.save'), act: actSave },
+        { id: 'quit', label: t('ui.pause.save_quit'), act: actSaveQuit },
         { id: 'sound', label: soundLabel(), act: actToggleSound },
-        { id: 'newworld', label: 'New World', act: actNewWorldConfirm }
+        { id: 'newworld', label: t('ui.pause.new_world'), act: actNewWorldConfirm }
       ];
       let by = py + 58;
       for (let i = 0; i < defs.length; i++) {
@@ -712,6 +749,30 @@
   }
 
   // ---- drawing primitives ----
+  // Measure a label in the small-button font (layout-time width sizing).
+  function measureLabel(ctx, str, size, bold) {
+    ctx.font = (bold ? 'bold ' : '') + size + 'px monospace';
+    try { return Math.ceil(ctx.measureText(String(str)).width); } catch (e) {
+      return String(str).length * size * 0.62; // deterministic fallback
+    }
+  }
+
+  // Truncate with an ellipsis so text fits maxW at the CURRENT font.
+  function ellipsize(ctx, str, maxW) {
+    const s = String(str);
+    let w = 0;
+    try { w = ctx.measureText(s).width; } catch (e) { return s; }
+    if (w <= maxW) return s;
+    let lo = 0, hi = s.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      const test = s.slice(0, mid) + '…';
+      if (ctx.measureText(test).width <= maxW) lo = mid + 1;
+      else hi = mid;
+    }
+    return s.slice(0, Math.max(0, lo - 1)) + '…';
+  }
+
   function panel(ctx, x, y, w, h, emph) {
     ctx.fillStyle = PANEL_BG;
     ctx.fillRect(x, y, w, h);
@@ -809,27 +870,36 @@
   // ---- tooltips ----
   function itemLines(id) {
     const d = itemDef(id);
-    const lines = [{ text: d ? d.name : String(id), color: GOLD }];
+    const lines = [{ text: d ? itemName(id) : String(id), color: GOLD }];
     if (!d) return lines;
-    if (d.damage != null) lines.push({ text: 'damage ' + d.damage, color: TEXT });
-    if (d.power != null) lines.push({ text: (d.tool || 'tool') + ' power ' + d.power + '%', color: TEXT });
-    if (d.defense != null && d.defense > 0) {
-      lines.push({ text: '+' + d.defense + ' defense', color: TEXT });
+    if (d.damage != null) lines.push({ text: t('ui.tooltip.damage', { value: d.damage }), color: TEXT });
+    if (d.power != null) {
+      const toolWord = hasKey('ui.tool.' + (d.tool || 'generic'))
+        ? t('ui.tool.' + (d.tool || 'generic')) : String(d.tool || 'tool');
+      lines.push({ text: t('ui.tooltip.tool_power', { tool: toolWord, value: d.power }), color: TEXT });
     }
-    if (d.knockback != null) lines.push({ text: 'knockback ' + d.knockback, color: TEXT_DIM });
-    if (d.useTime != null) lines.push({ text: 'use time ' + d.useTime + 's', color: TEXT_DIM });
-    if (d.kind === 'block') lines.push({ text: 'placeable', color: TEXT_DIM });
-    else if (d.kind === 'material') lines.push({ text: 'crafting material', color: TEXT_DIM });
-    else if (d.kind === 'ammo') lines.push({ text: 'ammunition', color: TEXT_DIM });
+    if (d.defense != null && d.defense > 0) {
+      lines.push({ text: t('ui.tooltip.defense', { value: d.defense }), color: TEXT });
+    }
+    if (d.useTime != null) lines.push({ text: t('ui.tooltip.use_time', { value: d.useTime }), color: TEXT_DIM });
+    if (d.kind === 'block') lines.push({ text: t('ui.tooltip.placeable'), color: TEXT_DIM });
+    else if (d.kind === 'material') lines.push({ text: t('ui.tooltip.material'), color: TEXT_DIM });
+    else if (d.kind === 'ammo') lines.push({ text: t('ui.tooltip.ammunition'), color: TEXT_DIM });
     else if (d.kind === 'armor' && d.slot) {
-      lines.push({ text: 'armor - worn on ' + d.slot, color: TEXT_DIM });
+      lines.push({ text: t('ui.tooltip.armor_slot', { slot: equipSlotLabel(d.slot) }), color: TEXT_DIM });
     } else if (d.kind === 'summon' && d.boss) {
-      const bd = TC.ENEMY_DEFS ? TC.ENEMY_DEFS[d.boss] : null;
-      lines.push({ text: 'summons ' + ((bd && bd.name) || d.boss) + ' at night',
+      lines.push({ text: t('ui.tooltip.summons', { boss: contentName('enemy', d.boss) }),
                    color: TEXT_DIM });
     }
-    lines.push({ text: 'max stack ' + maxStack(id), color: TEXT_DIM });
+    lines.push({ text: t('ui.tooltip.max_stack', { n: maxStack(id) }), color: TEXT_DIM });
     return lines;
+  }
+
+  // Equipment slot ids are machine values ('head'|'body'|'feet'); display
+  // names map through the catalog.
+  function equipSlotLabel(slot) {
+    const key = 'ui.equip.' + slot;
+    return hasKey(key) ? t(key) : String(slot);
   }
 
   function hoverItemTooltip(mx, my, id) {
@@ -842,16 +912,15 @@
     hoverItemTooltip(mx, my, id);
     if (tooltip) {
       tooltip.lines.push({
-        text: pinned ? 'Ctrl+click: unpin' : 'Ctrl+click: pin (kept by Quick Stack)',
+        text: pinned ? t('ui.tooltip.unpin_hint') : t('ui.tooltip.pin_hint'),
         color: GOLD_DIM
       });
     }
   }
 
   function craftTooltip(mx, my, rec, cc, meta) {
-    const d = itemDef(rec.out);
     const lines = [{
-      text: (d ? d.name : String(rec.out)) + (rec.n > 1 ? ' x' + rec.n : ''),
+      text: itemName(rec.out) + (rec.n > 1 ? ' x' + rec.n : ''),
       color: GOLD
     }];
     const cost = rec.cost || {};
@@ -861,20 +930,24 @@
       if (v && typeof v === 'object') {
         const label = (typeof v.tag === 'string' && v.tag) ? v.tag : null;
         const need = (typeof v.n === 'number' && isFinite(v.n)) ? v.n : 1;
-        lines.push({ text: (label || String(id)) + ': x' + need, color: TEXT });
+        lines.push({ text: t('ui.craft.cost_tag', { tag: label || String(id), n: need }), color: TEXT });
         continue;
       }
       const have = cc.inv.count(id) | 0;
-      const cd = itemDef(id);
       lines.push({
-        text: (cd ? cd.name : id) + ': ' + have + '/' + v,
+        text: t('ui.craft.cost', { item: itemName(id), have: have, need: v }),
         color: have >= v ? '#8fe08f' : '#ff7a6a'
       });
     }
-    if (rec.station) lines.push({ text: 'requires: ' +
-      (Array.isArray(rec.station) ? rec.station.join(' / ') : rec.station), color: GOLD_DIM });
+    if (rec.station) {
+      const st = Array.isArray(rec.station)
+        ? rec.station.map(stationDisplayName).join(' / ')
+        : stationDisplayName(rec.station);
+      lines.push({ text: t('ui.craft.requires', { stations: st }), color: GOLD_DIM });
+    }
     if (meta && meta.missing.length) {
-      lines.push({ text: 'missing station: ' + meta.missing.join(', '), color: '#ff7a6a' });
+      const miss = meta.missing.map(stationDisplayName).join(', ');
+      lines.push({ text: t('ui.craft.missing_station', { stations: miss }), color: '#ff7a6a' });
     }
     tooltip = { x: mx + 18, y: my + 10, lines: lines };
   }
@@ -1009,11 +1082,11 @@
   function drawInventory(ctx, L, mx, my) {
     const p = L.bagPanel;
     panel(ctx, p.x, p.y, p.w, p.h, true);
-    txt(ctx, 'INVENTORY', p.x + 10, p.y + 12, 12, GOLD_DIM, 'left', true);
+    txt(ctx, t('ui.inventory.title'), p.x + 10, p.y + 12, 12, GOLD_DIM, 'left', true);
     for (let i = 0; i < L.invButtons.length; i++) drawSmallButton(ctx, L.invButtons[i], mx, my);
     const inv = getInv(true);
     if (!inv) {
-      txt(ctx, '(inventory unavailable)', p.x + p.w / 2, p.y + p.h / 2, 13, TEXT_DIM, 'center');
+      txt(ctx, t('ui.inventory.unavailable'), p.x + p.w / 2, p.y + p.h / 2, 13, TEXT_DIM, 'center');
       return;
     }
     for (let i = 0; i < L.bag.length; i++) {
@@ -1029,10 +1102,10 @@
   function drawChest(ctx, L, mx, my) {
     const p = L.chestPanel;
     panel(ctx, p.x, p.y, p.w, p.h, true);
-    txt(ctx, 'CHEST', p.x + 10, p.y + 12, 12, GOLD_DIM, 'left', true);
+    txt(ctx, t('ui.chest.title'), p.x + 10, p.y + 12, 12, GOLD_DIM, 'left', true);
     const cs = chestSlots();
     if (!cs) {
-      txt(ctx, '(unavailable)', p.x + p.w / 2, p.y + p.h / 2, 13, TEXT_DIM, 'center');
+      txt(ctx, t('ui.chest.unavailable'), p.x + p.w / 2, p.y + p.h / 2, 13, TEXT_DIM, 'center');
       return;
     }
     for (let i = 0; i < L.chestRects.length; i++) {
@@ -1046,11 +1119,11 @@
   function drawEquipment(ctx, L, mx, my) {
     const p = L.equipPanel;
     panel(ctx, p.x, p.y, p.w, p.h, true);
-    txt(ctx, 'EQUIP', p.x + 10, p.y + 12, 12, GOLD_DIM, 'left', true);
+    txt(ctx, t('ui.equip.title'), p.x + 10, p.y + 12, 12, GOLD_DIM, 'left', true);
     for (let i = 0; i < L.equipRects.length; i++) {
       const r = L.equipRects[i];
       const id = equippedId(r.slot);
-      drawSlotBox(ctx, r, id ? { id: id, count: 1 } : null, { label: r.slot });
+      drawSlotBox(ctx, r, id ? { id: id, count: 1 } : null, { label: equipSlotLabel(r.slot) });
       if (id && inRect(mx, my, r) && !tooltip) hoverItemTooltip(mx, my, id);
     }
   }
@@ -1058,16 +1131,19 @@
   function drawCraftColumn(ctx, L, mx, my) {
     const p = L.craftPanel;
     panel(ctx, p.x, p.y, p.w, p.h, true);
-    txt(ctx, 'CRAFTING', p.x + 10, p.y + 15, 13, GOLD, 'left', true);
+    txt(ctx, t('ui.crafting.title'), p.x + 10, p.y + 15, 13, GOLD, 'left', true);
     if (L.craftToggle) drawSmallButton(ctx, L.craftToggle, mx, my);
     const cc = L.craftCtx;
     if (!cc) {
-      txt(ctx, '(unavailable)', p.x + p.w / 2, p.y + 36, 12, TEXT_DIM, 'center');
+      txt(ctx, t('ui.crafting.unavailable'), p.x + p.w / 2, p.y + 36, 12, TEXT_DIM, 'center');
       return;
     }
     let stNames = '';
-    cc.stations.forEach(function (s) { stNames += (stNames ? ', ' : '') + s; });
-    txt(ctx, stNames ? 'nearby: ' + stNames : 'no station nearby',
+    cc.stations.forEach(function (s) {
+      stNames += (stNames ? ', ' : '') + stationDisplayName(s);
+    });
+    txt(ctx, stNames ? t('ui.crafting.nearby_stations', { stations: stNames })
+                     : t('ui.crafting.no_station'),
         p.x + 10, p.y + 31, 11, TEXT_DIM, 'left');
 
     for (let i = 0; i < L.craftRects.length; i++) {
@@ -1084,21 +1160,23 @@
       ctx.save();
       if (dim) ctx.globalAlpha = 0.45;
       drawIcon(ctx, rec.out, r.x + 4, r.y + 3, CRAFT_ROW_H - 10);
-      const d = itemDef(rec.out);
-      let label = d ? d.name : String(rec.out);
+      let label = itemName(rec.out);
       if (rec.n > 1) label += ' x' + rec.n;
+      // ellipsize long localized names before they reach the missing-station tag
+      ctx.font = '13px monospace';
+      label = ellipsize(ctx, label, r.w - CRAFT_ROW_H - (meta && meta.missing.length && !hov ? 74 : 12));
       txt(ctx, label, r.x + CRAFT_ROW_H + 4, r.y + r.h / 2, 13,
           hov ? GOLD : TEXT, 'left');
       // right-aligned missing-station tag (All mode only)
       if (meta && meta.missing.length && !hov) {
-        txt(ctx, '[' + meta.missing[0] + ']', r.x + r.w - 4, r.y + r.h / 2, 10,
+        txt(ctx, '[' + stationDisplayName(meta.missing[0]) + ']', r.x + r.w - 4, r.y + r.h / 2, 10,
             '#ff7a6a', 'right');
       }
       ctx.restore();
       if (hov) craftTooltip(mx, my, rec, cc, meta);
     }
     if (L.craftList.length > L.craftRects.length) {
-      txt(ctx, '+' + (L.craftList.length - L.craftRects.length) + ' more...',
+      txt(ctx, t('ui.crafting.more', { n: L.craftList.length - L.craftRects.length }),
           p.x + 10, p.y + 40 + L.craftRects.length * CRAFT_ROW_H + 8, 11, TEXT_DIM, 'left');
     }
   }
@@ -1133,15 +1211,15 @@
       ctx.fillText(ch, x, ly);
       x += ctx.measureText(ch).width + spacing;
     }
-    txtShadow(ctx, 'an original-assets fan tribute', w / 2, ly + size * 0.8, 15,
+    txtShadow(ctx, t('ui.title_screen.subtitle'), w / 2, ly + size * 0.8, 15,
               'rgba(255,236,180,0.9)', 'center');
 
     for (let i = 0; i < L.buttons.length; i++) drawButton(ctx, L.buttons[i], mx, my);
 
     // controls legend
     const legendY = h - 66;
-    txt(ctx, 'WASD move · Space jump · LMB mine / place / attack', w / 2, legendY, 14, TEXT_DIM, 'center');
-    txt(ctx, 'E inventory · Esc menu · M mute · F3 debug', w / 2, legendY + 22, 14, TEXT_DIM, 'center');
+    txt(ctx, t('ui.title_screen.controls_1'), w / 2, legendY, 14, TEXT_DIM, 'center');
+    txt(ctx, t('ui.title_screen.controls_2'), w / 2, legendY + 22, 14, TEXT_DIM, 'center');
     txt(ctx, 'v' + (TC.VERSION || '?'), 10, h - 16, 12, TEXT_DIM, 'left');
   }
 
@@ -1150,7 +1228,7 @@
     ctx.fillRect(0, 0, L.w, L.h);
     const p = L.pausePanel;
     panel(ctx, p.x, p.y, p.w, p.h, true);
-    txtShadow(ctx, 'PAUSED', L.w / 2, p.y + 30, 24, GOLD, 'center');
+    txtShadow(ctx, t('ui.pause.title'), L.w / 2, p.y + 30, 24, GOLD, 'center');
     for (let i = 0; i < L.buttons.length; i++) drawButton(ctx, L.buttons[i], mx, my);
   }
 
@@ -1170,9 +1248,9 @@
   function drawDeath(ctx, w, h) {
     ctx.fillStyle = 'rgba(80,8,8,0.4)';
     ctx.fillRect(0, 0, w, h);
-    txtShadow(ctx, 'You were slain...', w / 2, h / 2 - 30, 40, '#ff6a5a', 'center');
+    txtShadow(ctx, t('ui.death.title'), w / 2, h / 2 - 30, 40, '#ff6a5a', 'center');
     const secs = respawnSeconds();
-    txt(ctx, secs > 0 ? ('Respawning in ' + secs + '...') : 'Respawning...',
+    txt(ctx, secs > 0 ? t('ui.death.respawn_in', { n: secs }) : t('ui.death.respawn_now'),
         w / 2, h / 2 + 18, 18, TEXT, 'center');
   }
 
@@ -1194,7 +1272,7 @@
     const frac = clamp(b.hp / b.maxHp, 0, 1);
     const bw = Math.round(w * 0.4), bh = 14;
     const x = Math.round(w / 2 - bw / 2), y = h - bh - 26;
-    txtShadow(ctx, b.def.name, w / 2, y - 11, 15, GOLD, 'center');
+    txtShadow(ctx, contentName('enemy', b.type || (b.def && b.def.name)), w / 2, y - 11, 15, GOLD, 'center');
     ctx.fillStyle = 'rgba(10,8,16,0.78)';          // backing plate
     ctx.fillRect(x - 3, y - 3, bw + 6, bh + 6);
     ctx.fillStyle = 'rgba(30,16,26,0.9)';
@@ -1226,13 +1304,14 @@
   }
 
   // Shared NPC dialog box geometry (screen space) for drawing, the shop
-  // panel anchor, and click hit-testing.
+  // panel anchor, and click hit-testing. Text resolves through the catalog
+  // at render time so a locale switch re-renders without state churn.
   function dialogGeom(c, w, h) {
     const d = UI.dialog;
     if (!d) return null;
     const dw = Math.round(w * 0.6);
     c.font = '13px monospace';
-    const lines = wrapText(c, d.text, dw - 24);
+    const lines = wrapText(c, t(d.lineKey), dw - 24);
     const dh = 36 + lines.length * 18;
     return {
       x: Math.round(w / 2 - dw / 2),
@@ -1261,7 +1340,7 @@
         entry: entries[i]
       });
     }
-    return { name: UI.dialog.name, panel: { x: x, y: y, w: pw, h: ph }, rows: rows };
+    return { npcType: UI.dialog.npcType, panel: { x: x, y: y, w: pw, h: ph }, rows: rows };
   }
 
   // Transactional purchase through TC.Commands.ShopBuy (W2): stock, price,
@@ -1281,20 +1360,18 @@
     if (!r.ok) {
       const price = Math.max(1, Math.floor(entry.price) || 1);
       if (r.error === 'too-poor') {
-        toast('Price: ' + price + ' ' + CURRENCY_NAME +
-              (price === 1 ? '' : 's') + ' each');
+        toast(t('ui.shop.price_each', { n: price }));
       } else if (r.error === 'inventory-full') {
-        toast('Inventory full');
+        toast(t('ui.toast.inventory_full'));
       } else {
-        toast('Purchase failed');
+        toast(t('ui.shop.purchase_failed'));
       }
       return;
     }
     if (TC.Audio && typeof TC.Audio.play === 'function') {
       try { TC.Audio.play('pickup'); } catch (e) {}
     }
-    const d = itemDef(entry.itemId);
-    toast('Bought ' + (d ? d.name : entry.itemId));
+    toast(t('ui.shop.bought', { item: itemName(entry.itemId) }));
   }
 
   // Sell from an inventory slot while shopping: count 1 per right-click,
@@ -1310,20 +1387,22 @@
       : { ok: false, error: 'no-commands' };
     if (!r.ok) {
       if (r.error === 'not-sellable' || r.error === 'cannot-sell-currency') {
-        toast('They will not buy that');
+        toast(t('ui.shop.not_buyable'));
       } else if (r.error !== 'empty-slot') {
-        toast('Cannot sell that');
+        toast(t('ui.shop.cannot_sell'));
       }
       return;
     }
     const res = r.result || {};
-    const txt = TC.Economy && TC.Economy.format
+    const amountTxt = TC.Economy && TC.Economy.format
       ? TC.Economy.format(res.proceeds || 0)
       : String(res.proceeds || 0);
-    toast('Sold for ' + txt);
+    toast(t('ui.shop.sold_for', { amount: amountTxt }));
   }
 
   // The NPC type of the currently open shop dialog (nearest match), or null.
+  // Identity rides the stable TYPE stored in the dialog state (W20): never
+  // its localized display name.
   function shopNpcType() {
     if (!UI.dialog || !TC.NPCs || !Array.isArray(TC.NPCs.list)) return null;
     let best = null, bestD2 = Infinity;
@@ -1331,7 +1410,7 @@
     const py = TC.player ? TC.player.y : 0;
     for (let i = 0; i < TC.NPCs.list.length; i++) {
       const n = TC.NPCs.list[i];
-      if (!n || n.name !== UI.dialog.name) continue;
+      if (!n || n.type !== UI.dialog.npcType) continue;
       if (typeof TC.NPCs.shopOf !== 'function') continue;
       if (!TC.NPCs.shopOf(n.type)) continue;
       const dx = n.x - px, dy = n.y - py;
@@ -1341,17 +1420,15 @@
     return best;
   }
 
-  // Shop list under an open NPC dialog: icon, name, coin-priced row per stock
-  // entry. Hover shows the standard item tooltip plus the price line.
+  // Shop list under an open NPC dialog: icon, localized name, coin-priced
+  // row per stock entry. Hover shows the standard item tooltip plus price.
   function drawShop(c, shop, mx, my) {
     if (!shop) return;
     const p = shop.panel;
     panel(c, p.x, p.y, p.w, p.h, true);
-    txt(c, 'SHOP - click a line to buy', p.x + 10, p.y + 11, 11, GOLD_DIM, 'left', true);
+    txt(c, t('ui.shop.title'), p.x + 10, p.y + 11, 11, GOLD_DIM, 'left', true);
     const purseN = currencyCount(getInv(false));
     const purse = currencyLabel(getInv(false));
-    c.font = '10px monospace';
-    txt(c, purse, p.x + p.w - 10, p.y + 11, 11, GOLD, 'right', true);
     for (let i = 0; i < shop.rows.length; i++) {
       const row = shop.rows[i];
       const r = row.rect;
@@ -1363,8 +1440,9 @@
         c.fillRect(r.x, r.y, r.w, r.h);
       }
       drawIcon(c, e.itemId, r.x + 4, r.y + (r.h - 18) / 2, 18);
-      const d = itemDef(e.itemId);
-      txt(c, d ? d.name : String(e.itemId), r.x + 26, r.y + r.h / 2, 13,
+      c.font = '13px monospace';
+      // localized name ellipsized before the right-aligned price column
+      txt(c, ellipsize(c, itemName(e.itemId), r.w - 26 - 46), r.x + 26, r.y + r.h / 2, 13,
           hov ? GOLD : TEXT, 'left');
       const afford = purseN >= price;
       c.font = 'bold 13px monospace';
@@ -1378,9 +1456,8 @@
       if (hov) {
         const lines = itemLines(e.itemId);
         lines.push({
-          text: 'price: ' + TC.Economy.format(price) +
-                (afford ? '' : '  (you have ' + purse + ')') +
-                '  - RMB a bag slot to sell',
+          text: afford ? t('ui.shop.tooltip_affordable', { price: TC.Economy.format(price) })
+                       : t('ui.shop.tooltip_poor', { price: TC.Economy.format(price), purse: purse }),
           color: afford ? '#8fe08f' : '#ff7a6a'
         });
         tooltip = { x: mx + 18, y: my + 10, lines: lines };
@@ -1400,7 +1477,7 @@
     c.save();
     c.globalAlpha = alpha;
     panel(c, x, y, g.w, g.h, true);
-    txt(c, d.name, x + 12, y + 16, 14, GOLD, 'left', true);
+    txt(c, npcDisplayName(d.npcType), x + 12, y + 16, 14, GOLD, 'left', true);
     let yy = y + 38;
     for (let i = 0; i < g.textLines.length; i++) {
       txt(c, g.textLines[i], x + 12, yy, 13, '#ffffff', 'left');
@@ -1478,7 +1555,7 @@
     let left = 1;
     try { left = inv.add(cur, 1); } catch (e) { left = 0; }
     if (typeof left !== 'number' || !isFinite(left)) left = 0;
-    if (left > 0) { toast('Inventory full'); return; }   // stays equipped
+    if (left > 0) { toast(t('ui.toast.inventory_full')); return; }   // stays equipped
     setEquipped(slot, null);
   }
 
@@ -1538,7 +1615,7 @@
     if (!rightClick && !cursorStack && s && ctrlHeld() &&
         typeof inv.toggleFavorite === 'function') {
       const now = inv.toggleFavorite(i);
-      toast(now ? 'Pinned (kept by Quick Stack)' : 'Unpinned');
+      toast(now ? t('ui.toast.pinned') : t('ui.toast.unpinned'));
       return;
     }
     if (!rightClick && shiftHeld() && !cursorStack && s) {

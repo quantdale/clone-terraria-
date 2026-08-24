@@ -377,7 +377,9 @@
       );
     }
     if (e.def.boss && TC.UI && typeof TC.UI.toast === "function") {
-      TC.UI.toast(e.def.name + " has been defeated!");
+      TC.UI.toast(TC.Localization
+        ? TC.Localization.t("progress.boss_defeated", { boss: TC.Localization.contentName("enemy", e.type) })
+        : e.def.name + " has been defeated!");
     }
   }
 
@@ -595,7 +597,9 @@
       });
     }
     if (TC.UI && typeof TC.UI.toast === "function") {
-      TC.UI.toast(def.name + " has awoken!");
+      TC.UI.toast(TC.Localization
+        ? TC.Localization.t("progress.boss_awakened", { boss: TC.Localization.contentName("enemy", type) })
+        : def.name + " has awoken!");
     }
     return e;
   }
