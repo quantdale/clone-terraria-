@@ -15,7 +15,7 @@ Open `index.html` in a browser (plain `<script>` tags, works over `file://`), or
 python -m http.server 8377
 ```
 
-Development/validation commands (`node` + `npm ci` required):
+Development/validation commands (`node` >= 22 (glob-capable `node --test`) + `npm ci` required):
 
 ```
 npm test            # node:test suites (unit/core/save/combat/player/npc/world)
