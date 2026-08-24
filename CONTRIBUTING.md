@@ -228,7 +228,7 @@ New town NPCs should use the generic NPC/housing/shop/service model once availab
 
 ## 10. Localization
 
-After the localization system lands, new user-visible text should use localization keys rather than embedding English strings directly in gameplay definitions.
+The localization system landed in W20. New user-visible text MUST use localization keys rather than embedding English strings directly in gameplay definitions.
 
 Examples:
 
@@ -238,7 +238,20 @@ ui.inventory.quick_stack
 npc.core.guide.dialogue.spawn_hint_01
 ```
 
-Avoid string concatenation that assumes English grammar or word order.
+Rules (enforced by `npm run check:i18n`, which runs inside `npm run validate`):
+
+- every user-facing string ships in `js/locales/en.js` under a stable dotted key;
+- parameterized messages use named `{vars}` templates — never string
+  concatenation that assumes English grammar or word order; plurals use plural
+  entries, never `+'s'` logic;
+- presentation resolves content names via `TC.Localization.contentName(kind, ref)`
+  — never by reading legacy `def.name` fields or Title-Casing ids;
+- machine identity (registry ids, save keys, flags, event/command names,
+  enemy/item type ids) is never localized and never derived from translations;
+  the registry fingerprint baseline is regression-guarded;
+- NPC dialog pools hold catalog keys and dialogs carry the stable npc type —
+  display names never decide shop/dialog identity;
+- locale preference persists only via `TC.Settings`, never in world saves.
 
 ## 11. Assets, audio, and IP policy
 

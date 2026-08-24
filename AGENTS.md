@@ -92,7 +92,8 @@ Per-drawer call/error counters live on `TC.RenderLayers.list()` entries.
 | loot.js | `TC.Loot`: breakable POT tiles + LIFE_CRYSTAL (+20 maxHp to 400) + deterministic worldgen post-pass `populateWorld(gen,seed)` called from buildWorld; pot loot rides the TileBroken event; crystal use via `onUseHeld`; `crystalBonus(p)` feeds TC.Stats; SaveCore provider 'character.core.loot'; `reset/populateChest(tx,ty)/stats` |
 | loot.js | (see above) |
 | registry.js | `TC.Registry`: stable namespaced content ids (`core:dirt`) across kinds tile/wall/item/recipe/enemy/npc/buff/projectileType/biome/station; auto-mirrors TILE_DEFS/ITEM_DEFS/RECIPES/ENEMY_DEFS at load (`syncFromTables()`), legacy numeric aliases, `validate()` throws on problems, deterministic `fingerprint()`, `stableToIndex/byIndex/legacyToStable` |
-| events.js | `TC.Events`: on/off/once/emit immediate + queue/flush deferred per-frame bus; frozen `EVENT` name map (TileChanged/TileBroken/WallChanged/LiquidChanged/EntitySpawned/EntityDamaged/EntityKilled/BossDefeated/ProjectileSpawned/InventoryChanged/BuffApplied/BuffExpired/CraftCompleted/WorldProgressChanged/NpcMovedIn/WirePulse/DayChanged/WorldLoaded…); '*' wildcard; listener errors isolated |
+| events.js | `TC.Events`: on/off/once/emit immediate + queue/flush deferred per-frame bus; frozen `EVENT` name map (TileChanged/TileBroken/WallChanged/LiquidChanged/EntitySpawned/EntityDamaged/EntityKilled/BossDefeated/ProjectileSpawned/InventoryChanged/BuffApplied/BuffExpired/CraftCompleted/WorldProgressChanged/NpcMovedIn/WirePulse/DayChanged/WorldLoaded/LocaleChanged…); '*' wildcard; listener errors isolated |
+| settings.js | `TC.Settings` (W20): tiny versioned user-preference store in ONE localStorage envelope `tc_settings_v1` ({v:1,values:{...}}) — corrupt-safe, unknown-field tolerant; locale choice lives here, OUTSIDE world/character saves; `available/get/set/remove/clear` |
 | systems.js | `TC.Systems`: THE production fixed-step scheduler — phases per the block above, register(phase,name,{init?,update?},{after/before/when}) with state gates, initAll/updateAll/resolved-order constraints/cycle isolation + boot/runBoot explicit init; observability `currentPhase()/tickCount()/getCounts()/getPerTickCounts()/resetCounts()`; `TC.RenderLayers`: named world/screen draw layers (register/drawWorld/drawScreen/clear/list) with per-drawer call+error counters |
 | runtime.js | `TC.Runtime` (alias `TC.Simulation`): canonical fixed-step host — `tick(dt)/advanceTicks(n)` drive Systems.updateAll (guarded legacy direct-call sequence only when systems.js is absent); state gating (title/paused run UI + event flush only), camera follow, tick/phase/command observability; headless boundary: `createWorld(seed)`, `advanceTicks`, `reset`, `getState()` run meaningful simulation with no Canvas/DOM/rAF; tick count + queue reset on WorldLoaded |
 | commands.js | `TC.Commands`: canonical transactions `submit(name,ctx)→{ok,result}|{ok:false,error}` — MineTile/MineWall/PlaceTile/PlaceWall/UseItem (full live dispatch incl. integration hooks, hammer shaping, actuator, honest used/reason results)/MoveItem/EquipItem/CraftRecipe/InteractTile/ShopBuy/ShopSell; PLUS deterministic FIFO queue: `enqueue/drain/pending/clearQueue/stats` drained once per tick in the scheduler's commands phase (snapshot semantics, bounded 256, cleared on WorldLoaded) |
@@ -102,7 +103,9 @@ Per-drawer call/error counters live on `TC.RenderLayers.list()` entries.
 | liquids.js | `TC.Liquids`: THE single runtime liquid authority (W1 migration — legacy WATER/LAVA tiles are worldgen/legacy-save representation only, imported into the volume layer at build time by main.buildWorld; no tile-water simulation exists). Type Uint8 + amount Uint8 arrays (water/lava/honey), budgeted settling with equalize/evaporation, water×lava→stone contact; `init/reset/update/wake/set/sampleAt/queryAt/displace/collectAt/placeAt/onUseHeld/columnSurface/draw/importFromWorld/stats/mode/isLiquid`; SaveCore provider 'world.core.liquids'; buckets are kind-'bucket' items converting in place |
 | economy.js | `TC.Economy`: canonical currency (coin_copper/silver/gold = 1/100/10000 copper); `total/pay/give/dropCoins/format/DENOMS`; pay is atomic with exact change; shop transactions live in TC.Commands ShopBuy/ShopSell (validate-then-apply, emit ShopBuy/ShopSell events); sell price = 1/5 of ITEM_DEFS[].value |
 | grapple.js | `TC.Grapple`: grappling-hook state machine (flying/latched/retracting) driven by kind-'grapple' item defs `{grapple:{range,pull,speed}}` (hook_basic, hook_gemshot); pull thrust pre-player-update + rope constraint post-update via main.step hooks; `onUseHeld/preUpdate/postUpdate/drawWorld/release/active/resetForNewWorld/phase()/anchor()`; solid-tile anchors only, velocity capped |
-| debug.js | `TC.Debug`: rolling timings (mark/endMark/frame/stats), counters/snapshot, F3 overlay `drawHud` (fps buckets, tick/phase/command-queue stats, liquids, projectiles, flags, wof encounter fields), `window.__TEST__` hooks only under location.hash '#test' (`getWofEncounter/setWofHp/getRuntimeState` — read-only runtime authority snapshot) |
+| debug.js | `TC.Debug`: rolling timings (mark/endMark/frame/stats), counters/snapshot, F3 overlay `drawHud` (fps buckets, tick/phase/command-queue stats, liquids, projectiles, flags, wof encounter fields), `window.__TEST__` hooks only under location.hash '#test' (`getWofEncounter/setWofHp/getRuntimeState` + W20 localization hooks `getLocale/setLocale/translate/getLocalizationStats/getMissingKeys`) |
+| localization.js | `TC.Localization` (W20): THE canonical translation authority — additive locale registration (`register(locale,catalog,meta?)`, nested catalogs flatten to dotted keys), English fallback ('en') with visible `[key]` placeholder + warn-once diagnostics, `{name}` interpolation (missing var stays literal + reported), Intl.PluralRules plural entries with one/other fallback, `setLocale/getLocale/availableLocales/localeMeta/t/has/contentName/contentDescription/contentKey/validate/missing/stats/restore/isRegistered`; content names resolve through the registry from ANY reference form (numeric legacy index, object key, shorthand, stable id); emits LocaleChanged; syncs document lang/title when DOM present; registers the en-XA pseudo stress locale ONLY under '#test' |
+| locales/en.js | Canonical English fallback catalog (W20): ALL normal user-facing text — ui.* surfaces, progress/event/feedback templates, prefix.*, and every displayable tile/wall/item/enemy/npc/buff/biome/station `.name`/`.description`/`.title` plus Guide/Merchant dialogue pools under `<kind>.<ns>.<id>…` registry-derived keys. New user-facing strings MUST ship here or check:i18n fails. Future languages = new js/locales/<id>.js registering + restore() |
 
 main.js (lead-owned) exposes: `TC.newGame(seed?)`, `TC.continueGame()`, `TC.quitToTitle()`,
 `TC.applyCam/clearCam`, `TC.state`, `TC.world`, `TC.worldSeed`, `TC.player`, `TC.camera`,
@@ -119,6 +122,33 @@ main.js (lead-owned) exposes: `TC.newGame(seed?)`, `TC.continueGame()`, `TC.quit
   use `TC.Utils` seeded RNG. Visual-only randomness elsewhere is fine.
 - Style: `'use strict'` IIFE, 2-space indent, single quotes, light comments, ES2020.
 - Validate with `node --check js/<file>.js` before finishing.
+
+### Localization rules (W20 — mandatory)
+
+- NEVER localize machine identity: registry ids (`ns:name`), TILE numeric ids,
+  WALL ids, ITEM_DEFS/enemy/npc/projectile/buff type ids, recipe identities,
+  biome tags, station ids/tags, progression flags, command/event names, save
+  provider/schema keys, test selectors, debug counters. Translated strings are
+  never authoritative identity and never feed the registry fingerprint
+  (`bdad6cfa` is regression-guarded by tools/check-i18n.js +
+  tests/core/localization-identity.test.js).
+- Legacy `def.name` fields are FROZEN identity metadata — do not reword them;
+  do not read them in presentation paths (resolve via
+  `TC.Localization.contentName(kind, ref)` instead).
+- All normal player-facing strings (UI labels, tooltips, dialogue, toasts,
+  feedback floaters, announcements) live in js/locales/en.js and render via
+  `t(key, vars)` / `contentName(kind, ref)`. No new raw string literals, no
+  `'x' + value` English concatenation, no id→TitleCase conversion in UI code.
+  Parameterized messages use named `{vars}` templates — never assembled word
+  order. Plurals use plural entries, never `+'s'` logic.
+- New content workflow: add the def (any module), then add its catalog entry
+  (`item.core.<key>.name` etc., dialogue keys for NPCs) in js/locales/en.js.
+  NPC dialog pools hold CATALOG KEYS; `UI.showDialog(npcType, lineKey)` takes
+  the STABLE npc type — display names must never decide shop/dialog identity.
+- User preferences (locale, future settings) persist ONLY via TC.Settings —
+  never inside world/character saves.
+- Gate: `npm run check:i18n` runs inside `npm run validate` and fails on
+  missing catalog coverage or registry-identity drift.
 
 ## Gameplay summary (current scope)
 

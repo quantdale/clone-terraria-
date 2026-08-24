@@ -316,7 +316,7 @@ Do not let biome/enemy code directly construct uncontrolled WebAudio graphs.
 
 ## 14. Localization
 
-Persistable content definitions reference localization keys rather than storing user-facing English as identity.
+Persistable content definitions reference localization keys rather than storing user-facing English as identity. Since W20 this section is IMPLEMENTED — see §24 for the authoritative contract.
 
 ```text
 item.core.iron_sword.name
@@ -446,6 +446,9 @@ phase under `TC.Systems` (or `main.js` direct call when noted).
 | crafting.js | Station detection/tags, recipe index, transactional craft | `TC.Crafting` | — | ▸ CraftCompleted | — |
 | gear.js | Yoyo/boomerang/grenade/falling-star held-item behaviors | `TC.Gear` | — | — | combat/render |
 | minimap.js | Toggleable downscaled map | `TC.MiniMap` | — | — | environment |
+| settings.js (W20) | Versioned user-preference store (`tc_settings_v1`), corrupt-safe, outside world saves | `TC.Settings` | localStorage envelope | — | — |
+| localization.js (W20) | THE translation authority: catalogs, fallback/interpolation/plural, contentName via registry, pseudo-locale (#test), validate/stats | `TC.Localization` | locale pref via TC.Settings | ▸ LocaleChanged | — (call-time) |
+| locales/en.js (W20) | Canonical English fallback catalog: UI, templates, dialogue keys, all display names/descriptions | registers 'en' | — | — | load-time |
 | ui.js | Title/HUD/inventory/chest/shop/dialog/pause/death, toasts, boss bar | `TC.UI` | — | ◂ WorldProgressChanged etc. | input |
 | wiring.js | Wire tiles, mechanisms, BFS pulses, actuators, trap darts | `TC.Wiring` | 'systems.core.wiring' | ▸ WirePulse ◂ TileChanged | liquidsWiring |
 | debug.js | Timings/counters/F3 overlay, `#test` hooks only | `TC.Debug` | — | — | — |
@@ -460,11 +463,16 @@ phase under `TC.Systems` (or `main.js` direct call when noted).
 - WATER/LAVA tile ids exist only as worldgen/save representation, imported once into
   `TC.Liquids` by `main.buildWorld`.
 - `debug.js __TEST__` exists exclusively under `location.hash === '#test'`.
+- Legacy English `def.name` fields remain frozen IDENTITY metadata (registry
+  derives stable ids from them); presentation resolves text through
+  TC.Localization instead. `en-XA` exists only under '#test'.
 
 ### Remaining architectural debt (tracked)
 
-See `docs/TASK_BOARD.md` status column. Highlights: localization layer absent (English
-strings inline). The former dual update/render paths are closed: the scheduler,
+See `docs/TASK_BOARD.md` status column. Highlights: real secondary-language
+catalogs are not yet authored (engine + validator accept them as-is);
+RTL/complex-script typography is deferred (see §24). The former dual
+update/render paths are closed: the scheduler,
 command phase and render layers ARE the production path (W18 convergence); remaining
 legacy fallbacks are deliberate compatibility seams (direct `useHeld`/`interact` when
 commands module absent; guarded legacy tick sequence when systems.js is absent).
@@ -698,3 +706,113 @@ Worst op ≈ 0.09% of the 16.67 ms fixed-step budget.
 Unchanged from §21: no localization; Hardmode-equivalent expansion deferred.
 Underworld roster stays deliberately small (demon_eye/cave_bat/zombie +
 post-Wall ember_wraith).
+---
+
+## 24. Campaign contracts (W20 — Localization & Content Presentation)
+
+The normative one-liners; module headers carry full detail.
+
+### Localization authority (localization.js, W20)
+
+`TC.Localization` is the single translation authority (no competing helpers):
+
+```text
+register(locale, catalog, meta?)      additive; duplicate locales rejected
+                                      without {replace:true}; nested objects
+                                      flatten to dotted keys; plural entries
+                                      are {zero?,one,two?,few?,many?,other}
+setLocale(locale) -> bool             activates + persists + emits LocaleChanged
+getLocale()/getFallbackLocale()       'en' is THE fallback
+availableLocales(includeDev?)         dev/pseudo locales hidden by default
+t(key, vars?)                         lookup -> interpolate -> plural-select
+has(key, locale?)
+contentName(kind, ref)                registry-resolved display name
+contentDescription(kind, ref) -> string|null
+contentKey(kind, ref, field)
+validate() -> {ok, errors, warnings}  structure + cross-locale parity
+missing() -> [{key, locale}]          unique lookup misses
+stats() / clearDiagnostics()
+restore()                             apply persisted preference once per boot
+```
+
+Key shapes: `ui.*`, `progress.*`, `event.*`, `feedback.*`, `prefix.*`,
+`app.title`, and content keys `<kind>.<ns>.<name>.name|.description|.title`
+plus `npc.<ns>.<name>.dialogue.*` pools. Keys derive from REGISTRY stable ids,
+never from translated text.
+
+Fallback semantics: active -> fallback -> literal `[key]` placeholder +
+warn-once diagnostic; never empty, never `'undefined'`. Interpolation uses
+`{name}` placeholders; a MISSING variable stays literal in output and is
+reported. Plural selection uses Intl.PluralRules when available with a
+deterministic one/other fallback.
+
+### Identity/display separation (hard invariant)
+
+Registry stable ids (`core:iron_sword`), dense indexes, legacy numeric/string
+aliases, save keys, flags, command/event names are machine values and NEVER
+localized or derived from translations. Legacy English `def.name` fields stay
+frozen as identity metadata (the registry mints stable ids from them);
+presentation resolves through `TC.Localization.contentName`. The baseline
+snapshot (`tests/fixtures/registry-baseline-w20.json`: fingerprint `bdad6cfa`,
+368 stable ids) is enforced by `tools/check-i18n.js` AND
+`tests/core/localization-identity.test.js` — a deliberate identity migration
+must refresh both explicitly.
+
+### Locale persistence (settings.js, W20)
+
+`TC.Settings` owns ONE localStorage envelope (`tc_settings_v1`:
+`{v:1,values:{...}}`) for user preferences that must never ride world/character
+saves. Locale choice lives there; corrupt payloads degrade to warn-once
+in-memory storage; unknown fields are preserved; an unavailable stored locale
+falls back for the session WITHOUT deleting the stored choice. Deleting,
+saving, importing or exporting worlds cannot touch it.
+
+### NPC/dialogue identity fix
+
+`UI.showDialog(npcType, lineKey)` carries the STABLE npc type plus a catalog
+KEY. Shop resolution matches `n.type === dialog.npcType`; localized display
+names never decide shop ownership, stock, prices or progression gates.
+Dialogue pools hold key arrays so deterministic cycling picks the same entry
+index in every locale.
+
+### Pseudo-locale stress mode
+
+`en-XA` (deterministic accent mapping + vowel doubling ~+35% length, optional
+wrap markers) registers ONLY under `location.hash === '#test'`. It derives
+from the fallback at render time and exists for layout stress in tests —
+never offered to players as a language.
+
+### Canvas layout hardening shipped with W20
+
+Inventory action buttons size via measureText (no fixed per-char guess); craft
+rows and shop rows ellipsize before fixed right columns; the craftable/all
+toggle keeps a fixed rect (stable hit target). Dialog text wraps via existing
+measureText wrapping.
+
+### Save impact
+
+None to world/character formats. New persistence is the separate
+`tc_settings_v1` settings envelope. `tc_save_v1`/`v2` semantics untouched;
+existing saves load unchanged.
+
+### Validation gate
+
+`npm run check:i18n` (wired into `npm run validate`) boots the real headless
+game and enforces: catalog validity, display names for all user-visible
+registry entries, npc dialogue/nameKey resolution, registry fingerprint +
+stable-id equality with the baseline snapshot. Tests:
+`tests/core/localization*.test.js` (service, coverage, identity blocker,
+persistence, determinism, npc identity) and browser
+`journey-k-localization.spec.js` (switch, stress layout metrics, real-reload
+persistence of locale AND world, fallback return).
+
+### Known limitations (deferred)
+
+- No real secondary-language catalog is authored yet; adding
+  `js/locales/<id>.js` requires zero engine changes (register + restore).
+- RTL and complex-script typography are out of scope; the rendering path uses
+  system font stacks + measureText (never byte-count truncation), but no
+  bidi/shaping work has been done.
+- Coin purse notation (`1g 23s 45c`) remains a compact unit format rather
+  than a word-order-sensitive template.
+- Translator workflow/export tooling does not exist yet.

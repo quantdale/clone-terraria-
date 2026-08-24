@@ -22,12 +22,12 @@ DONE      acceptance criteria proven
 
 ---
 
-# Status snapshot (authoritative, W19 truth-sync)
+# Status snapshot (authoritative, W20 truth-sync)
 
-Reconciled against the implementation on the W19 Underworld Spawn Truth-Sync
-checkpoint. Consult docs/ARCHITECTURE.md §19 (capability matrix), §23 (W19
-contracts), §22 (W18 runtime contracts) and §21 (W17 contracts) for per-module
-ownership detail.
+Reconciled against the implementation on the W20 Localization campaign
+checkpoint. Consult docs/ARCHITECTURE.md §19 (capability matrix), §24 (W20
+localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
+§21 (W17 contracts) for per-module ownership detail.
 
 | Area | Tasks | Status |
 |---|---|---|
@@ -43,14 +43,20 @@ ownership detail.
 | Combat & progression | COM-001..COM-007 | DONE (canonical resolveHit, generic statuses, enemy defs/AI/spawn split, LootTables, Progression conditions+graph, Storm Jelly vertical arc, **W17 Wall of Flesh production gateway**, **W19 underworld spawn truth-sync**: depth-first `zoneOf` classification, shared `TC.Biomes.underworldTopPx/isUnderworldAt` boundary, declarative post-Wall ember_wraith entry) |
 | Inventory/crafting | INV-001/002, CRF-001/002 | DONE (progression-aware recipe conditions included; craft clicks route through CraftRecipe transactions) |
 | NPCs/towns | NPC-001..NPC-004 | DONE (housing, shops, context dialog; condition-gated unlocks/stock) |
-| Localization | LOC-001..LOC-003 | TODO |
+| Localization | LOC-001..LOC-003 | DONE (W20: canonical `TC.Localization` runtime + `TC.Settings` preference store; English fallback catalog covers all displayable content/UI/dialogue; registry identity frozen and regression-guarded; pseudo-locale stress mode; full headless + browser coverage; see ARCHITECTURE.md §24). Actual additional-language catalogs remain TODO (LOC follow-ups below) |
 | Rendering/lighting/audio depth | VIS/LGT/ART/AUD epics | LGT-002 done (dynamic lights); rest TODO/P2 |
 | Performance | PERF-001 | DONE (TC.Debug instrumentation + F3 overlay); PERF-002 partially covered by `tools/bench-runtime.js` fixed-step benchmark; PERF-003..005 TODO |
 | Multiplayer | NET-001..004 | TODO (P2; W18 delivered the NET-001 precondition: headless simulation via TC.Runtime — full runner/networking still TODO) |
 | Extensibility/mods | MOD-001..004 | TODO |
 
-### Newly discovered follow-ups (updated W19)
+### Newly discovered follow-ups (updated W20)
 
+- **Localization follow-ups (LOC epic closed, translation work open):**
+  authoring real secondary-language catalogs (`js/locales/<id>.js` — the
+  engine, validator and tests accept them with zero code changes);
+  translator workflow/export format; RTL layout pass; complex-script font
+  coverage beyond the system stack. The `en-XA` pseudo locale stays the
+  layout-stress tool for future surfaces.
 - W19 closed both known browser-journey flakes and hardened two more
   latent observation races surfaced by full-gate reruns: `journey-i` keeps
   the fighter alive through real-time boss-damage/pickup windows and chases
@@ -68,8 +74,9 @@ ownership detail.
 - UI cursor-stack drag/drop and bulk helpers (sort/quick stack/split) remain
   presentation-layer inventory rearrangements with conservation covered by Inventory
   invariants; converting them to MoveItem batches is optional future work.
-- Localization remains the largest untouched epic; new user-visible strings
-  added by W17–W19 are few but will need keys once LOC-001 lands.
+- ~~Localization remains the largest untouched epic~~ Closed by W20 (see
+  ARCHITECTURE.md §24); new user-visible strings MUST ship with catalog keys
+  (AGENTS.md localization rules) or `npm run check:i18n` fails the gate.
 
 ---
 
@@ -781,23 +788,43 @@ This is the vertical proof before adding many town NPCs.
 
 **Priority:** P1  
 **Depends on:** FND-003  
-**Effort:** Medium
+**Effort:** Medium  
+**Status:** DONE (W20)
+
+`TC.Localization` (js/localization.js) is the single authority: additive
+locale registration, English fallback with visible placeholders + warn-once
+diagnostics, `{name}` interpolation, Intl.PluralRules plural selection,
+catalog validation, missing-key reporting, pseudo-locale stress mode.
+Preferences persist via `TC.Settings` (js/settings.js), outside world saves.
 
 ---
 
 ## LOC-002 — Migrate core UI strings
 
-**Priority:** P1  
 **Depends on:** LOC-001  
-**Effort:** Medium
+**Effort:** Medium  
+**Status:** DONE (W20)
+
+All normal canvas surfaces render through the catalog: menus, HUD labels,
+inventory/chest/equipment/crafting panels, tooltips, shop + buy/sell
+feedback, death/respawn, boss bar, NPC dialog, progression announcements,
+minimap biome label. Buttons size by measureText; fixed columns ellipsize.
 
 ---
 
 ## LOC-003 — Migrate content names/descriptions/dialogue
 
-**Priority:** P1  
 **Depends on:** LOC-001, registries  
-**Effort:** High/parallelizable
+**Effort:** High/parallelizable  
+**Status:** DONE (W20)
+
+Every displayable tile/wall/item/enemy/npc/buff/biome/station resolves a
+catalog name via `contentName(kind, ref)` through the registry; Guide and
+Merchant dialogue pools hold catalog keys (deterministic cycling preserved);
+player-facing feedback (summon rejection, mana/potion, fishing, life
+crystals, Blood Moon, boss banners) uses parameterized templates. Registry
+identity (`bdad6cfa`, 368 stable ids) proven unchanged by
+`tools/check-i18n.js` + `tests/core/localization-identity.test.js`.
 
 ---
 

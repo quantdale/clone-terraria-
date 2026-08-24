@@ -82,6 +82,12 @@ npm run validate    # syntax + tests + build + build-verify + browser suite
   breakable pots, life crystals, chest loot, minimap, generative soundtrack that follows
   biome/boss mood, synthesized SFX, deterministic headless test infrastructure
   (node:test + Playwright) and a reproducible release build.
+- Localization-ready presentation (W20): every menu/panel/tooltip/dialogue/announcement
+  renders through the canonical `TC.Localization` catalog (`js/locales/en.js` is the
+  English fallback) with interpolation + plural rules; locale preference persists
+  outside game saves; an `en-XA` pseudo-locale stress mode exists for developers under
+  `#test`. Additional languages ship as plain `js/locales/<id>.js` catalogs with no
+  engine changes.
 
 See `docs/ARCHITECTURE.md` for the module/capability matrix and contracts, and
 `docs/TASK_BOARD.md` for current implementation status.
@@ -135,6 +141,9 @@ js/minimap.js         toggleable minimap
 js/ui.js              HUD, inventory/crafting/shop panels, menus, toasts
 js/wiring.js          wire tiles + mechanisms
 js/debug.js           instrumentation + #test hooks
+js/settings.js        user-preference store (locale choice; outside saves)
+js/localization.js    canonical translation runtime
+js/locales/en.js      English fallback catalog (all display text)
 tests/                node:test suites + Playwright journeys
 tools/                dev server, release build, verification scripts
 docs/                 architecture contract, task board, parity analysis
