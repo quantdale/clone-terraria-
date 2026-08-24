@@ -93,6 +93,30 @@
       unlocks: null,
       home: { spanTiles: DEFAULT_SPAN_TILES },
       shop: null,
+      // W15: progression-aware hints — first entry whose `requires` passes
+      // wins over the base cycle, so advice follows the player's milestones.
+      dialogFlags: [
+        {
+          requires: { boss: 'moss_mother' },
+          lines: [
+            'A Verdant Core still hums in your bag. A workbench weaves it into a fine cloak.',
+            'You have felled storm and spore both. The deep caves hold gleam for a blade to outlast them.'
+          ]
+        },
+        {
+          requires: { boss: 'storm_jelly' },
+          lines: [
+            'Storm Cores ring like bells. An anvil and silver forge them into a Storm Blade.',
+            'With the skies settled, the Merchant now stocks a Gemshot Hook - reach without ropes.'
+          ]
+        },
+        {
+          requires: { all: [{ biome: 'snow' }, { biome: 'desert' }] },
+          lines: [
+            'Frost and dune both bow to a silver pick. Smelt what you mine.'
+          ]
+        }
+      ],
       look: { hair: '#b9bdc9', robe: '#3f8f46', robeTrim: '#2e6e35', sleeve: '#357a3c' }
     },
     merchant: {
@@ -149,6 +173,7 @@
         { itemId: 'stone', price: 1 },
         { itemId: 'arrow', price: 1 },
         { itemId: 'iron_bar', price: 12 },
+        { itemId: 'silver_bar', price: 20 },
         { itemId: 'gold_bar', price: 30 },
         { itemId: 'bucket', price: 25 },
         { itemId: 'regen_potion', price: 15 },
@@ -160,7 +185,11 @@
         { itemId: 'guard_ring', price: 250,
           requires: 'boss.eye_of_void.defeated' },
         { itemId: 'vital_amulet', price: 300,
-          requires: 'boss.king_slime.defeated' }
+          requires: 'boss.king_slime.defeated' },
+        // W15 slice: post-Storm-Jelly purchase with the shared condition
+        // grammar - an alternative to hand-forging the hook.
+        { itemId: 'hook_gemshot', price: 400,
+          requires: { boss: 'storm_jelly' } }
       ],
       look: { hair: '#5a4632', robe: '#8a5a2b', robeTrim: '#6a441f', sleeve: '#7a4e24' }
     }
@@ -477,8 +506,21 @@
   }
 
   // Choose the pool for this moment: {pool, key}.
+  // Priority: progression-gated pools (first matching def.dialogFlags entry,
+  // W15) > night > biome > base cycle.
   function pickPool(def) {
     if (!def) return { pool: ['...'], key: 'base' };
+    if (Array.isArray(def.dialogFlags)) {
+      for (let i = 0; i < def.dialogFlags.length; i++) {
+        const entry = def.dialogFlags[i];
+        if (!entry || !Array.isArray(entry.lines) || !entry.lines.length) continue;
+        let ok = false;
+        if (TC.Progression && typeof TC.Progression.test === 'function') {
+          try { ok = !!TC.Progression.test(entry.requires); } catch (e) { ok = false; }
+        }
+        if (ok) return { pool: entry.lines, key: 'flag:' + i };
+      }
+    }
     if (isNight() && Array.isArray(def.dialogNight) && def.dialogNight.length) {
       return { pool: def.dialogNight, key: 'night' };
     }

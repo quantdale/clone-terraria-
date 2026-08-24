@@ -88,12 +88,21 @@
 
   function has(key) { return validKey(key) && flags.has(key); }
 
+  // Live lookup through the public export so instrumentation/stubs of
+  // TC.Progression.has stay honored (and headless tests can intercept).
+  function hasLive(key) {
+    if (TC.Progression && typeof TC.Progression.has === 'function') {
+      try { return !!TC.Progression.has(key); } catch (e) { return false; }
+    }
+    return has(key);
+  }
+
   // ---- declarative condition grammar (W14) -------------------------------
   // Pure, side-effect free, deterministic. Unknown shapes fail closed.
   function test(cond) {
     if (cond == null) return true;
     if (typeof cond === 'boolean') return cond;
-    if (typeof cond === 'string') return has(cond);
+    if (typeof cond === 'string') return hasLive(cond);
     if (Array.isArray(cond)) {
       for (let i = 0; i < cond.length; i++) {
         if (!test(cond[i])) return false;
@@ -109,13 +118,13 @@
         return false;
       }
       if ('not' in cond) return !test(cond.not);
-      if (typeof cond.flag === 'string') return has(cond.flag);
-      if (typeof cond.boss === 'string') return has('boss.' + cond.boss + '.defeated');
-      if (typeof cond.event === 'string') return has('event.' + cond.event + '.completed');
+      if (typeof cond.flag === 'string') return hasLive(cond.flag);
+      if (typeof cond.boss === 'string') return hasLive('boss.' + cond.boss + '.defeated');
+      if (typeof cond.event === 'string') return hasLive('event.' + cond.event + '.completed');
       if (typeof cond.biome === 'string') {
         const k = 'biome.' +
           cond.biome.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '.discovered';
-        return has(k);
+        return hasLive(k);
       }
     }
     return false; // unknown shape: fail closed

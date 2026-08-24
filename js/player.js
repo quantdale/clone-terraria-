@@ -1297,7 +1297,12 @@
       sfx("pickup");
     }
 
-    // Summon items (kind 'summon'): wake the boss at night, one charge per use.
+    // Summon items (kind 'summon'): wake the boss at night. W15 contract:
+    //   - understandable requirements, useful feedback when blocked;
+    //   - the item is consumed ONLY when something actually happened
+    //     (boss spawned or event started) — never on a failed attempt;
+    //   - duplicate bosses are impossible (spawnBoss enforces MAX_BOSSES).
+    // An optional def.condition (W14 grammar) gates summons declaratively.
     doSummon(def, itemId) {
       if (this.swing && this.swing.item === def) return; // waiting on useTime
       if (!def.boss) return;
@@ -1305,12 +1310,12 @@
       const cx = this.x + this.w / 2;
       const dl =
         TC.Sky && typeof TC.Sky.daylight === "function" ? TC.Sky.daylight() : 1;
-      if (dl >= 0.5) {
-        // night only; nothing consumed
+      const nm = def.name || "charm";
+      const reject = (msg) => {
         pText(
           cx,
           this.y - 6,
-          "The eye only stirs at night...",
+          msg,
           (CONST.COLORS && CONST.COLORS.crit) || "#ff5a48",
         );
         this.swing = {
@@ -1322,9 +1327,25 @@
           bow: false,
           id: ++this.swingSeq,
         };
+      };
+      if (dl >= 0.5) {
+        reject("The " + nm + " only stirs at night...");
         return;
       }
-      if (!consumeFromSlot(this.inventory, this.hotbarIndex, itemId, 1)) return;
+      if (
+        def.condition != null &&
+        TC.Progression &&
+        typeof TC.Progression.test === "function"
+      ) {
+        let ok = false;
+        try {
+          ok = TC.Progression.test(def.condition);
+        } catch (e) {}
+        if (!ok) {
+          reject("The " + nm + " lies silent... its moment has not come.");
+          return;
+        }
+      }
       const TS = CONST.TS;
       let bx2 = cx,
         by2 = this.y + this.h / 2 - 400; // boss enters above the player
@@ -1336,14 +1357,18 @@
         bx2 = Math.min(Math.max(bx2, lo), hiX);
         by2 = Math.min(Math.max(by2, lo), hiY);
       }
+      const isEventStart = def.boss === "__blood_moon__";
+      let spawned = null;
       try {
-        TC.Enemies.spawnBoss(def.boss, bx2, by2);
+        spawned = TC.Enemies.spawnBoss(def.boss, bx2, by2);
       } catch (e) {}
-      if (TC.UI && typeof TC.UI.toast === "function") {
-        try {
-          TC.UI.toast("Eye of the Void has awoken!");
-        } catch (e) {}
+      // spawnBoss toasts '<name> has awoken!' itself; a null return means
+      // MAX_BOSSES is full — nothing happened, nothing is consumed.
+      if (!spawned && !isEventStart) {
+        reject("A boss already stalks this world...");
+        return;
       }
+      if (!consumeFromSlot(this.inventory, this.hotbarIndex, itemId, 1)) return;
       sfx("die");
       this.swing = {
         item: def,

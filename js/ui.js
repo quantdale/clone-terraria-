@@ -312,6 +312,11 @@
           toast('Discovered: ' + nm + '.');
         }
       });
+      // W15: rare town milestone — a new neighbor only announces once.
+      TC.Events.on(TC.Events.EVENT.NpcMovedIn, function (p) {
+        const nm = p && p.name;
+        if (nm) toast(nm + ' has moved in!');
+      });
     } catch (e) { /* listener errors are isolated by the bus */ }
   }
 
