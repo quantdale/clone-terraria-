@@ -30,7 +30,8 @@
     WorldProgressChanged: 'WorldProgressChanged',
     NpcMovedIn: 'NpcMovedIn',
     WirePulse: 'WirePulse',
-    DayChanged: 'DayChanged'
+    DayChanged: 'DayChanged',
+    LocaleChanged: 'LocaleChanged'   // W20: presentation-only locale switch
   });
 
   // Bucket key -> array of entries in registration order (arrays give deterministic order).
