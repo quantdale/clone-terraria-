@@ -458,3 +458,66 @@ See `docs/TASK_BOARD.md` status column. Highlights: Wall of Flesh fight remains 
 stub-quality frontier boss; localization layer absent (English strings inline);
 render layers registered but main.js still draws via direct calls; command phase not
 yet wired into the live step loop for player actions.
+
+---
+
+## 20. Campaign contracts (W12-W16)
+
+The normative one-liners; module headers carry full detail.
+
+### Combat resolution (combat.js, W12)
+
+`TC.Combat.resolveHit(spec)` is the ONLY damage-math authority: base × class
+statField (player-owned attacks only) × variance → crit (snapshot critChance +
+bonus) → target mitigation policies (`registerMitigation`) → defense (minus flat
+pen; environmental sources fall/void bypass) → floor 1. Inject `spec.rng` for
+deterministic tests. Application happens once in `Enemies.damageEnemy` (final
+damage), which is also the single EntityDamaged/EntityKilled/BossDefeated site.
+Player intake runs the same resolver via `hurtPlayer`; i-frame/dead rejection is
+reported as `result.rejected = 'iframes'` without touching hp.
+
+### Status effects (accessories.js TC.Buffs, W13)
+
+BUFF_DEFS rows are the generic schema: `{id, name, good, dur, stack:'refresh',
+mods, dps, healPerSec, fromSource, fromSourceDur, color, parts, rate}`. No second
+status runtime exists or may be added; combat consults `statusForSource(src)`
+instead of hardcoding effect ids. Serialization stays `[[id, secondsLeft], ...]`
+inside the accessories provider.
+
+### Enemy definition / AI / spawn split (W13)
+
+Adding an enemy = author a def (enemydefs.js data) + pick `def.ai` from
+TC.EnemyAI archetypes (enemyai.js) + optionally a `[type, weight, condition]`
+row in enemyspawn.js zone tables + loot on the def (LootTables schema). Bespoke
+code is the exception, not the pipeline. enemies.js keeps entities/physics/events.
+
+### Loot schema (lootables.js, W13)
+
+Entry `{id, min=1, max=1, chance=1, requires?}`. Coins as `def.coins [min,max]`.
+`roll(table,{rng})` is injectable-rng; `rollEntity(def,cx,cy)` scatters via
+Items/Economy exactly once per death; `validateAll()` walks ENEMY_DEFS at boot
+and warns on unknown ids / chance outside [0,1] / inverted ranges.
+
+### Progression conditions (progression.js, W14)
+
+`test(cond)` accepts null|bool|flag-string|[all-of]|{all|any|not|flag|boss|event|
+biome}; unknown shapes fail closed. Consumers: recipe.requires, NPC unlocks,
+shop stock rows, loot entries, spawn-table entries, summon item def.condition.
+Boss flags are canonical (BOSS_FLAG incl. storm_jelly, moss_mother) and persist
+in systems.core.progression.
+
+### Save impact
+
+No schema version bump: all W12-W16 state rides existing providers (flags array
+shape unchanged, statuses unchanged). v1 blobs keep loading via restoreLegacy.
+
+### Test coverage added
+
+resolver.test.js, status.test.js, lootables.test.js, enemy-archetypes.test.js,
+conditions.test.js, summon.test.js, journey-i-progression.spec.js (full arc).
+
+### Remaining limitations
+
+Wall of Flesh is still a frontier stub; localization absent; render-layer dual
+path with direct draw calls remains; command transactions not yet wired to live
+player input.

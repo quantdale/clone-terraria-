@@ -58,10 +58,12 @@ test.describe("journey B — core sandbox", () => {
     await H.selectSlot(page, 0); // copper pickaxe (starter kit slot 0)
     const target = await firstSolidBelow(page);
     expect(target, "need a minable solid tile below").toBeTruthy();
-    await H.aimAt(page, target.tx, target.ty);
     await page.mouse.down();
     let broken = false;
     for (let i = 0; i < 100 && !broken; i++) {
+      // re-aim every pass: camera follows the player, so a knockback or a
+      // settle step can drift the tile off the original screen point
+      await H.aimAt(page, target.tx, target.ty);
       await H.runFrames(page, 6);
       broken = await page.evaluate(
         ([tx, ty]) => window.TC.world.get(tx, ty) === window.TC.TILE.AIR,
