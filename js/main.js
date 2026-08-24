@@ -193,6 +193,26 @@
     TC.Systems.register('input', 'ui', {
       update: function (dt) { if (TC.UI) TC.UI.update(dt); }
     });
+    // input — player intent creation MUST precede the commands drain in the
+    // same tick: click-edge consumers (e.g. fishing) sample input in later
+    // phases, so a deferred dispatch would lose the press edge. This keeps
+    // held-use cadence driven by fixed steps, never display frames.
+    TC.Systems.register('input', 'player-intent', {
+      update: function () {
+        const p = TC.player, inp = TC.Input;
+        if (!p || typeof p.enqueueUseIntent !== 'function') return;
+        const held = !!(inp && inp.mouse && inp.mouse.down);
+        if (!held || TC.state !== 'playing' || (inp && inp.uiHover)) {
+          p.mineTarget = null;
+          return;
+        }
+        p.enqueueUseIntent(inp.mouse, 1 / 60);
+        // discrete RMB interaction rides the same same-tick pipeline
+        if (inp.mouse.rightClicked && !p.dead && typeof p.requestInteract === 'function') {
+          p.requestInteract(inp.mouse);
+        }
+      }
+    }, { when: function () { return TC.state === 'playing'; } });
 
     // environment — day/night before anything consumes daylight.
     TC.Systems.register('environment', 'sky', {
@@ -206,7 +226,7 @@
       update: function (dt) { if (TC.Grapple && TC.Grapple.preUpdate) TC.Grapple.preUpdate(dt); }
     }, { when: simGate, before: ['player'] });
     TC.Systems.register('movement', 'player', {
-      update: function (dt) { if (TC.player) TC.player.update(dt); }
+      update: function (dt) { if (TC.player) { TC.player.mining = false; TC.player.update(dt); } }
     }, { when: simGate });
     TC.Systems.register('movement', 'grapple-post', {
       update: function (dt) { if (TC.Grapple && TC.Grapple.postUpdate) TC.Grapple.postUpdate(dt); }

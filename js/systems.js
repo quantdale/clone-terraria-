@@ -345,6 +345,7 @@
       ctx.save();
       try {
         e.fn(ctx, arg);
+        e.calls = (e.calls || 0) + 1;   // production-dispatch observability
       } catch (err) {
         e.errors++;
         if (e.errors <= 3) console.error('[TC.RenderLayers] draw ' + layer + '/' + e.name + ':', err);
@@ -404,7 +405,8 @@
     const out = [];
     for (const layer of LAYERS) {
       for (const e of drawers.get(layer).values()) {
-        out.push({ layer: e.layer, name: e.name, space: worldSet.has(layer) ? 'world' : 'screen', errors: e.errors });
+        out.push({ layer: e.layer, name: e.name, space: worldSet.has(layer) ? 'world' : 'screen',
+                   calls: e.calls || 0, errors: e.errors });
       }
     }
     return out;

@@ -137,6 +137,15 @@
     const liq = guardedCall('Liquids', 'stats');
     if (liq) lines.push('liquids cells ' + (liq.cells | 0) + ' active ' + (liq.active | 0));
 
+    // Runtime-authority observability: tick number, scheduler phase, command
+    // queue depth and lifetime processed/rejected counts.
+    const rt = guardedCall('Runtime', 'getState');
+    if (rt) {
+      lines.push('tick ' + rt.tickCount + ' phase ' + (rt.currentPhase || 'idle') +
+                 ' cmds ' + (rt.pendingCommands | 0) + '/' + (rt.commandsProcessed | 0) +
+                 ' rej ' + (rt.commandsRejected | 0));
+    }
+
     const proj = guardedCall('Projectiles', 'activeCount');
     if (proj != null) lines.push('projectiles ' + (proj | 0));
 
@@ -281,6 +290,14 @@
     return false;
   }
 
+  // Read-only runtime authority snapshot for browser regression proofs:
+  // scheduler registrations, per-tick execution counts, render-layer dispatch
+  // counters, command queue state. No mutable production cheats here.
+  function getRuntimeState() {
+    try { return (TC.Runtime && typeof TC.Runtime.getState === 'function') ? TC.Runtime.getState() : null; }
+    catch (e) { return null; }
+  }
+
   if (testMode()) {
     // loadFixture deliberately absent — no fixture system exists yet; harnesses
     // must feature-detect ('loadFixture' in window.__TEST__ === false).
@@ -292,7 +309,8 @@
       getStateSnapshot: getStateSnapshot,
       saveNow: saveNow,
       getWofEncounter: getWofEncounter,
-      setWofHp: setWofHp
+      setWofHp: setWofHp,
+      getRuntimeState: getRuntimeState
     };
   }
 

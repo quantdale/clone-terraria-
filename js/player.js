@@ -682,36 +682,11 @@
         this.damage(9999, 0, 0, "void");
       }
 
-      // actions — held intent is expressed as a UseItem command and executed
-      // by the canonical transaction in the scheduler's commands phase (one
-      // enqueue per fixed step; cadence/cooldowns live in the command + player
-      // timers, never at display-frame rate).
+      // actions — held-use and right-click intents are created by the
+      // scheduler's input phase ('player-intent', main.js) and executed by
+      // the canonical transactions in the same tick's commands phase; the
+      // player body only keeps presentation state fresh.
       this.mining = false;
-      let held = false;
-      if (
-        inp &&
-        inp.mouse &&
-        inp.mouse.down &&
-        !inp.uiHover &&
-        TC.state === "playing"
-      ) {
-        held = true;
-        this.enqueueUseIntent(inp.mouse, dt);
-      }
-      if (!held) this.mineTarget = null;
-
-      // independent right-click interaction (doors/chests/devices) routed
-      // through the InteractTile transaction; never swings.
-      if (
-        inp &&
-        inp.mouse &&
-        inp.mouse.rightClicked &&
-        !inp.uiHover &&
-        TC.state === "playing" &&
-        !this.dead
-      ) {
-        this.requestInteract(inp.mouse);
-      }
 
       this.advanceSwing(dt);
 
