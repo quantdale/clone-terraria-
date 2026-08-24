@@ -12,6 +12,22 @@
      TC.Commands.names() -> string[]
      TC.Commands.submit(name, ctx) -> {ok:true,result}|{ok:false,error}
 
+   Queue (deterministic FIFO intake — drained once per tick by the scheduler's
+   'commands' phase; see runtime.js):
+     TC.Commands.enqueue(name, ctx)  -> {queued:true} | {queued:false,error}
+     TC.Commands.drain()             -> results[] for this batch
+     TC.Commands.pending()           -> number of queued commands
+     TC.Commands.clearQueue()        -> dropped count (world teardown)
+     TC.Commands.stats()             -> {processed,rejected,dropped,maxDepth}
+
+   Queue contract:
+     - FIFO order is preserved exactly;
+     - a command enqueued DURING a drain executes in the NEXT tick's drain
+       (snapshot semantics — no unbounded same-tick recursion);
+     - the queue is bounded (MAX_QUEUE); overflow drops newest and counts it;
+     - clearQueue() runs on every world transition (WorldLoaded) so queued
+       commands can never leak across worlds.
+
    Predefined vocabulary (? marks optional fields):
      MineTile     {tx,ty,toolPower,tool?,player?,dt?}
      MineWall     {tx,ty,toolPower,tool?,player?,dt?}
@@ -670,59 +686,151 @@
     const m = synthMouse(c, p);
     const dt = dtOf(c);
 
+    // Continuous integration hooks first (legacy useHeld order): grapple,
+    // thrown gear, buckets, crystals/pots, fishing, potions/accessories.
+    // These own their own cadence/cooldowns and report whether they consumed
+    // the press; they remain simulation behaviors, not transactions.
+    const HOOKS = [
+      ['grapple', TC.Grapple], ['gear', TC.Gear], ['liquids', TC.Liquids],
+      ['loot', TC.Loot], ['fishing', TC.Fishing], ['accessories', TC.Accessories]
+    ];
+    for (let i = 0; i < HOOKS.length; i++) {
+      const mod = HOOKS[i][1];
+      if (mod && typeof mod.onUseHeld === 'function') {
+        let took = false;
+        try { took = !!mod.onUseHeld(p, def, dt); } catch (e) { took = false; }
+        if (took) { p.mineTarget = null; return { used: true, action: HOOKS[i][0] }; }
+      }
+    }
+
     switch (def.kind) {
       case 'tool': {
-        // Mirror doMine: try the tile, fall back to the wall behind it.
+        // Mirror doMine: hammers reshape, tools try the tile, picks fall back
+        // to the wall behind it. Swing/dig feedback rides the player's own
+        // cadence fields so animation + audio match the live path exactly.
         const tx = Math.floor(m.worldX / TS), ty = Math.floor(m.worldY / TS);
+        const w = getWorld();
+        if (def.tool === 'hammer' && w && typeof w.canShape === 'function' &&
+            typeof w.hammer === 'function' && w.canShape(tx, ty)) {
+          p.mineTarget = null;
+          p.mining = true;
+          if (typeof p.startSwing === 'function') p.startSwing(def, true);
+          p.mineTick -= dt;
+          if (p.mineTick <= 0) {
+            p.mineTick = 0.2;
+            sfx('dig');
+            const tcx2 = (tx + 0.5) * TS, tcy2 = (ty + 0.5) * TS;
+            pBurst(tcx2, tcy2, 3, ['#c8c8cf', '#8f8f98'], 70);
+            let changed = false;
+            try { changed = !!w.hammer(tx, ty); } catch (e) {}
+            if (changed) pBurst(tcx2, tcy2, 2, ['#ffffff'], 40);
+          }
+          return { used: true, action: 'hammer' };
+        }
         const sub = { tx: tx, ty: ty, toolPower: def.power, tool: def.tool, player: p, dt: dt };
         const tileTry = submit('MineTile', sub);
-        if (tileTry.ok) return { used: true, action: 'mine', mine: tileTry.result };
+        if (tileTry.ok) {
+          const r = tileTry.result || {};
+          p.mining = true;
+          if (typeof p.startSwing === 'function') p.startSwing(def, true);
+          if (!r.broken) {
+            if (!p.mineTarget || p.mineTarget.tx !== tx || p.mineTarget.ty !== ty) {
+              p.mineTarget = { tx: tx, ty: ty, progress: 0 };
+              p.mineTick = 0;
+            }
+            p.mineTick -= dt;
+            if (p.mineTick <= 0) {
+              p.mineTick = 0.2;
+              sfx('dig');
+              pBurst((tx + 0.5) * TS, (ty + 0.5) * TS, 3, tDef(r.tile || 0) ? (tDef(r.tile).colors || []) : [], 70);
+            }
+          } else {
+            p.mineTarget = null;
+            p.mineTick = 0;
+          }
+          return { used: true, action: 'mine', mine: tileTry.result };
+        }
         if (def.tool === 'pick') {
           const wallTry = submit('MineWall', sub);
-          if (wallTry.ok) return { used: true, action: 'mine-wall', mine: wallTry.result };
+          if (wallTry.ok) {
+            const r = wallTry.result || {};
+            p.mining = true;
+            if (typeof p.startSwing === 'function') p.startSwing(def, true);
+            if (!r.broken) {
+              if (!p.mineTarget || p.mineTarget.tx !== tx || p.mineTarget.ty !== ty) {
+                p.mineTarget = { tx: tx, ty: ty, progress: 0 };
+                p.mineTick = 0;
+              }
+              p.mineTick -= dt;
+              if (p.mineTick <= 0) {
+                p.mineTick = 0.2;
+                sfx('dig');
+                const wd = TC.WALL_DEFS ? TC.WALL_DEFS[r.wall] : null;
+                pBurst((tx + 0.5) * TS, (ty + 0.5) * TS, 3, wd ? [wd.color] : [], 70);
+              }
+            } else {
+              p.mineTarget = null;
+              p.mineTick = 0;
+            }
+            return { used: true, action: 'mine-wall', mine: wallTry.result };
+          }
           if (wallTry.error !== 'not-minable' && wallTry.error !== 'no-wall' &&
               wallTry.error !== 'tile-in-way') {
+            p.mineTarget = null;
             return { used: false, reason: wallTry.error };
           }
         }
+        p.mineTarget = null;
         return { used: false, reason: tileTry.error };
       }
       case 'block': {
+        p.mineTarget = null;
+        // Actuators attach to a host tile instead of placing (legacy doPlace).
+        if (stack.id === 'actuator' && TC.Wiring && typeof TC.Wiring.attachActuatorAt === 'function') {
+          try { TC.Wiring.attachActuatorAt(p, m); } catch (e) {}
+          return { used: true, action: 'actuator' };
+        }
         const tx = Math.floor(m.worldX / TS), ty = Math.floor(m.worldY / TS);
         const r = submit('PlaceTile', { tx: tx, ty: ty, item: stack.id, player: p, slot: slot });
         return r.ok ? { used: true, action: 'place', place: r.result }
                     : { used: false, reason: r.error };
       }
       case 'armor':
-        return submit('EquipItem', { player: p, item: stack.id, slot: slot }).ok
-          ? { used: true, action: 'equip' }
-          : { used: false, reason: 'equip-failed' };
+        p.mineTarget = null;
+        {
+          const er = submit('EquipItem', { player: p, item: stack.id, slot: slot });
+          return er.ok ? { used: true, action: 'equip' }
+                       : { used: false, reason: er.error || 'equip-failed' };
+        }
       case 'weapon':
+        p.mineTarget = null;
         if (typeof p.doMelee !== 'function') return { used: false, reason: 'player-cannot-melee' };
+        if (p.swing && p.swing.item === def) return { used: false, reason: 'cooldown' };   // mid-swing
         p.doMelee(def);
         return { used: true, action: 'melee' };
       case 'ranged':
+        p.mineTarget = null;
         if (typeof p.doBow !== 'function') return { used: false, reason: 'player-cannot-shoot' };
         p.doBow(def, m);
         return { used: true, action: 'bow' };
       case 'summon':
+        p.mineTarget = null;
         if (typeof p.doSummon !== 'function') return { used: false, reason: 'player-cannot-summon' };
         p.doSummon(def, stack.id);
         return { used: true, action: 'summon' };
       case 'crystal': {
-        // Consumables handled by loot.js ride on useHeld, which reads the
-        // selected slot; borrow it for the duration of the call.
-        if (typeof p.useHeld !== 'function') return { used: false, reason: 'player-cannot-use' };
-        const prev = p.hotbarIndex;
-        try {
-          p.hotbarIndex = slot;
-          p.useHeld(dt);
-        } finally {
-          p.hotbarIndex = prev;
+        // Life crystals ride loot.js's hook directly — no recursion into the
+        // legacy player.useHeld switch.
+        p.mineTarget = null;
+        if (TC.Loot && typeof TC.Loot.onUseHeld === 'function') {
+          let took = false;
+          try { took = !!TC.Loot.onUseHeld(p, def, dt); } catch (e) {}
+          return took ? { used: true, action: 'crystal' } : { used: false, reason: 'crystal-refused' };
         }
-        return { used: true, action: 'crystal' };
+        return { used: false, reason: 'no-loot-module' };
       }
       default:
+        p.mineTarget = null;
         return { used: false, reason: 'inert' };   // materials etc.: no use action
     }
   }
@@ -838,6 +946,70 @@
   // Registration
   // ======================================================================
 
+  // =====================================================================
+  // Command queue — deterministic FIFO intake drained by the scheduler's
+  // 'commands' phase (runtime.js calls drain() once per fixed tick).
+  // Snapshot semantics: commands enqueued during a drain wait for the next
+  // tick. Bounded: overflow drops the newest command and counts it.
+  // =====================================================================
+
+  const MAX_QUEUE = 256;
+  let queue = [];
+  let draining = false;
+  const qstats = { processed: 0, rejected: 0, dropped: 0, maxDepth: 0 };
+
+  function enqueue(name, ctx) {
+    if (typeof name !== 'string' || !registry.has(name)) {
+      return { queued: false, error: 'unknown-command:' + name };
+    }
+    if (queue.length >= MAX_QUEUE) {
+      qstats.dropped++;
+      return { queued: false, error: 'queue-full' };
+    }
+    queue.push({ name: name, ctx: (ctx && typeof ctx === 'object') ? ctx : {} });
+    if (queue.length > qstats.maxDepth) qstats.maxDepth = queue.length;
+    return { queued: true };
+  }
+
+  // Drain the current batch in FIFO order. Commands enqueued while draining
+  // are left in `queue` for the NEXT tick (snapshot taken up front).
+  function drain() {
+    if (draining) return [];                 // re-entrant guard: never recurse
+    draining = true;
+    const batch = queue;
+    queue = [];
+    const results = new Array(batch.length);
+    for (let i = 0; i < batch.length; i++) {
+      const r = submit(batch[i].name, batch[i].ctx);
+      results[i] = { name: batch[i].name, result: r };
+      if (r && r.ok) {
+        qstats.processed++;
+        if (TC.Runtime && typeof TC.Runtime._incCommandOk === 'function') try { TC.Runtime._incCommandOk(); } catch (e) {}
+      } else {
+        qstats.rejected++;
+        if (TC.Runtime && typeof TC.Runtime._incCommandReject === 'function') try { TC.Runtime._incCommandReject(); } catch (e) {}
+      }
+    }
+    draining = false;
+    return results;
+  }
+
+  function pendingCount() { return queue.length; }
+
+  // World teardown / state transition: drop everything pending. Returns the
+  // number of commands discarded.
+  function clearQueue() {
+    const n = queue.length;
+    queue = [];
+    if (n) qstats.dropped += n;
+    return n;
+  }
+
+  function queueStats() {
+    return { processed: qstats.processed, rejected: qstats.rejected,
+             dropped: qstats.dropped, maxDepth: qstats.maxDepth };
+  }
+
   register('MineTile', { validate: validateMineTile, apply: applyMineTile });
   register('MineWall', { validate: validateMineWall, apply: applyMineWall });
   register('PlaceTile', { validate: validatePlaceTile, apply: applyPlaceTile });
@@ -850,5 +1022,21 @@
   register('ShopBuy', { validate: validateShopBuy, apply: applyShopBuy });
   register('ShopSell', { validate: validateShopSell, apply: applyShopSell });
 
-  TC.Commands = { register, unregister, has, names, submit };
+  TC.Commands = { register, unregister, has, names, submit,
+                  enqueue, drain, pending: pendingCount, clearQueue, stats: queueStats };
+
+  // Foundation scheduler: the queue drains in the canonical 'commands' phase
+  // (runtime.js ticks the scheduler; main.js no longer calls update directly).
+  // Gated to live simulation: queued intents never execute on title/pause.
+  if (TC.Systems && typeof TC.Systems.register === 'function') {
+    TC.Systems.register('commands', 'core.queue', {
+      update: function (dt) { drain(); }
+    }, {
+      when: function () { return TC.state === 'playing' && !(TC.UI && TC.UI.paused); }
+    });
+  }
+  // A fresh world never inherits queued intents from the previous one.
+  if (TC.Events && typeof TC.Events.on === 'function' && TC.Events.EVENT && TC.Events.EVENT.WorldLoaded) {
+    try { TC.Events.on(TC.Events.EVENT.WorldLoaded, function () { clearQueue(); }); } catch (e) {}
+  }
 })();

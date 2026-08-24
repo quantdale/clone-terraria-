@@ -682,7 +682,10 @@
         this.damage(9999, 0, 0, "void");
       }
 
-      // actions
+      // actions — held intent is expressed as a UseItem command and executed
+      // by the canonical transaction in the scheduler's commands phase (one
+      // enqueue per fixed step; cadence/cooldowns live in the command + player
+      // timers, never at display-frame rate).
       this.mining = false;
       let held = false;
       if (
@@ -693,11 +696,12 @@
         TC.state === "playing"
       ) {
         held = true;
-        this.useHeld(dt);
+        this.enqueueUseIntent(inp.mouse, dt);
       }
       if (!held) this.mineTarget = null;
 
-      // independent right-click interaction (doors, chests); never swings
+      // independent right-click interaction (doors/chests/devices) routed
+      // through the InteractTile transaction; never swings.
       if (
         inp &&
         inp.mouse &&
@@ -706,7 +710,7 @@
         TC.state === "playing" &&
         !this.dead
       ) {
-        this.interact(inp.mouse);
+        this.requestInteract(inp.mouse);
       }
 
       this.advanceSwing(dt);
@@ -805,6 +809,44 @@
     }
 
     // ---- item use ----
+
+    // Express one fixed-step's worth of held-use intent as a command. The
+    // canonical UseItem transaction (commands.js) executes it during the
+    // commands phase — the player never mutates the world directly from here.
+    enqueueUseIntent(m, dt) {
+      const cx = this.x + this.w / 2;
+      if (isFinite(m.worldX)) this.facing = m.worldX >= cx ? 1 : -1;
+      const sel = this.selectedSlot();
+      const def = sel ? iDef(sel.id) : null;
+      if (!def) {
+        this.mineTarget = null;
+        return;
+      }
+      if (TC.Commands && typeof TC.Commands.enqueue === 'function') {
+        TC.Commands.enqueue('UseItem', {
+          player: this,
+          slot: this.hotbarIndex,
+          aimX: m.worldX,
+          aimY: m.worldY,
+          dt: dt,
+        });
+      } else {
+        this.useHeld(dt);   // commands module absent: legacy direct path
+      }
+    }
+
+    // Right-click intent: reach-checked here, executed as an InteractTile
+    // transaction (wiring devices, doors, chests).
+    requestInteract(m) {
+      const TS = CONST.TS;
+      const tx = Math.floor(m.worldX / TS), ty = Math.floor(m.worldY / TS);
+      if (!this.inReach(tx, ty)) return;
+      if (TC.Commands && typeof TC.Commands.enqueue === 'function') {
+        TC.Commands.enqueue('InteractTile', { tx: tx, ty: ty, player: this });
+      } else {
+        this.interact(m);   // commands module absent: legacy direct path
+      }
+    }
 
     useHeld(dt) {
       const inp = TC.Input,
