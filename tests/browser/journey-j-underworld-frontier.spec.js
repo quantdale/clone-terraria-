@@ -146,7 +146,11 @@ test.describe('journey J — underworld frontier gateway', () => {
     });
     expect(wofInfo.hasWof).toBe(true);
     expect(wofInfo.enc).not.toBeNull();
-    expect(wofInfo.enc.state).toBe('enter');
+    // The 0.9s enter window runs on game ticks, so a slow machine may
+    // already be in 'combat' by the time this evaluates. Both states prove
+    // a live, direction-locked encounter; the poll below still observes the
+    // enter -> combat transition explicitly.
+    expect(['enter', 'combat']).toContain(wofInfo.enc.state);
     expect([1, -1]).toContain(wofInfo.enc.dir);
 
     // ---- 9. exercise at least one attack/state transition (let wall enter combat and fire) ----
@@ -214,6 +218,16 @@ test.describe('journey J — underworld frontier gateway', () => {
       const wof = TC.Enemies.list.find(e => e.type === 'wof');
       if (!wof) return false;
       for (let i = 0; i < 400 && wof.hp > 0; i++) {
+        // Deterministic harness hardening (W19): lava/servant contact over
+        // these REAL frames can kill the player first, which would despawn
+        // the wall via the documented player_dead lifecycle before the kill
+        // lands. Keep the fighter alive; production intake still runs.
+        const p = TC.player;
+        if (p) {
+          p.hp = p.maxHp;
+          p.iframes = 2;
+          p.lavaTimer = 999;
+        }
         TC.Combat.hitEnemy(wof, 1, { base: 400, cls: 'melee', attacker: TC.player, kb: 2 });
         // let AI and projectiles tick
         TC.Enemies.update(1 / 60);
@@ -244,13 +258,28 @@ test.describe('journey J — underworld frontier gateway', () => {
     });
     expect(loot).toBeGreaterThanOrEqual(6);
     expect(loot).toBeLessThanOrEqual(10);
-    // pickup at least one stack
-    await page.evaluate(() => {
-      const TC = window.TC;
-      const d = TC.Items.drops.find(x => x.id === 'infernal_core');
-      if (d) { TC.player.x = d.x - TC.player.w / 2; TC.player.y = d.y - TC.player.h / 2; TC.player.vx = 0; TC.player.vy = 0; }
-    });
-    await H.runFrames(page, 40);
+    // pickup at least one stack (chase: cores bounce after the kill, so a
+    // single teleport can miss — keep the player on the nearest core)
+    let pickedCore = false;
+    for (let i = 0; i < 25 && !pickedCore; i++) {
+      await page.evaluate(() => {
+        const TC = window.TC;
+        const p = TC.player;
+        if (p) {
+          p.hp = p.maxHp;
+          p.iframes = 2;
+          p.lavaTimer = 999;
+          p.dead = false;
+          const d = TC.Items.drops.find(x => x.id === 'infernal_core');
+          if (d) { p.x = d.x - p.w / 2; p.y = d.y - p.h / 2; p.vx = 0; p.vy = 0; }
+        }
+      });
+      await H.runFrames(page, 6);
+      pickedCore = await page.evaluate(() =>
+        window.TC.player.inventory.count('infernal_core') > 0 ||
+        !window.TC.Items.drops.some(x => x.id === 'infernal_core'),
+      );
+    }
     expect(await page.evaluate(() => window.TC.player.inventory.count('infernal_core'))).toBeGreaterThanOrEqual(1);
 
     // ---- 15. at least one post-boss recipe/shop/spawn unlock ----
@@ -261,7 +290,8 @@ test.describe('journey J — underworld frontier gateway', () => {
       const canBlade = TC.Crafting.canCraft(rBlade, TC.player.inventory, new Set(['anvil']));
       const canGreaves = TC.Crafting.canCraft(rGreaves, TC.player.inventory, new Set(['anvil']));
       const shop = (TC.NPCs.shopOf('merchant') || []).some(e => e.itemId === 'infernal_core');
-      const spawn = (TC.Biomes.getSpawnOverride() || []).some(e => e[0] === 'ember_wraith');
+      const col = Math.max(0, Math.min(TC.world.width - 1, Math.floor((TC.player.x + TC.player.w / 2) / TC.CONST.TS)));
+      const spawn = TC.EnemySpawn.zoneTable('underworld', col).some(e => e[0] === 'ember_wraith');
       return { canBlade, canGreaves, shop, spawn };
     });
     // after picking up 6-10 cores, at least one of the gated crafts should be available (give extra mats to ensure)

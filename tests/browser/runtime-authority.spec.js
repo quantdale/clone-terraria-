@@ -67,7 +67,17 @@ test.describe("runtime authority (production path)", () => {
     }), target);
 
     await page.mouse.down();
-    await H.runFrames(page, 45);   // hold to mine
+    // Harness hardening (W19): camera-follow drift during the hold can slide
+    // the crosshair off the tile, so re-aim periodically until it breaks.
+    let brokeTile = false;
+    for (let i = 0; i < 12 && !brokeTile; i++) {
+      await H.aimAt(page, target.tx, target.ty);
+      await H.runFrames(page, 9); // keep holding to mine
+      brokeTile = await page.evaluate(
+        ([t]) => window.TC.world.get(t.tx, t.ty) === window.TC.TILE.AIR,
+        [target],
+      );
+    }
     await page.mouse.up();
 
     const after = await page.evaluate(
@@ -84,6 +94,10 @@ test.describe("runtime authority (production path)", () => {
       after.processed,
       "UseItem transactions drained from the queue while held",
     ).toBeGreaterThan(before.processed);
+    expect(
+      brokeTile,
+      "held mining broke the target tile through MineTile",
+    ).toBe(true);
     expect(
       after.tile,
       "held mining broke the target tile through MineTile",

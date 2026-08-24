@@ -256,10 +256,21 @@ test.describe("journey I — early-game progression arc", () => {
             attacker: TC.player,
             kb: 0,
           });
+          // Deterministic harness hardening (W19): this loop runs over many
+          // REAL game frames, so her shots can legitimately kill the player
+          // mid-loop; a dead player breaks the loot-magnet assertions below.
+          // Keep the fighter on full health + i-frames — production intake
+          // still runs, it just always rejects.
+          const p = TC.player;
+          if (p) {
+            p.hp = p.maxHp;
+            p.iframes = 2;
+          }
           await new Promise((r) => setTimeout(r, 4));
         }
         return (
           boss.hp <= 0 &&
+          !TC.player.dead &&
           window.__ev.bossDefeated === 1 &&
           TC.Progression.has("boss.storm_jelly.defeated")
         );
@@ -279,18 +290,33 @@ test.describe("journey I — early-game progression arc", () => {
       coreLoot,
       "Storm Jelly must shed storm_core loot (def.drops 6-10)",
     ).toBeGreaterThanOrEqual(6);
-    // walk the player onto a dropped stack so real magnet pickup applies
-    await page.evaluate(() => {
-      const TC = window.TC;
-      const d = TC.Items.drops.find((x) => x.id === "storm_core");
-      if (d) {
-        TC.player.x = d.x - TC.player.w / 2;
-        TC.player.y = d.y - TC.player.h / 2;
-        TC.player.vx = 0;
-        TC.player.vy = 0;
-      }
-    });
-    await H.runFrames(page, 45);
+    // walk the player onto a dropped stack so real magnet pickup applies.
+    // Harness hardening (W19): cores are still bouncing when we read their
+    // position, so a single teleport can miss; chase the nearest core for a
+    // few rounds (production magnet does the collecting).
+    let pickedCore = false;
+    for (let i = 0; i < 25 && !pickedCore; i++) {
+      await page.evaluate(() => {
+        const TC = window.TC;
+        const p = TC.player;
+        // leftover phase-3 minions can still bite during this window;
+        // a dead player has no magnet
+        p.hp = p.maxHp;
+        p.iframes = 2;
+        const d = TC.Items.drops.find((x) => x.id === "storm_core");
+        if (d) {
+          p.x = d.x - p.w / 2;
+          p.y = d.y - p.h / 2;
+          p.vx = 0;
+          p.vy = 0;
+        }
+      });
+      await H.runFrames(page, 6);
+      pickedCore = await page.evaluate(() =>
+        window.TC.player.inventory.count("storm_core") > 0 ||
+        !window.TC.Items.drops.some((x) => x.id === "storm_core"),
+      );
+    }
     let cores = await page.evaluate(() =>
       window.TC.player.inventory.count("storm_core"),
     );
@@ -305,6 +331,17 @@ test.describe("journey I — early-game progression arc", () => {
     }
 
     // ---- unlocks: Storm Blade craftable + gemshot stocked ----
+    // The core chase may end far from the arena; return before asserting
+    // station-adjacent crafting so stationsNearby() finds the anvil again.
+    await page.evaluate(() => {
+      const TC = window.TC;
+      const { px, feetTy } = window.__arena;
+      window.__TEST__.teleportPlayer(
+        px * TC.CONST.TS,
+        feetTy * TC.CONST.TS - TC.CONST.PLAYER_H,
+      );
+    });
+    await H.runFrames(page, 5);
     const unlockedNow = await page.evaluate(() => {
       const TC = window.TC;
       const r = TC.RECIPES.find((x) => x.out === "storm_blade");

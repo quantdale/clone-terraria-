@@ -56,13 +56,19 @@ test.describe("journey B — core sandbox", () => {
 
     // ---- mine the tile underfoot ----
     await H.selectSlot(page, 0); // copper pickaxe (starter kit slot 0)
-    const target = await firstSolidBelow(page);
+    let target = await firstSolidBelow(page);
     expect(target, "need a minable solid tile below").toBeTruthy();
     await page.mouse.down();
     let broken = false;
     for (let i = 0; i < 100 && !broken; i++) {
-      // re-aim every pass: camera follows the player, so a knockback or a
-      // settle step can drift the tile off the original screen point
+      // Harness hardening (W19): knockback (daytime slime contact) or a
+      // settle step can carry the player out of pick range of the original
+      // tile mid-loop. The behavioral goal is "mine a minable solid
+      // underfoot", so periodically re-acquire the current target.
+      if (i % 4 === 0) {
+        const next = await firstSolidBelow(page);
+        if (next) target = next;
+      }
       await H.aimAt(page, target.tx, target.ty);
       await H.runFrames(page, 6);
       broken = await page.evaluate(
@@ -77,8 +83,18 @@ test.describe("journey B — core sandbox", () => {
     ).toBe(true);
 
     // ---- receive the drop ----
-    const drops = await page.evaluate(() => window.TC.Items.drops.length);
-    expect(drops, "breaking a block must spawn a drop").toBeGreaterThan(0);
+    // Harness race hardening (W19): if the scatter rolls the drop toward
+    // the player it can be magnet-collected BEFORE this observation, so the
+    // honest invariant is "a drop exists in the world OR its item already
+    // reached the bag". The pickup loop below still proves the outcome.
+    const lootState = await page.evaluate(() => ({
+      drops: window.TC.Items.drops.length,
+      dirt: window.TC.player.inventory.count("dirt"),
+    }));
+    expect(
+      lootState.drops > 0 || lootState.dirt > 0,
+      "breaking a block must spawn a drop (pending or already collected)",
+    ).toBe(true);
 
     // magnet pulls it in once the player settles into/near the hole
     let picked = false;
