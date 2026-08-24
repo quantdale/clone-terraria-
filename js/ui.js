@@ -2,7 +2,12 @@
    inventory drag & drop, equipment slots, chest panel, crafting column,
    pause overlay, death overlay, boss health bar, NPC dialog box, breath
    bubbles, toasts.
-   All hit-testing is manual against TC.Input.mouse; sets TC.Input.uiHover. */
+   All hit-testing is manual against TC.Input.mouse; sets TC.Input.uiHover.
+   Mutation authority note: discrete gameplay mutations route through the
+   canonical TC.Commands transactions (CraftRecipe, ShopBuy, ShopSell);
+   cursor-stack drag/drop and bulk helpers (sort/quick stack/split) remain
+   presentation-layer inventory rearrangements with conservation covered by
+   Inventory's own invariants. */
 'use strict';
 (function () {
   const TC = window.TC;
@@ -1623,13 +1628,20 @@
       }
     }
 
-    // crafting rows
+    // crafting rows — through the canonical CraftRecipe transaction (same
+    // validate-then-apply authority as every other mutation; no UI-side
+    // duplicate of crafting rules).
     if (!rightClick && L.craftCtx) {
       for (let i = 0; i < L.craftRects.length; i++) {
         if (inRect(mx, my, L.craftRects[i])) {
           let ok = false;
-          try { ok = TC.Crafting.craft(L.craftList[i], L.craftCtx.inv, L.craftCtx.stations); }
-          catch (e) { ok = false; }
+          const ctx2 = { recipe: L.craftList[i], inv: L.craftCtx.inv, stations: L.craftCtx.stations };
+          if (TC.Commands && typeof TC.Commands.submit === 'function') {
+            ok = TC.Commands.submit('CraftRecipe', ctx2).ok;
+          } else {
+            try { ok = TC.Crafting.craft(L.craftList[i], L.craftCtx.inv, L.craftCtx.stations); }
+            catch (e) { ok = false; }
+          }
           if (ok && TC.Audio) TC.Audio.play('craft');
           return;
         }
