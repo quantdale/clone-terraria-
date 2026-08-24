@@ -22,7 +22,7 @@ async function firstSolidBelow(page) {
         id !== TC.TILE.BEDROCK &&
         !TC.TILE_DEFS[id].needsSupport
       ) {
-        return { tx, ty, id };
+        return { tx, ty, id, drop: TC.TILE_DEFS[id].drop };
       }
     }
     return null;
@@ -58,6 +58,12 @@ test.describe("journey B — core sandbox", () => {
     await H.selectSlot(page, 0); // copper pickaxe (starter kit slot 0)
     let target = await firstSolidBelow(page);
     expect(target, "need a minable solid tile below").toBeTruthy();
+    // CI-parity hardening (W19): runFrames batching is wall-clock paced, so
+    // machines drift the walk distance and the first minable tile may be
+    // grass/stone rather than dirt. Track what THIS tile actually yields;
+    // every downstream assertion keys off that drop id.
+    let dropId = target.drop;
+    expect(dropId, "mined tile must yield an item").toBeTruthy();
     await page.mouse.down();
     let broken = false;
     for (let i = 0; i < 100 && !broken; i++) {
@@ -67,7 +73,10 @@ test.describe("journey B — core sandbox", () => {
       // underfoot", so periodically re-acquire the current target.
       if (i % 4 === 0) {
         const next = await firstSolidBelow(page);
-        if (next) target = next;
+        if (next) {
+          target = next;
+          if (next.drop) dropId = next.drop; // track the current tile's yield
+        }
       }
       await H.aimAt(page, target.tx, target.ty);
       await H.runFrames(page, 6);
@@ -87,12 +96,15 @@ test.describe("journey B — core sandbox", () => {
     // the player it can be magnet-collected BEFORE this observation, so the
     // honest invariant is "a drop exists in the world OR its item already
     // reached the bag". The pickup loop below still proves the outcome.
-    const lootState = await page.evaluate(() => ({
-      drops: window.TC.Items.drops.length,
-      dirt: window.TC.player.inventory.count("dirt"),
-    }));
+    const lootState = await page.evaluate(
+      ([want]) => ({
+        drops: window.TC.Items.drops.length,
+        mined: window.TC.player.inventory.count(want),
+      }),
+      [dropId],
+    );
     expect(
-      lootState.drops > 0 || lootState.dirt > 0,
+      lootState.drops > 0 || lootState.mined > 0,
       "breaking a block must spawn a drop (pending or already collected)",
     ).toBe(true);
 
@@ -101,35 +113,40 @@ test.describe("journey B — core sandbox", () => {
     for (let i = 0; i < 80 && !picked; i++) {
       await H.runFrames(page, 6);
       picked = await page.evaluate(
-        () =>
-          window.TC.Items.drops.length === 0 ||
-          window.TC.player.inventory.count("dirt") > 0,
+        ([want]) =>
+          !window.TC.Items.drops.some((d) => d.id === want) ||
+          window.TC.player.inventory.count(want) > 0,
+        [dropId],
       );
     }
-    const dirtCount = await page.evaluate(() =>
-      window.TC.player.inventory.count("dirt"),
+    const minedCount = await page.evaluate(
+      ([want]) => window.TC.player.inventory.count(want),
+      [dropId],
     );
     expect(
-      dirtCount,
-      "the mined dirt must reach the inventory",
+      minedCount,
+      "the mined item must reach the inventory",
     ).toBeGreaterThan(0);
 
     // ---- place it back ----
-    const dirtSlot = await page.evaluate(() => {
-      const inv = window.TC.player.inventory;
-      for (let i = 0; i < 10; i++) {
-        const s = inv.get(i);
-        if (s && s.id === "dirt") return i;
-      }
-      return -1;
-    });
+    const dirtSlot = await page.evaluate(
+      ([want]) => {
+        const inv = window.TC.player.inventory;
+        for (let i = 0; i < 10; i++) {
+          const s = inv.get(i);
+          if (s && s.id === want) return i;
+        }
+        return -1;
+      },
+      [dropId],
+    );
     expect(dirtSlot).toBeGreaterThanOrEqual(0);
     await H.selectSlot(page, dirtSlot);
     const selectedId = await page.evaluate((i) => {
       const s = window.TC.player.inventory.get(i);
       return s ? s.id : null;
     }, dirtSlot);
-    expect(selectedId).toBe("dirt");
+    expect(selectedId).toBe(dropId);
 
     // the mined cell may now have the player standing in it; aim at the same cell
     await H.aimAt(page, target.tx, target.ty);
@@ -140,10 +157,14 @@ test.describe("journey B — core sandbox", () => {
       ([tx, ty]) => window.TC.world.get(tx, ty),
       [target.tx, target.ty],
     );
-    // grass drops dirt, so the restored block is the DROP's tile
-    const placedTile = await page.evaluate(() => window.TC.TILE);
+    // the restored block is whatever the DROP places (grass drops dirt etc.)
+    const placedExpected = await page.evaluate(
+      ([want]) => window.TC.ITEM_DEFS[want] && window.TC.ITEM_DEFS[want].tile,
+      [dropId],
+    );
+    expect(placedExpected, "dropped item must place a tile").toBeTruthy();
     expect(placed, "placing must restore a block in the mined cell").toBe(
-      placedTile.DIRT,
+      placedExpected,
     );
 
     // ---- open inventory + craft a workbench (mirrors the crafting-row click:
