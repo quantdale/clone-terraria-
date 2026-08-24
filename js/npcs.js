@@ -301,17 +301,17 @@
     if (typeof u === 'function') {
       try { return !!u(def); } catch (e) { return false; }
     }
-    if (typeof u === 'string' && u) {
-      if (TC.Progression && typeof TC.Progression.has === 'function') {
-        try { return !!TC.Progression.has(u); } catch (e) { return false; }
-      }
-      return false;
+    // W14: strings AND compound condition objects share the Progression
+    // grammar; unknown shapes fail closed inside test().
+    if (TC.Progression && typeof TC.Progression.test === 'function') {
+      try { return !!TC.Progression.test(u); } catch (e) { return false; }
     }
     return false;
   }
 
-  // One stock row's visibility rule (W2 economy): missing item defs never
-  // show; requires mirrors the unlocks grammar (flag string or function).
+  // One stock row's visibility rule: missing item defs never show;
+  // `requires` shares the W14 condition grammar (flag string or compound
+  // object) evaluated through TC.Progression.test.
   function stockUnlocked(e) {
     if (!e || typeof e.itemId !== 'string') return false;
     if (!TC.ITEM_DEFS || !TC.ITEM_DEFS[e.itemId]) return false;
@@ -320,9 +320,8 @@
     if (typeof r === 'function') {
       try { return !!r(e); } catch (err) { return false; }
     }
-    if (typeof r === 'string' && TC.Progression &&
-        typeof TC.Progression.has === 'function') {
-      try { return !!TC.Progression.has(r); } catch (err) { return false; }
+    if (TC.Progression && typeof TC.Progression.test === 'function') {
+      try { return !!TC.Progression.test(r); } catch (err) { return false; }
     }
     return false;
   }

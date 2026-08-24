@@ -1,20 +1,42 @@
-/* progression.js — TC.Progression: world progression flag store.
-   Tracks one-way world milestones (bosses defeated, events completed) as
-   string keys. Consumers query has(FLAGS.x) live; nothing here is cached
+/* progression.js — TC.Progression: world progression flag store PLUS the
+   one declarative condition grammar every consumer shares (W14).
+   Tracks one-way world milestones (bosses defeated, events completed,
+   biomes discovered) as string keys. Consumers query has(FLAGS.x) live or
+   evaluate compound specs through test(cond); nothing here is cached
    elsewhere, so restores take effect immediately.
 
    Well-known keys (see FLAGS): 'boss.eye_of_void.defeated',
    'boss.king_slime.defeated', 'boss.skeletron.defeated',
-   'boss.wall_of_flesh.defeated', 'event.blood_moon.completed'.
+   'boss.wall_of_flesh.defeated', 'boss.storm_jelly.defeated',
+   'boss.moss_mother.defeated', 'event.blood_moon.completed'.
+
+   Condition grammar (test(cond) -> bool, pure, side-effect free):
+     null / undefined     always true  (unconditional)
+     boolean              itself
+     'flag.string'        has(flag)
+     [c0, c1, ...]        all-of
+     {all: [...]}         all-of
+     {any: [...]}
+     {not: cond}
+     {flag: 'x'}          has('x')
+     {boss: 'storm_jelly'} has('boss.storm_jelly.defeated')
+     {event: 'blood_moon'} has('event.blood_moon.completed')
+     {biome: 'snow'}      has('biome.snow.discovered')
+   Unknown shapes FAIL CLOSED (false) so typos can never silently unlock.
+   Consumers: recipe gating (Crafting), NPC unlocks + shop stock rows
+   (NPCs), loot entries (LootTables), spawn-table entries (EnemySpawn),
+   boss-summon availability (Player.doSummon).
 
    Wiring:
      - Listens to TC.Events.EVENT.BossDefeated and records
        'boss.<type>.defeated' (canonical names via BOSS_FLAG below, generic
-       fallback for future bosses), emitting WorldProgressChanged per new flag.
+       fallback for future bosses), emitting WorldProgressChanged per new
+       flag.
      - Persists through SaveCore provider 'systems.core.progression'.
      - resetForNewWorld() clears the store; the lead calls it on new game.
      - spawnMultiplier() is a difficulty knob consumed by
-       TC.Enemies.spawnDirector: +10% spawn rate per defeated boss, cap 1.5x.
+       TC.EnemySpawn.spawnDirector: +10% spawn rate per defeated boss, cap
+       1.5x.
 
    Deterministic: no randomness anywhere in this module. */
 'use strict';
@@ -28,6 +50,8 @@
     bossKingSlime: 'boss.king_slime.defeated',
     bossSkeletron: 'boss.skeletron.defeated',
     bossWallOfFlesh: 'boss.wall_of_flesh.defeated',
+    bossStormJelly: 'boss.storm_jelly.defeated',
+    bossMossMother: 'boss.moss_mother.defeated',
     eventBloodMoon: 'event.blood_moon.completed'
   });
 
@@ -37,7 +61,9 @@
     void_eye: FLAGS.bossEyeOfVoid,
     king_slime: FLAGS.bossKingSlime,
     skeletron: FLAGS.bossSkeletron,
-    wof: FLAGS.bossWallOfFlesh
+    wof: FLAGS.bossWallOfFlesh,
+    storm_jelly: FLAGS.bossStormJelly,
+    moss_mother: FLAGS.bossMossMother
   };
 
   // Spawn-rate scaling per defeated boss flag (see spawnMultiplier).
@@ -61,6 +87,39 @@
   }
 
   function has(key) { return validKey(key) && flags.has(key); }
+
+  // ---- declarative condition grammar (W14) -------------------------------
+  // Pure, side-effect free, deterministic. Unknown shapes fail closed.
+  function test(cond) {
+    if (cond == null) return true;
+    if (typeof cond === 'boolean') return cond;
+    if (typeof cond === 'string') return has(cond);
+    if (Array.isArray(cond)) {
+      for (let i = 0; i < cond.length; i++) {
+        if (!test(cond[i])) return false;
+      }
+      return true;
+    }
+    if (typeof cond === 'object') {
+      if (Array.isArray(cond.all)) return test(cond.all);
+      if (Array.isArray(cond.any)) {
+        for (let i = 0; i < cond.any.length; i++) {
+          if (test(cond.any[i])) return true;
+        }
+        return false;
+      }
+      if ('not' in cond) return !test(cond.not);
+      if (typeof cond.flag === 'string') return has(cond.flag);
+      if (typeof cond.boss === 'string') return has('boss.' + cond.boss + '.defeated');
+      if (typeof cond.event === 'string') return has('event.' + cond.event + '.completed');
+      if (typeof cond.biome === 'string') {
+        const k = 'biome.' +
+          cond.biome.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '.discovered';
+        return has(k);
+      }
+    }
+    return false; // unknown shape: fail closed
+  }
 
   // One-way world discovery milestone (W5): 'biome.<name>.discovered'.
   // Idempotent like set(); returns true only on first discovery so callers
@@ -115,8 +174,10 @@
 
   TC.Progression = {
     FLAGS: FLAGS,
+    BOSS_FLAG: BOSS_FLAG,
     set: set,
     has: has,
+    test: test,
     all: all,
     discoverBiome: discoverBiome,
     resetForNewWorld: resetForNewWorld,

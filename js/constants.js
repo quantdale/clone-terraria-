@@ -931,8 +931,15 @@ TC.RECIPES = [
     station: "workbench",
     cost: { mushgrass: 20, jungle_grass: 5 },
   },
-  { out: "storm_blade", n: 1, station: "anvil", cost: { storm_core: 8, silver_bar: 10 } },
-  { out: "moss_cloak", n: 1, station: "workbench", cost: { moss_core: 6, mushstem: 25 } },
+  // W14: post-boss crafts declare their progression gates with the shared
+  // condition grammar (TC.Progression.test) instead of implicit drops-only
+  // gating — the UI can now explain WHY a recipe is locked.
+  { out: "storm_blade", n: 1, station: "anvil",
+    requires: "boss.storm_jelly.defeated",
+    cost: { storm_core: 8, silver_bar: 10 } },
+  { out: "moss_cloak", n: 1, station: "workbench",
+    requires: "boss.moss_mother.defeated",
+    cost: { moss_core: 6, mushstem: 25 } },
 ];
 
 // ---- economy: base item values (copper units; TC.Economy scale) ----

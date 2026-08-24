@@ -67,13 +67,17 @@
     return lo + Math.floor(rng() * (hi - lo + 1));
   }
 
-  // Progression gate shared by roll-time filtering and validation.
+  // Progression gate shared by roll-time filtering and validation. Uses the
+  // full W14 condition grammar (flag string or compound object) via
+  // TC.Progression.test; functions are honored for custom rules.
   function requiresOk(entry) {
     const r = entry.requires;
     if (r == null || r === '') return true;
-    if (typeof r === 'string' && TC.Progression &&
-        typeof TC.Progression.has === 'function') {
-      try { return !!TC.Progression.has(r); } catch (e) { return false; }
+    if (typeof r === 'function') {
+      try { return !!r(entry); } catch (e) { return false; }
+    }
+    if (TC.Progression && typeof TC.Progression.test === 'function') {
+      try { return !!TC.Progression.test(r); } catch (e) { return false; }
     }
     return false;
   }
@@ -137,8 +141,9 @@
           Number(d.min) > Number(d.max)) {
         problems.push(at + ': min > max');
       }
-      if (d.requires != null && typeof d.requires !== 'string') {
-        problems.push(at + ': requires must be a flag string');
+      if (d.requires != null && typeof d.requires !== 'string' &&
+          typeof d.requires !== 'object') {
+        problems.push(at + ': requires must be a flag string or condition object');
       }
     }
     return problems;

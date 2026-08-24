@@ -156,6 +156,17 @@
     return true;
   }
 
+  // W14 progression gate: recipes may carry a `requires` condition in the
+  // shared TC.Progression grammar (flag string or compound object).
+  function progressionOk(r) {
+    const c = r && r.requires;
+    if (c == null || c === '') return true;
+    if (TC.Progression && typeof TC.Progression.test === 'function') {
+      try { return !!TC.Progression.test(c); } catch (e) { return false; }
+    }
+    return false;
+  }
+
   // ---- recipe index (precomputed once per RECIPES table identity/length) --
 
   let indexCache = null;   // {source, length, list: [{r, ings}]}
@@ -183,27 +194,45 @@
     return true;
   }
 
-  // All recipes currently craftable with this inventory + station set.
-  // Uses the precomputed recipe index; O(recipes) per call after warmup.
-  TC.Crafting.available = function (inv, stations) {
-    const out = [];
-    const entries = indexedRecipes();
-    let haveTags = null;
-    for (let i = 0; i < entries.length; i++) {
-      const e = entries[i];
-      if (!stationOk(e.r, stations, haveTags)) continue;
-      if (!countsOk(e.ings, inv)) continue;
-      out.push(e.r);
-    }
-    return out;
-  };
+// All recipes currently craftable with this inventory + station set +
+   // progression. Uses the precomputed recipe index; O(recipes) per call.
+   TC.Crafting.available = function (inv, stations) {
+     const out = [];
+     const entries = indexedRecipes();
+     let haveTags = null;
+     for (let i = 0; i < entries.length; i++) {
+       const e = entries[i];
+       if (!progressionOk(e.r)) continue;
+       if (!stationOk(e.r, stations, haveTags)) continue;
+       if (!countsOk(e.ings, inv)) continue;
+       out.push(e.r);
+     }
+     return out;
+   };
 
-  // Station requirement met (when a station set is given) and all costs
-  // covered — plain ids by count, tagged ingredients across matching items.
+  // Station requirement met (when a station set is given), progression gate
+  // passed and all costs covered — plain ids by count, tagged ingredients
+  // across matching items.
   TC.Crafting.canCraft = function (r, inv, stations) {
     if (!r || !inv || typeof inv.count !== 'function') return false;
+    if (!progressionOk(r)) return false;
     if (!stationOk(r, stations, null)) return false;
     return countsOk(ingredientsOf(r), inv);
+  };
+
+  // Why can't this recipe be crafted right now? Returns null when craftable,
+  // else one of: 'progression' | 'station' | 'costs'. UI hints consume the
+  // coarse reason without reaching into recipe internals.
+  TC.Crafting.lockReason = function (r, inv, stations) {
+    if (!r) return 'costs';
+    if (!progressionOk(r)) return 'progression';
+    if (stations && !stationOk(r, stations, null)) return 'station';
+    if (!inv || typeof inv.count !== 'function') return 'costs';
+    const ings = ingredientsOf(r);
+    for (let i = 0; i < ings.length; i++) {
+      if (haveCount(inv, ings[i]) < ings[i].n) return 'costs';
+    }
+    return null;
   };
 
   // Remove up to n tagged items (slot order), recording exact removals so a

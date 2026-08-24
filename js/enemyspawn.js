@@ -125,6 +125,9 @@
   // ---- spawn tables (extensions merged over lead-owned TC.CONST.SPAWN) ----
   // Biome extras are appended to the base zone table when the surface tile
   // under the player matches; blood-moon entries replace the night table.
+  // Entries may carry an optional third element: a W14 progression condition
+  // ([type, weight, cond]) evaluated through TC.Progression.test — spawns
+  // join the shared gating grammar instead of bespoke flag checks.
   const EXTRA_SPAWN = {
     day: [
       ["harpy", 0.7],
@@ -189,6 +192,10 @@
     const b = surfaceBiome(pcol);
     const depth = playerDepthT();
     const extra = (EXTRA_SPAWN[zone] || []).filter((entry) => {
+      if (entry.length > 2 && TC.Progression &&
+          typeof TC.Progression.test === 'function') {
+        try { if (!TC.Progression.test(entry[2])) return false; } catch (e) { return false; }
+      }
       const def = TC.ENEMY_DEFS[entry[0]];
       if (def && def.bloodMoonOnly && !bloodMoon) return false;
       if (entry[0] === "ice_slime") return b === "snow";
