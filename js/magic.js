@@ -281,7 +281,7 @@
       });
       if (p) watchBolt(p, colors);
       if (TC.Lighting && typeof TC.Lighting.addDynamic === 'function') {
-        try { TC.Lighting.addDynamic(x, y, 64, 0.6, 0.15); } catch (e) {}
+        try { TC.Lighting.addDynamic(x, y, 64, 0.6, 0.15, colors[0]); } catch (e) {}
       }
       return p;
     }

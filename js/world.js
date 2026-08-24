@@ -171,12 +171,27 @@
       this.wallDamage = new Map(); // tileIndex -> wall mining progress 0..1
       this.shapes = new Uint8Array(this.width * this.height); // hammer shape per tile (TC.Shapes)
       this.paints = new Map(); // tileIndex -> paint slot (compatibility stub)
-      this.CHUNK = 32; // chunk size in tiles
+      this.CHUNK = 32; // chunk size in tiles (shared with TC.WorldRegions)
       this.chunksX = Math.ceil(this.width / this.CHUNK);
       this.chunksY = Math.ceil(this.height / this.CHUNK);
       this.chunks = new Map(); // chunkKey -> { cv, ctx } canvas cache
-      this.dirty = new Set(); // chunkKeys needing a rebuild
-      this.markAllDirty();
+      // W21: dirty tracking is OWNED by TC.WorldRegions (PERF-004). This
+      // renderer is just one consumer of the shared revision authority; its
+      // legacy private Set is gone so lighting/minimap/persistence observe
+      // invalidations independently. Bind first, then flag every region so
+      // the first frames rebuild what the camera needs.
+      this._regions = null;
+      if (TC.WorldRegions && typeof TC.WorldRegions.init === "function") {
+        TC.WorldRegions.init(this);
+        this._regions = TC.WorldRegions.consume("renderer");
+      }
+      this._rstats = {
+        rebuilt: 0,
+        maxBacklog: 0,
+        skipped: 0,
+        lastBudgetUsed: 0,
+      };
+      if (!this._regions) this.markAllDirty();
     }
 
     // ---- grid helpers ----
@@ -238,7 +253,7 @@
         }
       }
       this.rescanSurface(x);
-      this.markDirtyAt(x, y);
+      this.markDirtyAt(x, y, "tile");
       if (TC.Lighting) TC.Lighting.onTileChanged(x, y);
       this.checkSupport(x, y);
       if (TC.Liquids && typeof TC.Liquids.wake === "function") {
@@ -254,6 +269,7 @@
     }
 
     // Raw write for save-load and tree felling: no rescan/relight/pops.
+    // Regions still invalidate ('bulk') so presentation catches up.
     setRaw(x, y, id) {
       if (!this.inB(x, y)) return;
       const i = this.idx(x, y);
@@ -261,7 +277,7 @@
       this.damage.delete(i);
       this.shapes[i] = 0; // a rewritten tile loses shape/paint state
       this.paints.delete(i);
-      this.markDirtyAt(x, y);
+      this.markDirtyAt(x, y, "bulk");
       // Tree felling / bulk writes can open cells under liquid — wake the
       // layer around the change so pools react on the next settle step.
       if (id === TC.TILE.AIR && TC.Liquids && typeof TC.Liquids.wake === "function") {
@@ -355,7 +371,7 @@
       const i = this.idx(x, y);
       this.walls[i] = id;
       this.wallDamage.delete(i); // a rewritten wall loses its crack state
-      this.markDirtyAt(x, y);
+      this.markDirtyAt(x, y, "wall");
       if (TC.Lighting) TC.Lighting.onTileChanged(x, y);
     }
 
@@ -363,7 +379,7 @@
     setRawWall(x, y, id) {
       if (!this.inB(x, y)) return;
       this.walls[this.idx(x, y)] = id;
-      this.markDirtyAt(x, y);
+      this.markDirtyAt(x, y, "bulk");
     }
 
     // Adds wall mining progress; returns true once the wall accumulates >= 1
@@ -405,7 +421,7 @@
       if (this.shapes[i] === s) return false;
       this.shapes[i] = s;
       this.damage.delete(i); // reshaping clears mining progress
-      this.markDirtyAt(x, y);
+      this.markDirtyAt(x, y, "shape");
       return true;
     }
 
@@ -516,7 +532,7 @@
       c = c | 0;
       if (c > 0) this.paints.set(i, c);
       else this.paints.delete(i);
-      this.markDirtyAt(x, y);
+      this.markDirtyAt(x, y, "paint");
       return true;
     }
 
@@ -613,57 +629,78 @@
       this.damage.delete(i);
       this.shapes[i] = 0; // a rewritten tile loses shape/paint state
       this.paints.delete(i);
-      this.markDirtyAt(x, y);
+      this.markDirtyAt(x, y, "tile");
     }
 
     // ---- chunk rendering ----
+    // W21: all marking delegates to TC.WorldRegions (shared multi-consumer
+    // revision authority). Reasons classify the change kind for stats and
+    // future replication consumers.
     markAllDirty() {
-      for (let cy = 0; cy < this.chunksY; cy++) {
-        for (let cx = 0; cx < this.chunksX; cx++) {
-          this.dirty.add(cy * this.chunksX + cx);
-        }
+      if (TC.WorldRegions && typeof TC.WorldRegions.markAll === "function") {
+        TC.WorldRegions.markAll("bulk");
       }
     }
 
     // Mark the chunk holding (x, y); border tiles also dirty the adjacent
-    // chunk because tile edge masks read across the boundary.
-    markDirtyAt(x, y) {
-      const cx = (x / this.CHUNK) | 0,
-        cy = (y / this.CHUNK) | 0;
-      this.dirty.add(cy * this.chunksX + cx);
-      const lx = x - cx * this.CHUNK,
-        ly = y - cy * this.CHUNK;
-      if (lx === 0 && cx > 0) this.dirty.add(cy * this.chunksX + cx - 1);
-      if (lx === this.CHUNK - 1 && cx < this.chunksX - 1)
-        this.dirty.add(cy * this.chunksX + cx + 1);
-      if (ly === 0 && cy > 0) this.dirty.add((cy - 1) * this.chunksX + cx);
-      if (ly === this.CHUNK - 1 && cy < this.chunksY - 1)
-        this.dirty.add((cy + 1) * this.chunksX + cx);
+    // chunk because tile edge masks read across the boundary. The fan-out
+    // rule lives in WorldRegions.markTile.
+    markDirtyAt(x, y, reason) {
+      if (TC.WorldRegions && typeof TC.WorldRegions.markTile === "function") {
+        TC.WorldRegions.markTile(x, y, reason || "tile");
+      }
     }
 
     // Rebuild up to 3 dirty chunks per frame, nearest the camera first.
+    // Dirty state comes from THIS consumer's cursor into the shared region
+    // authority — draining it never hides invalidations from lighting,
+    // minimap or any other consumer (W21 PERF-004/VIS-002).
     update(dt) {
-      if (!this.dirty.size || !TC.Tiles) return;
+      const cons = this._regions;
+      if (!cons || !TC.Tiles) return;
+      const BUDGET = 3;
+      const backlog = cons.pendingCount();
+      if (backlog > this._rstats.maxBacklog)
+        this._rstats.maxBacklog = backlog;
+      if (backlog === 0) {
+        this._rstats.skipped++;
+        this._rstats.lastBudgetUsed = 0;
+        return;
+      }
       const span = this.CHUNK * TS;
       const cam = TC.camera;
-      let order = null;
-      if (cam) {
-        order = [];
-        for (const key of this.dirty) {
-          const cx = key % this.chunksX,
-            cy = (key / this.chunksX) | 0;
-          const dx = (cx + 0.5) * span - cam.x;
-          const dy = (cy + 0.5) * span - cam.y;
-          order.push([dx * dx + dy * dy, key]);
-        }
-        order.sort((a, b) => a[0] - b[0]);
+      let order = cons.dirtyRegions();
+      if (cam && order.length > BUDGET) {
+        const cxc = cam.x / span,
+          cyc = cam.y / span;
+        const d2 = (key) => {
+          const dx = (key % this.chunksX) * this.CHUNK + this.CHUNK / 2 - cxc;
+          const dy = (((key / this.chunksX) | 0) * this.CHUNK) + this.CHUNK / 2 - cyc;
+          return dx * dx + dy * dy;
+        };
+        order = order.slice().sort((a, b) => d2(a) - d2(b));
       }
-      const n = Math.min(3, this.dirty.size);
+      const n = Math.min(BUDGET, order.length);
       for (let i = 0; i < n; i++) {
-        const key = order ? order[i][1] : this.dirty.values().next().value;
-        this.dirty.delete(key);
+        const key = order[i];
+        cons.observe(key); // this consumer only — others stay stale
         this.rebuildChunk(key);
+        this._rstats.rebuilt++;
       }
+      this._rstats.lastBudgetUsed = n;
+    }
+
+    // VIS-002 instrumentation: lifetime rebuilds, current/high-water dirty
+    // backlog, idle skips, last-frame budget usage.
+    regionStats() {
+      return {
+        rebuilt: this._rstats.rebuilt,
+        backlog: this._regions ? this._regions.pendingCount() : 0,
+        maxBacklog: this._rstats.maxBacklog,
+        skippedCurrent: this._rstats.skipped,
+        budgetPerFrame: 3,
+        budgetUsedLastFrame: this._rstats.lastBudgetUsed
+      };
     }
 
     rebuildChunk(key) {

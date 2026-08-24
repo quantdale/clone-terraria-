@@ -101,14 +101,21 @@
   }
 
   function noteChange(i) {
-    if (frameChanges.length >= 128) return; // hard cap; payload trims to 32
     const w = worldRef;
-    frameChanges.push([
-      i % w.width,
-      (i / w.width) | 0,
-      liquidType[i],
-      liquidAmount[i],
-    ]);
+    if (frameChanges.length < 128) { // hard cap; payload trims to 32
+      frameChanges.push([
+        i % w.width,
+        (i / w.width) | 0,
+        liquidType[i],
+        liquidAmount[i],
+      ]);
+    }
+    // W21: liquid motion invalidates its region in the shared authority so
+    // the minimap (and any other presentation consumer) repaints exactly
+    // the affected area.
+    if (TC.WorldRegions && typeof TC.WorldRegions.markCell === "function") {
+      TC.WorldRegions.markCell(i % w.width, (i / w.width) | 0, "liquid");
+    }
   }
 
   // ---- settle sim ----

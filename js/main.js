@@ -156,6 +156,9 @@
     TC.worldSeed = null;
     TC.player = null;
     TC.state = 'title';
+    if (TC.WorldRegions && typeof TC.WorldRegions.reset === 'function') {
+      try { TC.WorldRegions.reset(); } catch (e) {}
+    }
     if (TC.Commands && typeof TC.Commands.clearQueue === 'function') {
       try { TC.Commands.clearQueue(); } catch (e) {}
     }

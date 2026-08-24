@@ -1,25 +1,35 @@
-/* minimap.js — offscreen 1px-per-tile world map, lazily repainted in column
-   strips, drawn as a top-right overlay centered on the player. Toggle: N.
-   Pixels are tinted by biome region (mirroring TC.Biomes' rules, which only
-   classify the player's own position) and the current biome is labelled
-   under the map. */
+/* minimap.js — offscreen 1px-per-tile world map drawn as a top-right overlay
+   centered on the player. Toggle: N.
+
+   W21: repainting is REGION-DRIVEN through TC.WorldRegions (PERF-004) —
+   no more round-robin column strips while visible:
+     - new world / reset / import -> authority marks every region ('world')
+       so the next open paints a full initial map;
+     - hidden map -> zero repaint work AND zero cursor advancement, so edits
+       accumulate; reopening catches up exactly once per stale region;
+     - terrain edits, wall edits and liquid motion invalidate only their own
+       regions (liquids mark through the Liquids change seam);
+     - the player marker/viewport are drawn per frame and never depend on
+       terrain repaints.
+   Biome classification consumes authoritative queries instead of private
+   constants: the Underworld depth cutoff comes from
+   TC.Biomes.underworldTopPx()/isUnderworldAt (W19 shared authority) and the
+   ocean margin from TC.Biomes.oceanEdge(). Pixels stay tinted by biome
+   region and the W20 localized label renders under the panel. */
 'use strict';
 (function () {
   const TC = window.TC;
   const TS = TC.CONST.TS;
   const T = TC.TILE || {};
 
-  const STRIP = 60;                    // columns repainted per update tick
   const PANEL_W = 200, PANEL_H = 150;  // overlay size in tiles/px (1 tile = 1 px)
   const MARGIN = 16;
   const SKY_RGB = [127, 184, 232];     // #7fb8e8, air above the surface line
   const CAVE_RGB = [16, 16, 16];       // #101010, air below it
   const DARKEN = 0.75;                 // ~25% darker tile colors
+  const CATCHUP_PER_FRAME = 24;        // max stale regions repainted per tick
 
-  // ---- biome region tinting (mirrors TC.Biomes' detection rules) ----
-  const UNDER_START =
-    (TC.CONST.GEN && TC.CONST.GEN.underworld && TC.CONST.GEN.underworld.startY) || 355;
-  const OCEAN_EDGE = 55;               // matches TC.Biomes' ocean margin
+  // ---- biome region tinting ----
   const BIOME_TINT = {                // null = leave untinted
     forest: null,
     ocean: [42, 96, 150],
@@ -34,15 +44,30 @@
   const AIR_MIX = 0.4;                 // how strongly air pixels take the tint
   const TILE_MIX = 0.18;               // how strongly ground pixels take it
 
-  // Column-level biome guess. TC.Biomes only exposes the player's own tag,
-  // so map strips classify themselves with the same region rules: ocean at
-  // the world margins, otherwise whichever stamped surface tile (SNOW/SAND/
-  // JGRASS) dominates a small window around the column — matching how
-  // worldgen marks biome regions. Depth zones (cave/underworld) are applied
-  // per pixel in paintColumns.
+  function oceanEdge() {
+    try {
+      if (TC.Biomes && typeof TC.Biomes.oceanEdge === 'function') return TC.Biomes.oceanEdge();
+    } catch (e) {}
+    return 55;
+  }
+  // Authoritative Underworld cutoff (W19 shared boundary): tiles at/under the
+  // lava line minus Biomes' 4-tile enter slack dominate by depth.
+  function underStartTy() {
+    try {
+      if (TC.Biomes && typeof TC.Biomes.underworldTopPx === 'function') {
+        return Math.round(TC.Biomes.underworldTopPx() / TS) - 4;
+      }
+    } catch (e) {}
+    const gen = TC.CONST.GEN || {};
+    return ((gen.underworld && gen.underworld.startY) || 355) - 4;
+  }
+
+  // Column-level surface-biome guess. Depth zones (cave/underworld) are
+  // applied per pixel in paintRegion via the shared boundary query.
   function classifyColumn(world, tx) {
     const W = world.width;
-    if (tx < OCEAN_EDGE || tx >= W - OCEAN_EDGE) return 'ocean';
+    const edge = oceanEdge();
+    if (tx < edge || tx >= W - edge) return 'ocean';
     let snow = 0, sand = 0, jg = 0;
     const x0 = Math.max(0, tx - 6), x1 = Math.min(W - 1, tx + 6);
     for (let x = x0; x <= x1; x++) {
@@ -62,10 +87,12 @@
     cv: null, mctx: null, img: null,   // offscreen map canvas + its ImageData
     cw: 0, ch: 0,                      // canvas size in tiles
     worldRef: null,                    // detects world swaps -> full repaint
-    nextX: 0,                          // round-robin strip cursor
-    fullRefresh: false,
     ptx: 0, pty: 0,                    // player position in tile coords
     colorCache: new Map(),             // hex -> [r,g,b]
+    _regions: null,                    // WorldRegions cursor ('minimap')
+    _stats: { fullPaints: 0, regionsPainted: 0, pixelsPainted: 0, catchups: 0 },
+
+    stats() { return Object.assign({}, this._stats); },
 
     parseColor(hex) {
       const cached = this.colorCache.get(hex);
@@ -92,21 +119,26 @@
       this.cw = world.width;
       this.ch = world.height;
       this.img = mctx.createImageData(world.width, world.height);
-      this.nextX = 0;
-      this.fullRefresh = true;
       return true;
     },
 
-    // Repaint `count` full-height columns starting at x0 into the map canvas.
-    paintColumns(x0, count) {
+    ensureConsumer() {
+      if (!this._regions && TC.WorldRegions && typeof TC.WorldRegions.consume === 'function') {
+        this._regions = TC.WorldRegions.consume('minimap');
+      }
+      return this._regions;
+    },
+
+    // Repaint one 32-column region block starting at tile x0 into the map.
+    paintRegion(x0, cols) {
       const world = TC.world;
       const w = this.cw, h = this.ch;
       const data = this.img.data;
       const defs = TC.TILE_DEFS;
       const AIR = TC.TILE.AIR, WATER = TC.TILE.WATER;
-      const underStart = UNDER_START - 4;          // TC.Biomes' depth cutoff
-      for (let i = 0; i < count; i++) {
-        const tx = x0 + i;
+      const underStart = underStartTy();
+      const x1 = Math.min(w, x0 + cols);
+      for (let tx = x0; tx < x1; tx++) {
         const surf = world.surfaceY[tx] | 0;
         const tint = BIOME_TINT[classifyColumn(world, tx)] || null;
         // Pre-mix this column's sky color so the inner loop stays cheap.
@@ -155,7 +187,9 @@
           data[p] = r | 0; data[p + 1] = g | 0; data[p + 2] = b | 0; data[p + 3] = 255;
         }
       }
-      this.mctx.putImageData(this.img, 0, 0, x0, 0, count, h);
+      this.mctx.putImageData(this.img, 0, 0, x0, 0, x1 - x0, h);
+      this._stats.regionsPainted++;
+      this._stats.pixelsPainted += (x1 - x0) * h;
     },
 
     // Player's biome label: localized display name for TC.Biomes' stable
@@ -181,27 +215,32 @@
     },
 
     update(dt) {
+      void dt;
       if (TC.Input && TC.Input.pressed('KeyN')) {
         this.visible = !this.visible;
-        if (this.visible) this.fullRefresh = true; // repaint everything on reveal
       }
       const world = TC.world;
       if (!world || !TC.player) return;
       this.ptx = (TC.player.x + TC.player.w / 2) / TS;
       this.pty = (TC.player.y + TC.player.h / 2) / TS;
       if (!this.ensureCanvas(world)) return;
-      if (this.worldRef !== world) { this.worldRef = world; this.fullRefresh = true; }
-      if (!this.visible) return;                 // no refresh work while hidden
-      if (this.fullRefresh) {
-        this.paintColumns(0, world.width);
-        this.nextX = 0;
-        this.fullRefresh = false;
-        return;
+      const cons = this.ensureConsumer();
+      if (!cons) return;
+      if (this.worldRef !== world) { this.worldRef = world; } // cursor already reset by WorldRegions.init
+      if (!this.visible) return;                 // no repaint work while hidden
+      // Paint stale regions only (bounded catch-up per frame).
+      const WR = TC.WorldRegions;
+      const dirty = cons.dirtyRegions();
+      if (!dirty.length) return;
+      if (dirty.length >= WR.count) this._stats.fullPaints++;
+      else if (dirty.length > CATCHUP_PER_FRAME) this._stats.catchups++;
+      const n = Math.min(CATCHUP_PER_FRAME, dirty.length);
+      for (let k = 0; k < n; k++) {
+        const idx = dirty[k];
+        const cc = WR.chunkCoords(idx);
+        cons.observe(idx);   // this cursor only — renderer/lighting unaffected
+        this.paintRegion(cc.cx * WR.CHUNK, WR.CHUNK);
       }
-      const count = Math.min(STRIP, world.width - this.nextX);
-      this.paintColumns(this.nextX, count);
-      this.nextX += count;
-      if (this.nextX >= world.width) this.nextX = 0;
     },
 
     // Screen-space overlay: framed map region centered on the player.

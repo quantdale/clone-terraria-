@@ -149,6 +149,23 @@
     const proj = guardedCall('Projectiles', 'activeCount');
     if (proj != null) lines.push('projectiles ' + (proj | 0));
 
+    // W21 presentation-infrastructure observability.
+    try {
+      if (TC.WorldRegions && typeof TC.WorldRegions.stats === 'function') {
+        const rs = TC.WorldRegions.stats();
+        lines.push('regions ' + rs.regions + ' bumps ' + rs.bumps + ' stale ' + rs.staleRegions);
+      }
+      if (TC.world && typeof TC.world.regionStats === 'function') {
+        const wr = TC.world.regionStats();
+        lines.push('chunks rebuilt ' + wr.rebuilt + ' backlog ' + wr.backlog + '/' + wr.maxBacklog);
+      }
+      if (TC.Lighting && typeof TC.Lighting.counters === 'function') {
+        const lc = TC.Lighting.counters();
+        lines.push('light full ' + lc.fullRecomputes + ' rects ' + lc.rectRecomputes +
+                   ' cells ' + lc.cellsRecomputed + ' dyn ' + lc.dynMerges);
+      }
+    } catch (e) {}
+
     if (TC.Enemies && TC.Enemies.list) lines.push('enemies ' + TC.Enemies.list.length);
     if (TC.Items && TC.Items.drops) lines.push('drops ' + TC.Items.drops.length);
 

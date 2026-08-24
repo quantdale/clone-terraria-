@@ -254,6 +254,10 @@
     // strata). Pure and deterministic — no Canvas/DOM/world access — so any
     // consumer may call it headless.
     underworldTopPx: underworldTopPx,
+    // Pure world-margin query (W21): the ocean band width in tiles from each
+    // map edge. Single source of truth — biome detection AND the minimap's
+    // column classifier consume this instead of private copies.
+    oceanEdge: function () { return OCEAN_EDGE; },
     // Pure membership test: true when yPx sits inside the Underworld band,
     // including the canonical 4-tile enter grace above the boundary. xPx is
     // part of the signature for future non-full-width shapes and is unused

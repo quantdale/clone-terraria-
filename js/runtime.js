@@ -126,6 +126,9 @@
     currentPhase = null;
     commandsProcessed = 0;
     commandsRejected = 0;
+    if (TC.WorldRegions && typeof TC.WorldRegions.reset === 'function') {
+      try { TC.WorldRegions.reset(); } catch (e) {}
+    }
     if (TC.Commands && typeof TC.Commands.clearQueue === 'function') {
       try { TC.Commands.clearQueue(); } catch (e) {}
     }

@@ -555,17 +555,19 @@
         }
       }
 
-      // lighting hook entry
+      // lighting hook entry (colored since W21 — the projectile's own tint)
       if (def.light > 0) {
         lights.push({
           x: p.x, y: p.y,
           intensity: def.light,
-          radius: 40 + def.light * 70
+          radius: 40 + def.light * 70,
+          color: p.color || def.color
         });
       }
     }
 
-    // explosion flashes decay and feed the same light hook
+    // explosion flashes decay and feed the same light hook (authored warm
+    // blast color — original palette, not borrowed)
     for (let i = flashes.length - 1; i >= 0; i--) {
       const f = flashes[i];
       f.t += dt;
@@ -573,7 +575,8 @@
       lights.push({
         x: f.x, y: f.y,
         intensity: f.intensity * (1 - f.t / f.dur),
-        radius: f.radius
+        radius: f.radius,
+        color: '#ffb066'
       });
     }
 
@@ -582,7 +585,7 @@
       for (let i = 0; i < lights.length; i++) {
         const l = lights[i];
         try {
-          TC.Lighting.addDynamic(l.x, l.y, l.radius, l.intensity, 2 * dt + 0.05);
+          TC.Lighting.addDynamic(l.x, l.y, l.radius, l.intensity, 2 * dt + 0.05, l.color);
         } catch (e) {}
       }
     }
