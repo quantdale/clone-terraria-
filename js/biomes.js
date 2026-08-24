@@ -27,7 +27,16 @@
   const TS = (TC.CONST && TC.CONST.TS) || 16;
   const T = TC.TILE || {};
   const GEN = (TC.CONST && TC.CONST.GEN) || {};
-  const UNDER_START = (GEN.underworld && GEN.underworld.startY) || 355;
+  // W19 truth-sync: ONE authoritative Underworld boundary. Summon validation
+  // (player.js), the Wall lifecycle (enemyai.js/enemies.js) and spawn zoning
+  // (enemyspawn.js) all derive from underworldTopPx() instead of recomputing
+  // (GEN.underworld.startY||355)*TS with private slack values.
+  function underworldTopPx() {
+    return ((GEN.underworld && GEN.underworld.startY) || 355) * TS;
+  }
+  // Canonical enter grace: positions up to 4 tiles above the lava line are
+  // already treated as Underworld (matches biome detect hysteresis).
+  const UW_ENTER_SLACK_PX = 4 * TS;
   const OCEAN_EDGE = 55;
   const SCAN_R = 42;            // tiles radius around player centre
   const SCAN_H = 28;
@@ -67,8 +76,12 @@
     cave: null // use vanilla cave table
   };
   // W17: post-Wall underworld supplement — ember wraith joins the mix once
-  // the Wall falls (condition-gated, not a full replacement).
-  const UNDERWORLD_POST_WALL = [['ember_wraith', 1.6]];
+  // the Wall falls. Declared with the SHARED [type, weight, condition]
+  // progression grammar: enemyspawn.zoneTable evaluates entry[2] through
+  // TC.Progression.test (fail-closed), so no bespoke flag check lives here
+  // and defeating the boss changes the world through the same declarative
+  // path recipes/NPC stock/loot use.
+  const UNDERWORLD_POST_WALL = [['ember_wraith', 1.6, 'boss.wall_of_flesh.defeated']];
 
   let current = 'forest';
   let raw = 'forest';
@@ -90,8 +103,8 @@
     const py = (p.y + p.h / 2) / TS;
     const W = world.width, H = world.height;
 
-    // Underworld dominates by depth alone
-    if (py >= UNDER_START - 4) return 'underworld';
+    // Underworld dominates by depth alone (shared boundary, canonical grace)
+    if (py * TS >= underworldTopPx() - UW_ENTER_SLACK_PX) return 'underworld';
 
     // Ocean: near world edge and close to surface
     const nearEdge = px < OCEAN_EDGE || px > W - OCEAN_EDGE;
@@ -237,18 +250,32 @@
     get raw() { return raw; },
     get blend() { return blend; },
     get musicTag() { return current; },
+    // Authoritative Underworld boundary in world PIXELS (start of the lava
+    // strata). Pure and deterministic — no Canvas/DOM/world access — so any
+    // consumer may call it headless.
+    underworldTopPx: underworldTopPx,
+    // Pure membership test: true when yPx sits inside the Underworld band,
+    // including the canonical 4-tile enter grace above the boundary. xPx is
+    // part of the signature for future non-full-width shapes and is unused
+    // today. Summon validation and encounter lifecycle MUST agree through
+    // this query rather than private depth math.
+    isUnderworldAt: function (xPx, yPx) {
+      return yPx >= underworldTopPx() - UW_ENTER_SLACK_PX;
+    },
     // Pure spawn override for enemies.spawnDirector. Returns an array of
     // [enemyId, weight] pairs — the same shape the old CONST.SPAWN swap
     // produced — or null to keep the vanilla table. Caller contract: when
-    // non-null, use it AS THE BASE TABLE of the active zone ('day' or
-    // 'night'); never apply it to the 'cave' zone; a blood-moon night keeps
-    // BLOOD_MOON_TABLE precedence.
+    // non-null, use it AS THE BASE TABLE of the active zone ('day', 'night'
+    // or the depth-classified 'underworld' zone); never apply it to the
+    // ordinary 'cave' zone; a blood-moon night keeps BLOOD_MOON_TABLE
+    // precedence on the surface night only.
     getSpawnOverride: function () {
       if (current === 'forest' || current === 'cave') return null;
       const base = SPAWN_OVERRIDE[current] || null;
-      if (current === 'underworld' && base && TC.Progression && typeof TC.Progression.has === 'function') {
-        try { if (TC.Progression.has('boss.wall_of_flesh.defeated')) return base.concat(UNDERWORLD_POST_WALL); } catch (e) {}
-      }
+      if (!base) return null;
+      // Gated supplements ride along as [type, weight, condition] entries;
+      // the spawn director owns condition evaluation (fail-closed).
+      if (current === 'underworld') return base.concat(UNDERWORLD_POST_WALL);
       return base;
     },
     // Per-step tick: detection scan + hysteresis + tint blend + ambience.

@@ -137,6 +137,7 @@ TC.CONST = {
     attemptDay: 5.5,
     attemptNight: 1.1,
     attemptCave: 3.0,
+    attemptUnderworld: 2.2,
   },
 
   COLORS: {

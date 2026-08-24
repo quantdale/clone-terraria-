@@ -118,12 +118,13 @@
     return { time: time, biome: biome, requires: requires, placement: placement };
   }
   function currentBiomeTag() {
-    const w = TC.world;
     const p = TC.player;
-    if (w && p && TC.CONST && TC.CONST.GEN && TC.CONST.GEN.underworld) {
-      const uy = TC.CONST.GEN.underworld.startY * TC.CONST.TS;
-      const py = p.y + p.h / 2;
-      if (py >= uy - 4 * TC.CONST.TS) return 'underworld';
+    // Canonical Underworld membership FIRST: the shared pure query
+    // (TC.Biomes.isUnderworldAt) keeps summon validation in lockstep with
+    // the Wall encounter lifecycle and spawn zoning — one boundary, no
+    // private depth math here.
+    if (p && TC.Biomes && typeof TC.Biomes.isUnderworldAt === 'function') {
+      try { if (TC.Biomes.isUnderworldAt(p.x, p.y + p.h / 2)) return 'underworld'; } catch (e) {}
     }
     if (TC.Biomes && typeof TC.Biomes.current === 'string' && TC.Biomes.current) {
       return TC.Biomes.current.toLowerCase();
@@ -145,7 +146,14 @@
     if (!def) return null;
     const worldWpx = w.width * TS;
     const worldHpx = w.height * TS;
-    const UW_START = (TC.CONST.GEN.underworld.startY || 355) * TS;
+    // Shared authoritative Underworld boundary — placement, summon
+    // validation and the encounter lifecycle must agree on one line.
+    let UW_START;
+    try {
+      UW_START = (TC.Biomes && typeof TC.Biomes.underworldTopPx === 'function')
+        ? TC.Biomes.underworldTopPx()
+        : ((TC.CONST.GEN.underworld && TC.CONST.GEN.underworld.startY) || 355) * TS;
+    } catch (e) { return null; }
     const px = player.x + player.w / 2;
     const dir = px < worldWpx / 2 ? 1 : -1;
     const margin = 4 * TS;

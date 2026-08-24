@@ -554,7 +554,16 @@
       if (opts && opts.band && typeof opts.band.minY === 'number') {
         e.wofBand = { minY: opts.band.minY, maxY: opts.band.maxY, centerY: opts.band.centerY || y + def.h / 2 };
       } else {
-        const UW_START = (TC.CONST.GEN.underworld.startY || 355) * TC.CONST.TS;
+        // Shared authoritative boundary (TC.Biomes.underworldTopPx) with a
+        // guarded legacy fallback so embeds without biomes.js still band.
+        let UW_START;
+        try {
+          UW_START = (TC.Biomes && typeof TC.Biomes.underworldTopPx === 'function')
+            ? TC.Biomes.underworldTopPx()
+            : ((TC.CONST.GEN.underworld && TC.CONST.GEN.underworld.startY) || 355) * TC.CONST.TS;
+        } catch (err) {
+          UW_START = y;
+        }
         const minY = UW_START + TC.CONST.TS;
         const maxY = (TC.world ? TC.world.height * TC.CONST.TS - e.h - 4 * TC.CONST.TS : y + 100);
         e.wofBand = { minY: minY, maxY: maxY, centerY: y };

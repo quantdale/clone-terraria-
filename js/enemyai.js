@@ -89,6 +89,29 @@
     weightedPick = util.weightedPick,
     rectSolid = util.rectSolid;
 
+  // ---- shared Underworld boundary (W19 truth-sync) ----
+  // ONE authoritative query lives on TC.Biomes (pure, headless-safe); the
+  // Wall lifecycle derives every depth decision from it so summon
+  // validation, encounter confinement and spawn zoning can never disagree.
+  function uwTopPx() {
+    try {
+      if (TC.Biomes && typeof TC.Biomes.underworldTopPx === "function")
+        return TC.Biomes.underworldTopPx();
+    } catch (err) {}
+    return ((TC.CONST.GEN && TC.CONST.GEN.underworld && TC.CONST.GEN.underworld.startY) || 355) * TC.CONST.TS;
+  }
+  function isPlayerInUnderworld(p) {
+    if (!p) return false;
+    try {
+      if (TC.Biomes && typeof TC.Biomes.isUnderworldAt === "function")
+        return !!TC.Biomes.isUnderworldAt(p.x, p.y + p.h / 2);
+    } catch (err) {}
+    const curBiome = (TC.Biomes && TC.Biomes.current) ? TC.Biomes.current : null;
+    const rawBiome = (TC.Biomes && TC.Biomes.raw) ? TC.Biomes.raw : null;
+    return curBiome === "underworld" || rawBiome === "underworld" ||
+      p.y + p.h / 2 >= uwTopPx() - 2 * TC.CONST.TS;
+  }
+
   // Minion shedding delegates to enemies.js, which owns the list, the
   // servant budget bookkeeping and safe placement.
   function spawnServantOf(boss, type, bx, by) {
@@ -969,18 +992,16 @@
     if (!w || TC.state !== 'playing') despawnReason = 'world_unload';
     else if (!p || p.dead) despawnReason = 'player_dead';
     else {
-      const curBiome = (TC.Biomes && TC.Biomes.current) ? TC.Biomes.current : null;
-      const rawBiome = (TC.Biomes && TC.Biomes.raw) ? TC.Biomes.raw : null;
-      const inUnderworld = (curBiome === 'underworld' || rawBiome === 'underworld');
-      let deepEnough = false;
-      try { const uy = (TC.CONST.GEN.underworld.startY || 355) * TS; deepEnough = p.y + p.h / 2 >= uy - 2 * TS; } catch (err) {}
-      if (!inUnderworld && !deepEnough) {
+      // Underworld membership via the ONE shared authoritative query —
+      // identical boundary to summon validation and spawn zoning.
+      const inUnderworld = isPlayerInUnderworld(p);
+      if (!inUnderworld) {
         const dxTiles = Math.abs(pcx - ecx) / TS;
         if (dxTiles > 85) despawnReason = 'escaped_range';
         else {
           const surfY = w.surfaceY ? w.surfaceY[Math.floor(pcx / TS)] : 110;
           if ((p.y + p.h / 2) / TS < surfY + 30) despawnReason = 'escaped_biome';
-          else if ((p.y + p.h / 2) / TS < (TC.CONST.GEN.underworld.startY || 355) - 10) despawnReason = 'escaped_biome';
+          else if ((p.y + p.h / 2) / TS < uwTopPx() / TS - 10) despawnReason = 'escaped_biome';
         }
       } else {
         // in underworld: do not despawn merely for being far ahead; the wall is supposed to close distance

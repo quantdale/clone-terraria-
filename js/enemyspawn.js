@@ -3,6 +3,10 @@
 
      - zone tables: lead-owned TC.CONST.SPAWN merged with biome extras,
        depth/biome gating and the Blood Moon night replacement
+     - depth-first zone classification (zoneOf): the Underworld is a DEPTH
+       zone derived from the shared TC.Biomes.underworldTopPx boundary — it
+       always outranks the generic 'cave' classification, so underworld
+       players get the Underworld ecology instead of vanilla cave mobs
      - placement search (findSpot) over world tiles
      - the director tick: rate limiting, progression spawn multiplier,
        weighted pick, entity creation through TC.Enemies.makeEnemy
@@ -11,8 +15,8 @@
 
    It never touches entity internals beyond the factory call — damage,
    death, loot and rendering stay in enemies.js. Public surface consumed by
-   enemies.js (facade) and tests: update/spawnDirector/zoneTable/findSpot/
-   setBloodMoon/isBloodMoon/reset. */
+   enemies.js (facade) and tests: update/spawnDirector/zoneOf/zoneTable/
+   findSpot/setBloodMoon/isBloodMoon/reset. */
 'use strict';
 (function () {
   window.TC = window.TC || {};
@@ -171,6 +175,30 @@
     return "";
   }
 
+  // ---- zone classification (W19 truth-sync) ----
+  // Depth-first: a player whose feet reach the shared Underworld boundary
+  // (TC.Biomes.isUnderworldAt — the same query summon validation uses)
+  // spawns from the Underworld ecology even though the generic depth rule
+  // below would classify the position as ordinary 'cave'. Every shallower
+  // depth keeps the unchanged cave/day/night behavior. Blood Moon
+  // precedence stays on the surface 'night' zone only; underground zones
+  // keep their own ecology by design.
+  function zoneOf(p, w, dl) {
+    if (!p || !w) return "day";
+    const ts = TC.CONST.TS;
+    const feetPy = p.y + p.h;
+    if (
+      TC.Biomes &&
+      typeof TC.Biomes.isUnderworldAt === "function" &&
+      TC.Biomes.isUnderworldAt(p.x, feetPy)
+    )
+      return "underworld";
+    const pcol = clamp(Math.floor((p.x + p.w / 2) / ts), 0, w.width - 1);
+    const surf = w.surfaceY ? w.surfaceY[pcol] : 0;
+    if (feetPy / ts > surf + 15) return "cave";
+    return dl > 0.5 ? "day" : "night";
+  }
+
   // Player depth below the local surface, in tiles (depth-gated cave picks).
   function playerDepthT() {
     const w = TC.world,
@@ -180,22 +208,34 @@
     return (p.y + p.h / 2) / TC.CONST.TS - (w.surfaceY[col] || 0);
   }
 
+  // A table entry may carry an optional third element: a progression
+  // condition string/object evaluated through TC.Progression.test.
+  // Malformed or false conditions fail CLOSED (entry dropped).
+  function entryConditionOk(entry) {
+    if (entry.length > 2 && TC.Progression &&
+        typeof TC.Progression.test === 'function') {
+      try { if (!TC.Progression.test(entry[2])) return false; } catch (e) { return false; }
+    }
+    return true;
+  }
+
   function zoneTable(zone, pcol) {
     const C = TC.CONST;
     const bio =
       TC.Biomes && typeof TC.Biomes.getSpawnOverride === "function"
         ? TC.Biomes.getSpawnOverride()
         : null;
-    const base =
-      bio && zone !== "cave" ? bio : (C.SPAWN && C.SPAWN[zone]) || [];
+    // Biome override (incl. the Underworld ecology + post-Wall supplement)
+    // replaces the vanilla table for every zone except ordinary 'cave'.
+    // Condition-carrying entries are filtered EVERYWHERE (base + extras).
+    const base = (
+      bio && zone !== "cave" ? bio : (C.SPAWN && C.SPAWN[zone]) || []
+    ).filter(entryConditionOk);
     if (zone === "night" && bloodMoon) return BLOOD_MOON_TABLE;
     const b = surfaceBiome(pcol);
     const depth = playerDepthT();
     const extra = (EXTRA_SPAWN[zone] || []).filter((entry) => {
-      if (entry.length > 2 && TC.Progression &&
-          typeof TC.Progression.test === 'function') {
-        try { if (!TC.Progression.test(entry[2])) return false; } catch (e) { return false; }
-      }
+      if (!entryConditionOk(entry)) return false;
       const def = TC.ENEMY_DEFS[entry[0]];
       if (def && def.bloodMoonOnly && !bloodMoon) return false;
       if (entry[0] === "ice_slime") return b === "snow";
@@ -259,12 +299,8 @@
     const dl = daylight();
     const pcol = clamp(Math.floor((p.x + p.w / 2) / ts), 0, w.width - 1);
     const surf = w.surfaceY ? w.surfaceY[pcol] : 0;
-    const feetTy = (p.y + p.h) / ts;
 
-    let zone;
-    if (feetTy > surf + 15) zone = "cave";
-    else if (dl > 0.5) zone = "day";
-    else zone = "night";
+    const zone = zoneOf(p, w, dl);
 
     const key = "attempt" + zone.charAt(0).toUpperCase() + zone.slice(1);
     // blood moon: night spawn attempts roll 3x as often; progression adds a
@@ -319,6 +355,7 @@
     },
     spawnDirector,
     tickEvent,
+    zoneOf,
     zoneTable,
     findSpot,
     surfaceBiome,

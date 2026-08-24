@@ -479,16 +479,19 @@ test('post-wof underworld spawn table includes ember_wraith', () => {
   const g = boot(777);
   const TC = g.TC;
   toUnderworld(TC);
-  // before defeat, underworld override should NOT include ember_wraith
-  const before = TC.Biomes.getSpawnOverride();
-  assert.ok(before && !before.some((e) => e[0] === 'ember_wraith'), 'not before');
+  const col = Math.floor((TC.world.width / 2));
+  // before defeat, the underworld table must NOT include ember_wraith
+  // (condition-gated entry fails closed through the declarative grammar)
+  const before = TC.EnemySpawn.zoneTable('underworld', col).map((e) => e[0]);
+  assert.ok(before.includes('demon_eye'), 'underworld base roster present');
+  assert.ok(!before.includes('ember_wraith'), 'not before');
   // defeat wof
   const def = heldSummon(TC, 'flesh_sigil');
   TC.player.doSummon(def, 'flesh_sigil');
   const wof = TC.Enemies.list.find((e) => e.type === 'wof');
   deterministicRolls(() => TC.Combat.hitEnemy(wof, 1, { base: 9999, cls: 'melee', attacker: TC.player, kb: 3 }));
-  const after = TC.Biomes.getSpawnOverride();
-  assert.ok(after && after.some((e) => e[0] === 'ember_wraith'), 'ember_wraith after');
+  const after = TC.EnemySpawn.zoneTable('underworld', col).map((e) => e[0]);
+  assert.ok(after.includes('ember_wraith'), 'ember_wraith after');
 });
 
 // ------------------------------------------------------------------
