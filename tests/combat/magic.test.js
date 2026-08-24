@@ -94,7 +94,7 @@ test('potion sickness: blocks drinking while active and expires over time', () =
   }
 });
 
-test('fire(): bolt damage scaled by st.magicDamage exactly once', () => {
+test('fire(): bolt launches raw and magicDamage scales exactly once at impact (W12)', () => {
   const g = boot();
   const TC = g.TC;
   deterministicRolls(() => {
@@ -106,8 +106,17 @@ test('fire(): bolt damage scaled by st.magicDamage exactly once', () => {
       const bolt = TC.Magic.fire(def, TC.player.x, TC.player.y, 0);
       assert.ok(bolt && bolt.active, 'fire() returned a pooled bolt');
       assert.strictEqual(bolt.type, 'magic_bolt');
-      assert.strictEqual(bolt.dmg, 20, 'round(def.damage * magicDamage) exactly once');
+      // W12: no fire-time scaling — the raw base rides the pool.
+      assert.strictEqual(bolt.dmg, 10, 'bolt carries unscaled def.damage');
       assert.strictEqual(ev.counts.ProjectileSpawned, 1);
+      // ... and the canonical resolver applies magicDamage exactly once:
+      const res = TC.Combat.resolveHit({
+        base: bolt.dmg, cls: 'magic', attacker: TC.player,
+        target: null, kb: bolt.kb,
+      });
+      assert.strictEqual(res.damage, 20,
+        'round(def.damage * st.magicDamage) at resolution time, once');
+      assert.strictEqual(res.cls, 'magic');
     } finally {
       unsub();
       TC.Projectiles.clear();

@@ -2,9 +2,9 @@
    One pre-allocated pool (MAX_PROJECTILES slots) drives every ranged
    projectile: arrows, magic bolts, yoyos, boomerangs, grenades, falling
    stars and wire darts. Per-type motion, pierce, bounce, homing, tile
-   collision, enemy hits with the shared variance/crit roll, explosions,
-   and lighting hooks (TC.Projectiles.lights rebuilt each frame for a
-   future dynamic-light pass; glow is also rendered additively here).
+   collision, enemy hits through the canonical TC.Combat.resolveHit (W12),
+   explosions, and lighting hooks (TC.Projectiles.lights rebuilt each frame
+   for a future dynamic-light pass; glow is also rendered additively here).
 
    Integration: TC.Combat delegates its arrow lifecycle here and drives
    update/draw/clear from its own hooks (see combat.js), so main.js needs
@@ -39,8 +39,8 @@
    TC.Items.spawnDrop-style usage: TC.Projectiles.spawn('grenade', x, y,
    angle, { speed: 300, dmg: 12 }).
 
-   Runtime gameplay randomness (damage rolls) uses Math.random, matching
-   combat.js/enemies.js precedent; only worldgen must be seed-deterministic. */
+   Damage randomness lives in TC.Combat.resolveHit (injectable rng); this
+   module rolls nothing itself. */
 'use strict';
 (function () {
   const TC = window.TC = window.TC || {};
@@ -54,6 +54,10 @@
 
   // def fields:
   //   motion     'ballistic' | 'straight' | 'yoyo' | 'boomerang'
+  //   cls        damage class for TC.Combat.resolveHit when the OWNER is the
+  //              local player ('ranged' arrow / 'magic' bolt / 'melee' tethered
+  //              melee gear / 'generic' thrown+traps). Ownerless (boss/trap)
+  //              shots never scale through player stats regardless.
   //   gravity    px/s^2 (ballistic)
   //   speed      default launch speed px/s (overridable per spawn)
   //   maxAge     s before despawn (grenade: fuse length)
@@ -72,37 +76,37 @@
   //   color      procedural render tint
   const TYPES = {
     arrow: {
-      motion: 'ballistic', gravity: 900, speed: 520, maxAge: 3,
+      motion: 'ballistic', cls: 'ranged', gravity: 900, speed: 520, maxAge: 3,
       hitRadius: 12, len: 13, kb: 3, pierce: 0, bounce: 0, restitution: 0,
       light: 0, color: '#8a5a32'
     },
     magic_bolt: {
-      motion: 'straight', speed: 380, maxAge: 2.2,
+      motion: 'straight', cls: 'magic', speed: 380, maxAge: 2.2,
       hitRadius: 10, len: 0, kb: 4, pierce: 1, bounce: 1, restitution: 0.85,
       homing: 5.5, homingRange: 150, light: 0.75, color: '#7a5af5'
     },
     yoyo: {
-      motion: 'yoyo', speed: 340, maxDist: 150, maxAge: 12,
+      motion: 'yoyo', cls: 'melee', speed: 340, maxDist: 150, maxAge: 12,
       hitRadius: 14, len: 0, kb: 2.5, pierce: -1, bounce: 0, restitution: 0,
       rehit: 0.45, light: 0.35, color: '#e05a8a'
     },
     boomerang: {
-      motion: 'boomerang', speed: 330, accel: 280, maxAge: 4,
+      motion: 'boomerang', cls: 'melee', speed: 330, accel: 280, maxAge: 4,
       hitRadius: 12, len: 0, kb: 3.5, pierce: 2, bounce: 2, restitution: 0.6,
       light: 0, color: '#a97d4b'
     },
     grenade: {
-      motion: 'ballistic', gravity: 1100, speed: 300, maxAge: 2.0,
+      motion: 'ballistic', cls: 'generic', gravity: 1100, speed: 300, maxAge: 2.0,
       hitRadius: 10, len: 0, kb: 6, pierce: 0, bounce: 99, restitution: 0.45,
       light: 0.15, explode: { radius: 52, dmgMul: 1.6 }, color: '#3d4436'
     },
     falling_star: {
-      motion: 'ballistic', gravity: 620, speed: 560, maxAge: 2.5,
+      motion: 'ballistic', cls: 'generic', gravity: 620, speed: 560, maxAge: 2.5,
       hitRadius: 13, len: 0, kb: 5, pierce: 2, bounce: 0, restitution: 0,
       light: 0.95, color: '#ffe98a'
     },
     wire_dart: {
-      motion: 'straight', speed: 620, maxAge: 1.2,
+      motion: 'straight', cls: 'generic', speed: 620, maxAge: 1.2,
       hitRadius: 9, len: 0, kb: 2, pierce: 1, bounce: 0, restitution: 0,
       stick: 0.35, light: 0.25, color: '#c04ac0'
     }
@@ -146,15 +150,18 @@
     }
   }
 
-  // Apply DMG_VARIANCE then CRIT_CHANCE (+ per-projectile bonus) double-damage
-  // roll. Shared shape with combat.js/magic.js so melee, arrows and pooled
-  // projectiles crit identically.
-  function rollDamage(base, critBonus) {
-    const v = TC.CONST.DMG_VARIANCE || 0;
-    let d = base * (1 - v + Math.random() * 2 * v);
-    const crit = Math.random() < ((TC.CONST.CRIT_CHANCE || 0) + (critBonus || 0));
-    if (crit) d *= 2;
-    return { dmg: Math.max(1, Math.round(d)), crit };
+  // Damage rolls are NOT done here: every enemy impact routes through the
+  // canonical TC.Combat.resolveHit (see combat.js) with this projectile's
+  // damage-class and ownership. Player-owned shots scale through TC.Stats;
+  // ownerless boss/trap shots deal their declared base untouched.
+  function rollSpec(p, mult) {
+    return {
+      base: p.dmg * (mult == null ? 1 : mult),
+      cls: p.def.cls || 'generic',
+      attacker: (p.owner && p.owner === TC.player) ? p.owner : null,
+      critBonus: p.critBonus || 0,
+      kb: p.kb,
+    };
   }
 
   function sparks(x, y) {
@@ -331,8 +338,16 @@
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist > radius + Math.max(e.w, e.h) / 2) continue;
         const falloff = 1 - clamp(dist / radius, 0, 1) * 0.6;
-        const roll = rollDamage(dmg * mul * falloff, critBonus);
-        TC.Enemies.damageEnemy(e, roll.dmg, dx >= 0 ? 1 : -1, kb, roll.crit);
+        if (TC.Combat && typeof TC.Combat.hitEnemy === 'function') {
+          // Explosions are world/thrower events without a live owner entity:
+          // base damage as declared (no player stat scaling), falloff via mult.
+          TC.Combat.hitEnemy(e, dx >= 0 ? 1 : -1, {
+            base: dmg * mul * falloff, cls: 'generic', attacker: null, kb: kb,
+          });
+        } else {
+          TC.Enemies.damageEnemy(e, Math.max(1, Math.round(dmg * mul * falloff)),
+                                 dx >= 0 ? 1 : -1, kb, false);
+        }
       }
     }
 
@@ -375,8 +390,13 @@
       if (distToRect(tx, ty, e.x, e.y, e.w, e.h) > p.hitRadius) continue;
 
       if (p.type === 'grenade') { explode(p); return; }   // contact detonation
-      const roll = rollDamage(p.dmg, p.critBonus);
-      TC.Enemies.damageEnemy(e, roll.dmg, p.vx >= 0 ? 1 : -1, p.kb, roll.crit);
+      if (TC.Combat && typeof TC.Combat.hitEnemy === 'function') {
+        TC.Combat.hitEnemy(e, p.vx >= 0 ? 1 : -1, rollSpec(p));
+      } else {
+        // Resolver absent (partial-script headless load): apply flat damage.
+        TC.Enemies.damageEnemy(e, Math.max(1, Math.round(p.dmg)),
+                               p.vx >= 0 ? 1 : -1, p.kb, false);
+      }
       p.hits.push(e);
 
       if (p.pierce === 0) {
@@ -834,7 +854,8 @@
     clearAll: clearAll,
     activeCount: activeCount,
     viewOf: viewOf,
-    rollDamage: rollDamage,
+    rollDamage: null,    // W12: superseded by TC.Combat.resolveHit (kept as a
+                         // named slot so stale callers fail loudly, not silently)
     explodeAt: explodeAt
   };
 })();

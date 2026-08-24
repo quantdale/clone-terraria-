@@ -125,23 +125,65 @@
     { out: 'wrath_potion',     n: 1, station: 'workbench', cost: { gel: 8, gold_ore: 3 } }
   ];
 
+  // Generic status-effect definition schema (W13.1). Every timed status on
+  // the player is a BUFF_DEFS row — there is no second effect runtime:
+  //   id          stable string key (save identity — never rename without
+  //               an alias; serialized as [[id, secondsLeft], ...])
+  //   name        display name (HUD glyph derives from it)
+  //   good        true = buff, false = debuff (icon framing only)
+  //   dur         default duration seconds when applier omits one
+  //   stack       'refresh' (default) keeps the LONGER of remaining/new;
+  //               'max' behaves identically today but names the policy
+  //   mods        stat modifiers folded in by TC.Stats ('status.buffs')
+  //   dps         damage-over-time hp/s (bypasses iframes deliberately)
+  //   healPerSec  regeneration-over-time hp/s (applied in tickBuffs)
+  //   fromSource  intake source tag that inflicts this status via
+  //               TC.Combat.hurtPlayer (combat consults statusForSource,
+  //               it never hardcodes effect ids)
+  //   fromSourceDur  duration override when inflicted via fromSource
+  //   color       HUD/border tint; parts[] ambient particle palette; rate
+  //               particles/sec
   const BUFF_DEFS = {
     ironskin:     { name: 'Ironskin',     good: true,  dur: 50, color: '#b8c0cc',
+                    stack: 'refresh',
                     mods: { defense: 8 }, parts: ['#c8d0dc', '#98a2b2'], rate: 6 },
     regeneration: { name: 'Regeneration', good: true,  dur: 40, color: '#6ee06e',
+                    stack: 'refresh', healPerSec: 2,
                     mods: { regen: 2 }, parts: ['#8ef08e', '#4ec44e'], rate: 7 },
     swiftness:    { name: 'Swiftness',    good: true,  dur: 60, color: '#5ad0e8',
+                    stack: 'refresh',
                     mods: { moveSpeed: 1.25 }, parts: ['#8ae4f4', '#38aecb'], rate: 9 },
     wrath:        { name: 'Wrath',        good: true,  dur: 30, color: '#e85a48',
+                    stack: 'refresh',
                     mods: { meleeDmg: 1.2, rangedDmg: 1.2 },
                     parts: ['#ff8a6a', '#c83a2a'], rate: 7 },
     poisoned:     { name: 'Poisoned',     good: false, dps: 2, color: '#7ac74f',
+                    stack: 'refresh',
                     parts: ['#9ade6e', '#589c32'], rate: 5 },
     burning:      { name: 'Burning',      good: false, dps: 6, color: '#ff7a30',
+                    stack: 'refresh',
+                    fromSource: 'lava', fromSourceDur: 4,
                     parts: ['#ffb03a', '#e85a1a'], rate: 14 },
     slowed:       { name: 'Slowed',       good: false, color: '#9a8ad0',
+                    stack: 'refresh',
                     mods: { moveSpeed: 0.55 }, parts: ['#b8a8e8', '#786aa8'], rate: 4 }
   };
+
+  // Intake-source -> status policy table derived from the defs above.
+  // TC.Combat.hurtPlayer asks statusForSource(src) instead of naming effects.
+  const SOURCE_STATUS = {};
+  (function () {
+    for (const id in BUFF_DEFS) {
+      const d = BUFF_DEFS[id];
+      if (typeof d.fromSource === 'string' && d.fromSource) {
+        SOURCE_STATUS[d.fromSource] = {
+          id: id,
+          dur: (typeof d.fromSourceDur === 'number' && d.fromSourceDur > 0)
+            ? d.fromSourceDur : d.dur,
+        };
+      }
+    }
+  })();
 
   // Reforge-style prefixes (stub): positive tier 1, negative tier -1.
   const PREFIX_DEFS = {
@@ -481,7 +523,9 @@
         continue;
       }
       const d = BUFF_DEFS[b.id];
-      if (d && d.dps > 0) dotDamage(b, player, d, dt);
+      if (!d) continue;
+      if (d.dps > 0) dotDamage(b, player, d, dt);
+      if (d.healPerSec > 0) hotDamage(b, player, d, dt);
     }
     emitParticles(dt, player);
   }
@@ -556,6 +600,26 @@
     if (p.hp <= 0) {
       p.hp = 0;
       if (typeof p.die === 'function') { try { p.die(); } catch (e) {} }
+    }
+  }
+
+  // Heal-over-time twin of dotDamage (fractional pool, integer ticks). The
+  // regeneration buff currently heals through its Stats regen mod instead;
+  // this makes periodic healing a first-class status property for new defs.
+  function hotDamage(b, p, d, dt) {
+    if (!(d.healPerSec > 0)) return;
+    b.pool += d.healPerSec * dt;
+    if (b.pool < 1) return;
+    const n = Math.floor(b.pool);
+    b.pool -= n;
+    if (p.dead || typeof p.hp !== 'number') return;
+    const maxHp = (typeof p.maxHp === 'number') ? p.maxHp : Infinity;
+    const before = p.hp;
+    p.hp = Math.min(maxHp, p.hp + n);
+    const gained = p.hp - before;
+    if (gained > 0) {
+      floatText(p.x + p.w / 2, p.y - 4, '+' + gained,
+                (TC.CONST && TC.CONST.COLORS && TC.CONST.COLORS.heal) || '#7dff7d');
     }
   }
 
@@ -898,6 +962,10 @@
     remove: removeBuff,
     has: hasBuff,
     clear() { list.length = 0; },
+
+    // Intake-source policy lookup for TC.Combat.hurtPlayer (W12): returns
+    // {id, dur} when the source inflicts a status, else null.
+    statusForSource(src) { return SOURCE_STATUS[src] || null; },
 
     // Pure stat-mod aggregation (folded in by TC.Stats 'status.buffs')
     modsOf: modsOfBuffs,

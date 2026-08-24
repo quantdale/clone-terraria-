@@ -689,9 +689,17 @@
       const e = list[k];
       if (!e || e.hp <= 0) continue;
       if (!aabb(d.x - 2, d.y - 2, 4, 4, e.x, e.y, e.w, e.h)) continue;
-      try {
-        TC.Enemies.damageEnemy(e, DART_DMG_ENEMY, d.vx >= 0 ? 1 : -1, 2, false);
-      } catch (err) {}
+      // W12: world-source damage routes through the canonical resolver
+      // (no player-stat scaling — attacker is null); defense still applies.
+      if (TC.Combat && typeof TC.Combat.hitEnemy === "function") {
+        TC.Combat.hitEnemy(e, d.vx >= 0 ? 1 : -1, {
+          base: DART_DMG_ENEMY, cls: "generic", attacker: null, kb: 2,
+        });
+      } else {
+        try {
+          TC.Enemies.damageEnemy(e, DART_DMG_ENEMY, d.vx >= 0 ? 1 : -1, 2, false);
+        } catch (err) {}
+      }
       pBurst(d.x, d.y, 4, [C.metal, "#c93a3a"], 80);
       sfx("hit");
       darts.splice(di, 1);

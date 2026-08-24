@@ -1,18 +1,58 @@
-/* combat.js — melee arc strikes, arrows (delegated to TC.Projectiles),
-   player damage intake. The arrow lifecycle lives in projectiles.js's
-   unified pool; the local array below is a fallback kept for the case
-   where projectiles.js is absent, and Combat.arrows stays readable as a
-   live view either way.
+/* combat.js — CANONICAL combat-hit resolution (W12) + melee arc strikes +
+   arrows facade (delegated to TC.Projectiles) + player damage intake.
 
-   Foundation contracts: Combat.clear() wipes the TC.Projectiles pool too
-   (plus the legacy fallback), a WorldLoaded event subscription clears
-   stale projectiles on world transitions, and the per-frame tick is
-   registered with TC.Systems as phase 'combat' system 'core.combat'
-   (guarded; main.js may keep calling Combat.update directly instead —
-   never both). hurtPlayer returns { finalDamage, defenseApplied, crit }.
-   Enemy-damage events (EntityDamaged/EntityKilled) belong at
-   TC.Enemies.damageEnemy/killEnemy in enemies.js, where every source's
-   damage funnels — not here, which only sees its own hits. */
+   One authority for damage math: TC.Combat.resolveHit(spec) computes a hit
+   from a declarative spec and mutates nothing. Every damaging pathway
+   (melee arcs, pooled projectiles, magic weapons, trap darts, explosions)
+   routes through it, and TC.Enemies.damageEnemy applies the FINAL number
+   (defense/class/variance/crit/mitigation were already resolved here).
+
+   Spec fields (all optional unless noted):
+     base        required number > 0 — unscaled damage
+     cls         'generic'|'melee'|'ranged'|'magic'|'summon' (default generic)
+     attacker    source entity; player-owned attacks scale through TC.Stats
+                 (class multiplier + critChance). Any other source deals its
+                 declared base untouched — bosses/traps never inherit the
+                 player's gear stats.
+     target      victim entity; reads its defense + registered mitigation
+     mult        extra multiplier (explosion falloff etc.), default 1
+     pen         flat defense penetration
+     kb          knockback power carried onto the result
+     critBonus   +flat crit chance on top of the attacker snapshot
+     critMul     crit damage multiplier (default 2)
+     variance    override CONST.DMG_VARIANCE; noVariance disables rolling
+     rng         injectable RNG () => [0,1) — deterministic test seam
+                 (default Math.random). Used for BOTH variance and crit.
+     stats       pre-resolved stat snapshot (skips TC.Stats.resolve)
+     defense     explicit target defense override
+     environmental true bypasses defense entirely (see ENVIRONMENTAL below)
+     statuses    [{id,dur}] the caller intends to apply on a landed hit
+     source      string tag echoed onto the result (events/policies)
+
+   Result: { ok, damage, crit, kb, cls, source, defenseApplied, mitigated,
+             statuses, rejected } — damage is FINAL (>= 1 minimum).
+   rejected is null here; intake-side gates (player i-frames/dead) report
+   through hurtPlayer's result instead.
+
+   Mitigation registry: content modules contribute target-side damage
+   policies via TC.Combat.registerMitigation(key, fn(target)->mult) keyed by
+   ENEMY_DEFS[].ai or type (registered through TC.Systems.boot tasks so load
+   order never matters; see enemies.js). This replaces per-pathway special
+   cases — Skeletron's hands-alive skull resist lives there, nowhere else.
+
+   Environmental policy: intake sources named in ENVIRONMENTAL bypass
+   defense (fall, void — falling/void can't be armored away). Lava/drown/
+   shockwave/enemy contact remain ordinary defended intake; lava inflicts
+   the status declared by TC.Buffs.statusForSource('lava') (accessories.js
+   owns that mapping) rather than combat hardcoding an effect id.
+
+   Events: EntityDamaged/EntityKilled/BossDefeated are emitted exactly once,
+   at the single application site (Enemies.damageEnemy / killEnemy) — never
+   here. Death occurs exactly once (hp<=0 guard).
+
+   Foundation contracts: Combat.clear() wipes the TC.Projectiles pool (plus
+   the legacy fallback), WorldLoaded clears stale projectiles, and the tick
+   is registered with TC.Systems phase 'combat' system 'core.combat'. */
 'use strict';
 (function () {
   const TC = window.TC;
@@ -24,11 +64,169 @@
   const ARROW_LEN = 13;        // visual px from tail to tip
   const ARROW_KB = 3;          // knockback power dealt by arrows
 
+  // Intake sources that bypass player defense. Everything else (enemy
+  // contact, boss shots, lava burns, drowning, shockwaves, trap darts) is
+  // reduced by equipment defense like any ordinary hit.
+  const ENVIRONMENTAL = { fall: true, void: true };
+
+  // Damage-class registry. statField names the TC.Stats snapshot field that
+  // scales the class; summon/future classes plug in by adding a row (and a
+  // matching stats.js contributor) — no resolver rewrite.
+  const DAMAGE_CLASSES = Object.freeze({
+    generic: { id: 'generic', statField: null },
+    melee:   { id: 'melee',   statField: 'meleeDamage' },
+    ranged:  { id: 'ranged',  statField: 'rangedDamage' },
+    magic:   { id: 'magic',   statField: 'magicDamage' },
+    summon:  { id: 'summon',  statField: 'summonDamage' },
+  });
+
   const Combat = {};
   TC.Combat = Combat;
 
-  // Legacy arrow storage. With TC.Projectiles present this is unused and
-  // Combat.arrows resolves to a live view of pooled arrows instead.
+  Combat.DAMAGE_CLASSES = DAMAGE_CLASSES;
+  Combat.ENVIRONMENTAL_SOURCES = Object.freeze(['fall', 'void']);
+
+  // ---- target-side mitigation registry ----------------------------------
+
+  // key -> fn(target) -> positive multiplier (<1 reduces damage)
+  const MITIGATIONS = new Map();
+
+  // Register a target mitigation policy under an ai name or enemy type.
+  // Re-registering replaces (idempotent boot tasks are welcome).
+  Combat.registerMitigation = function (key, fn) {
+    if ((typeof key !== 'string' || !key) || typeof fn !== 'function') return false;
+    MITIGATIONS.set(key, fn);
+    return true;
+  };
+
+  function mitigationFor(target) {
+    if (!target) return null;
+    const ai = target.def && target.def.ai;
+    return (ai && MITIGATIONS.get(ai)) || (target.type && MITIGATIONS.get(target.type)) || null;
+  }
+
+  function targetDefenseOf(target) {
+    if (!target) return 0;
+    if (target.def && typeof target.def.defense === 'number' && target.def.defense > 0) {
+      return target.def.defense;
+    }
+    if (typeof target.totalDefense === 'function') {
+      try { const d = target.totalDefense(); return (d > 0) ? d : 0; } catch (e) {}
+    }
+    return 0;
+  }
+
+  function safeStats(attacker) {
+    if (!TC.Stats || typeof TC.Stats.resolve !== 'function') return null;
+    try { return TC.Stats.resolve(attacker) || null; } catch (e) { return null; }
+  }
+
+  // ---- canonical resolution ---------------------------------------------
+
+  // Pure computation: no hp writes, no events, no particles. Deterministic
+  // when callers inject spec.rng.
+  Combat.resolveHit = function (spec) {
+    const o = spec || {};
+    const fail = function (reason) {
+      return { ok: false, reason: reason, damage: 0, crit: false, kb: 0,
+               cls: 'generic', source: o.source || null, defenseApplied: 0,
+               mitigated: null, statuses: [], rejected: null };
+    };
+    const base = Number(o.base);
+    if (!isFinite(base) || base <= 0) return fail('invalid-base');
+
+    const rng = (typeof o.rng === 'function') ? o.rng : Math.random;
+    const clsId = DAMAGE_CLASSES[o.cls] ? o.cls : 'generic';
+    const clsDef = DAMAGE_CLASSES[clsId];
+    const attacker = o.attacker || null;
+    const target = o.target || null;
+
+    // Class-aware scaling ONLY for attacks owned by the local player.
+    const isPlayerAttack = !!(attacker && TC.player && attacker === TC.player);
+    let stats = null;
+    if (isPlayerAttack) stats = o.stats || safeStats(TC.player);
+
+    let mul = (typeof o.mult === 'number' && o.mult > 0) ? o.mult : 1;
+    if (isPlayerAttack && clsDef.statField && stats) {
+      const f = stats[clsDef.statField];
+      if (typeof f === 'number' && f > 0) mul *= f;
+    }
+
+    // Variance: uniform +/-v around the scaled base.
+    let v = (TC.CONST && TC.CONST.DMG_VARIANCE) || 0;
+    if (o.noVariance) v = 0;
+    else if (typeof o.variance === 'number' && o.variance >= 0) v = o.variance;
+    let dmg = base * mul * (1 - v + rng() * 2 * v);
+
+    // Crit: attacker snapshot chance (already includes the CONST base) plus
+    // any per-hit bonus; non-player attacks never crit.
+    let critChance = 0;
+    if (isPlayerAttack) {
+      critChance = stats ? (stats.critChance ||
+        ((TC.CONST && TC.CONST.CRIT_CHANCE) || 0)) : ((TC.CONST && TC.CONST.CRIT_CHANCE) || 0);
+    }
+    if (typeof o.critBonus === 'number' && o.critBonus > 0) critChance += o.critBonus;
+    const critMul = (typeof o.critMul === 'number' && o.critMul > 0) ? o.critMul : 2;
+    const crit = critChance > 0 && rng() < Math.min(1, critChance);
+    if (crit) dmg *= critMul;
+
+    // Target mitigation policies (content-contributed, e.g. Skeletron's
+    // protected skull while a hand lives).
+    let mitigated = null;
+    if (target) {
+      const pol = mitigationFor(target);
+      if (pol) {
+        let m = 1;
+        try { m = pol(target); } catch (e) { m = 1; }
+        if (typeof m === 'number' && isFinite(m) && m > 0 && m < 1) {
+          dmg *= m;
+          mitigated = m;
+        }
+      }
+    }
+
+    // Defense: skipped for environmental sources; pen pierces flat amounts;
+    // final damage never drops below 1. The scaled roll is rounded BEFORE
+    // defense (legacy rollDamage/damageEnemy granularity), and defense that
+    // would be wasted by the 1-damage floor is not counted as applied.
+    let defenseApplied = 0;
+    if (!o.environmental) {
+      dmg = Math.round(dmg);
+      const def = (typeof o.defense === 'number' && o.defense > 0)
+        ? o.defense : targetDefenseOf(target);
+      const pen = (typeof o.pen === 'number' && o.pen > 0) ? o.pen : 0;
+      const effective = Math.max(0, def - pen);
+      defenseApplied = Math.min(effective, Math.max(0, dmg - 1));
+      dmg -= defenseApplied;
+    }
+
+    const damage = Math.max(1, Math.round(dmg));
+    return {
+      ok: true, damage, crit,
+      kb: (typeof o.kb === 'number') ? o.kb : 0,
+      cls: clsId, source: o.source || null,
+      defenseApplied, mitigated,
+      statuses: Array.isArray(o.statuses) ? o.statuses.slice() : [],
+      rejected: null,
+    };
+  };
+
+  // Resolve + apply to an enemy in one step. Returns the result, or null
+  // when the target/application layer is unavailable. Emits NO events here:
+  // Enemies.damageEnemy stays the single event/death authority.
+  Combat.hitEnemy = function (target, dir, spec) {
+    if (!target || !TC.Enemies || typeof TC.Enemies.damageEnemy !== 'function') return null;
+    const o = spec || {};
+    const res = Combat.resolveHit(Object.assign({}, o, { target: target }));
+    if (!res.ok) return res;
+    TC.Enemies.damageEnemy(target, res.damage, dir >= 0 ? 1 : -1,
+                           res.kb, res.crit);
+    return res;
+  };
+
+  // ---- legacy arrow storage ---------------------------------------------
+  // With TC.Projectiles present this is unused and Combat.arrows resolves
+  // to a live view of pooled arrows instead.
   const legacyArrows = [];
   Object.defineProperty(Combat, 'arrows', {
     enumerable: true,
@@ -42,48 +240,11 @@
 
   // ---- helpers ----
 
-  // Apply DMG_VARIANCE (uniform +/-v) then a crit double-damage roll.
-  // Crit chance = CONST.CRIT_CHANCE + resolved player critChance contributions.
-  // classMul scales by the resolver's damage-class multiplier (melee/ranged).
-  function rollDamage(base, classMul) {
-    const v = TC.CONST.DMG_VARIANCE || 0;
-    // st.critChance from the resolver ALREADY includes the CONST.CRIT_CHANCE
-    // base (stats.js finalize); adding the base again here inflated melee
-    // crit odds by another absolute CRIT_CHANCE — only fall back to the bare
-    // base when no resolver snapshot is available.
-    let critChance = TC.CONST.CRIT_CHANCE || 0;
-    let mul = (typeof classMul === 'number') ? classMul : 1;
-    if (TC.Stats && typeof TC.Stats.resolve === 'function' && TC.player) {
-      try {
-        const st = TC.Stats.resolve(TC.player);
-        if (st) {
-          critChance = st.critChance || 0;
-          mul *= 1;
-        }
-      } catch (e) {}
-    }
-    let d = base * mul * (1 - v + Math.random() * 2 * v);
-    const crit = Math.random() < critChance;
-    if (crit) d *= 2;
-    return { dmg: Math.max(1, Math.round(d)), crit };
-  }
-
-  // Resolved damage-class multiplier for the local player (1 when unknown).
-  function classMul(field) {
-    if (!TC.Stats || typeof TC.Stats.resolve !== 'function' || !TC.player) return 1;
-    try {
-      const st = TC.Stats.resolve(TC.player);
-      return (st && typeof st[field] === 'number' && st[field] > 0) ? st[field] : 1;
-    } catch (e) { return 1; }
-  }
-
-  // Normalize an angle into [0, TAU).
   function normTau(a) {
     a %= TAU;
     return a < 0 ? a + TAU : a;
   }
 
-  // Distance from a point to an axis-aligned rect (0 when inside).
   function distToRect(px, py, rx, ry, rw, rh) {
     const nx = Math.max(rx, Math.min(rx + rw, px));
     const ny = Math.max(ry, Math.min(ry + rh, py));
@@ -97,6 +258,10 @@
     }
   }
 
+  function playerStats() {
+    return (TC.player) ? safeStats(TC.player) : null;
+  }
+
   // ---- public API ----
 
   // Hit each enemy whose center lies within r of (cx,cy) and whose angle from
@@ -107,6 +272,7 @@
         typeof TC.Enemies.damageEnemy !== 'function') return 0;
     const span = normTau(a1 - a0);
     const fullCircle = span >= TAU - 1e-6;
+    const stats = playerStats();
     let hits = 0;
     const list = TC.Enemies.list;
     for (let i = 0; i < list.length; i++) {
@@ -122,25 +288,27 @@
         if (off > span) continue;
       }
       if (swingId != null) e.lastHitSwing = swingId;
-      const roll = rollDamage(dmg, classMul('meleeDamage'));
-      TC.Enemies.damageEnemy(e, roll.dmg, dx >= 0 ? 1 : -1, kb, roll.crit);
+      Combat.hitEnemy(e, dx >= 0 ? 1 : -1, {
+        base: dmg, cls: 'melee', attacker: TC.player, stats: stats, kb: kb,
+      });
       hits++;
     }
     if (hits > 0 && TC.Audio) TC.Audio.play('hit');
     return hits;
   };
 
+  // Class scaling now happens at RESOLUTION time (arrow type carries
+  // cls:'ranged'), so the projectile launches with its raw damage.
   Combat.shootArrow = function (x, y, angle, speed, dmg) {
-    const eff = Math.round(dmg * classMul('rangedDamage'));
     if (TC.Projectiles && typeof TC.Projectiles.spawn === 'function') {
-      TC.Projectiles.spawn('arrow', x, y, angle, { speed: speed, dmg: eff });
+      TC.Projectiles.spawn('arrow', x, y, angle, { speed: speed, dmg: dmg });
     } else {
       legacyArrows.push({
         x: x, y: y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         age: 0,
-        dmg: eff
+        dmg: dmg
       });
     }
     if (TC.Audio) TC.Audio.play('swing'); // bow release shares the whoosh recipe
@@ -153,6 +321,7 @@
       return;
     }
     const arrows = legacyArrows;
+    const stats = playerStats();
     for (let i = arrows.length - 1; i >= 0; i--) {
       const a = arrows[i];
       a.age += dt;
@@ -180,8 +349,10 @@
           const e = list[j];
           if (!e || e.hp <= 0) continue;
           if (distToRect(tipX, tipY, e.x, e.y, e.w, e.h) > ARROW_HIT_RADIUS) continue;
-          const roll = rollDamage(a.dmg);
-          TC.Enemies.damageEnemy(e, roll.dmg, a.vx >= 0 ? 1 : -1, ARROW_KB, roll.crit);
+          Combat.hitEnemy(e, a.vx >= 0 ? 1 : -1, {
+            base: a.dmg, cls: 'ranged', attacker: TC.player, stats: stats,
+            kb: ARROW_KB,
+          });
           if (TC.Audio) TC.Audio.play('hit');
           dead = true;
           break;
@@ -235,31 +406,60 @@
     TC.clearCam(ctx);
   };
 
-  // Incoming damage on the player: variance only, no crits. Equipment defense
-  // applies except for environmental 'fall'/'void' sources. Returns
-  // { finalDamage, defenseApplied, crit: false } — the numbers actually passed
-  // to Player.damage — or null when no player is present.
-  Combat.hurtPlayer = function (dmg, kbx, kby, src) {
+  // Incoming damage on the player through the canonical resolver. Returns
+  // { finalDamage, defenseApplied, crit, rejected } or null when no player
+  // exists. rejected === 'iframes' means the hit landed during invulnerability
+  // (or post-death) and the player took nothing — the numbers are informational.
+  Combat.hurtPlayer = function (dmg, kbx, kby, src, opts) {
     if (!TC.player || typeof TC.player.damage !== 'function') return null;
-    const v = TC.CONST.DMG_VARIANCE || 0;
-    let final = Math.max(1, Math.round(dmg * (1 - v + Math.random() * 2 * v)));
-    let defenseApplied = 0;
-    if (src !== 'fall' && src !== 'void') {
-      const defense = (typeof TC.player.totalDefense === 'function') ? TC.player.totalDefense() : 0;
-      defenseApplied = Math.min(defense, final - 1);   // intake never drops below 1
-      final = Math.max(1, final - defense);
+    const p = TC.player;
+    const o = opts || {};
+    const res = Combat.resolveHit({
+      base: dmg,
+      cls: o.cls || 'generic',
+      attacker: o.attacker || null,   // non-player: no stat scaling/crit
+      target: p,
+      kb: 0,
+      source: src || null,
+      environmental: !!ENVIRONMENTAL[src],
+      noVariance: !!o.noVariance,
+      rng: o.rng,
+      stats: o.stats || null,
+      statuses: o.statuses || null,
+    });
+    if (!res.ok) {
+      return { finalDamage: 0, defenseApplied: 0, crit: false, rejected: res.reason };
     }
-    TC.player.damage(final, kbx, kby, src);
-    if (src === 'lava' && TC.Buffs && typeof TC.Buffs.apply === 'function') {
-      try { TC.Buffs.apply('burning', 4); } catch (e) {}
+    const out = {
+      finalDamage: res.damage, defenseApplied: res.defenseApplied,
+      crit: res.crit, rejected: null, cls: res.cls, source: res.source,
+    };
+    if (p.dead || p.iframes > 0) {
+      out.rejected = 'iframes';
+      return out;
+    }
+    p.damage(res.damage, kbx, kby, src);
+    // Environmental status infliction via the accessories-owned mapping
+    // (BUFF_DEFS[].fromSource) — combat never hardcodes effect ids.
+    const st = (TC.Buffs && typeof TC.Buffs.statusForSource === 'function')
+      ? TC.Buffs.statusForSource(src) : null;
+    if (st && Array.isArray(res.statuses) && res.statuses.length === 0) {
+      try { TC.Buffs.apply(st.id, st.dur); } catch (e) {}
+    }
+    for (let i = 0; i < res.statuses.length; i++) {
+      const s = res.statuses[i];
+      if (s && s.id && TC.Buffs) {
+        try { TC.Buffs.apply(s.id, s.dur); } catch (e) {}
+      }
     }
     if (TC.Audio) TC.Audio.play('hurt');
-    return { finalDamage: final, defenseApplied: defenseApplied, crit: false };
+    return out;
   };
 
   // Radial ground-slam around (x,y): damages the player with linear falloff
   // to half damage at r, kicks them away, and throws a dust ring. Used by the
-  // granite golem's slam attack. Returns true when the player was hit.
+  // granite golem's slam attack and Moss Mother's root slam. Returns true
+  // when the player was hit.
   Combat.shockwave = function (x, y, r, dmg, kb) {
     if (TC.Particles && TC.Particles.burst) {
       TC.Particles.burst(x, y, 18, {
@@ -275,15 +475,13 @@
     if (d > r) return false;
     const falloff = 1 - d / r;                       // 1 at center, 0 at rim
     const dir = dx >= 0 ? 1 : -1;
-    Combat.hurtPlayer(Math.max(1, Math.round(dmg * (0.5 + 0.5 * falloff))),
-                      dir * (kb || 240), -220, 'shockwave');
-    return true;
+    const res = Combat.hurtPlayer(Math.max(1, Math.round(dmg * (0.5 + 0.5 * falloff))),
+                                  dir * (kb || 240), -220, 'shockwave');
+    return !!(res && !res.rejected);
   };
 
   // Wipe every projectile: the pooled pool first (arrows, bolts, grenades,
-  // watchers' targets...), then the legacy fallback array. The old body only
-  // zeroed Combat.arrows — which with TC.Projectiles present is a reused
-  // viewOf() scratch buffer, so pooled projectiles survived world changes.
+  // watchers' targets...), then the legacy fallback array.
   function clearAll() {
     if (TC.Projectiles && typeof TC.Projectiles.clear === 'function') {
       TC.Projectiles.clear();
@@ -293,8 +491,6 @@
   Combat.clear = clearAll;
 
   // Reaction: a freshly loaded world never inherits stale projectiles.
-  // (main.js also calls Combat.clear() on newGame/continueGame; this is the
-  // event-driven backstop, harmless when both run.)
   if (TC.Events && typeof TC.Events.on === 'function' &&
       TC.Events.EVENT && TC.Events.EVENT.WorldLoaded) {
     TC.Events.on(TC.Events.EVENT.WorldLoaded, function () { clearAll(); });

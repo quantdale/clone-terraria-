@@ -485,6 +485,22 @@
   const TOUCH_KB_X = 210,
     TOUCH_KB_Y = -190;
 
+  // W12 target-side mitigation policy: Skeletron's skull takes 65% less
+  // damage while either hand is still alive (kill the hands to expose it).
+  // Registered through a boot task so load order never matters — combat.js
+  // owns the registry, this module owns the boss behavior.
+  if (TC.Systems && typeof TC.Systems.boot === "function") {
+    TC.Systems.boot("core.enemy-mitigations", {
+      init: function () {
+        if (TC.Combat && typeof TC.Combat.registerMitigation === "function") {
+          TC.Combat.registerMitigation("skeletron", function (target) {
+            return target && target.handsAlive > 0 ? 0.35 : 1;
+          });
+        }
+      },
+    });
+  }
+
   // ---- small local helpers (runtime gameplay randomness; Math.random is fine here) ----
   function rand(a, b) {
     return a + Math.random() * (b - a);
@@ -1561,13 +1577,17 @@
     }
   }
 
-  // ---- damage / death ----
+  // ---- loot ----
   // Roll a dead enemy's loot table and scatter the results at (cx,cy).
-  // def.drops is the single loot source: entries {id,min,max,chance} with
-  // chance defaulting to 1; contents and probabilities live in ENEMY_DEFS.
-  // def.coins [minCopper,maxCopper] (W2 economy) scatters canonical currency
-  // through TC.Economy.dropCoins.
+  // Evaluation is delegated to the canonical TC.LootTables (W13): chance /
+  // min-max / coins semantics and validation live there; ENEMY_DEFS[].drops
+  // + .coins stay the single content source. Returns nothing.
   function rollDrops(e, cx, cy) {
+    if (TC.LootTables && typeof TC.LootTables.rollEntity === "function") {
+      TC.LootTables.rollEntity(e.def, cx, cy);
+      return;
+    }
+    // Fallback while lootables.js is absent (partial-script loads only).
     const drops = e.def.drops || [];
     for (let k = 0; k < drops.length; k++) {
       const d = drops[k];
@@ -1591,13 +1611,15 @@
     }
   }
 
+  // ---- damage / death ----
+  // Apply FINAL damage to an enemy (W12): defense, class scaling, variance,
+  // crit and target mitigation were already resolved by TC.Combat.resolveHit
+  // — this is the single application site, and the single place where
+  // EntityDamaged / EntityKilled / BossDefeated fire. dmg is rounded/floored
+  // at 1 here as a last-line invariant. Returns the applied amount.
   function damageEnemy(e, dmg, dir, power, crit) {
-    if (!e || e.hp <= 0) return;
-    // def.defense absorbs flat damage; Skeletron's skull takes 65% less while
-    // either hand is still alive (kill the hands to expose it)
-    let final = dmg;
-    if (e.def.ai === "skeletron" && e.handsAlive > 0) final *= 0.35;
-    final = Math.max(1, Math.round(final - (e.def.defense || 0)));
+    if (!e || e.hp <= 0) return 0;
+    const final = Math.max(1, Math.round(dmg));
     e.hp -= final;
     if (TC.Events) {
       try {
@@ -1630,6 +1652,7 @@
     }
     if (TC.Audio) TC.Audio.play("hit");
     if (e.hp <= 0) killEnemy(e);
+    return final;
   }
 
   function killEnemy(e) {

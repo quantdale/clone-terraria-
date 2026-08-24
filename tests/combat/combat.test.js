@@ -1,9 +1,9 @@
 /* tests/combat/combat.test.js — TC.Combat exactly-once validation:
-   meleeStrike swingId dedup + arc culling, damageEnemy defense applied once,
-   EntityDamaged/Killed/BossDefeated emitted once per kill, hurtPlayer
-   defense subtraction vs TC.Stats.resolve().defense, fall/void bypass.
-   Includes one KNOWN DEFECT regression test (skip-tagged) for the
-   double defense subtraction spanning lead-owned player.js. */
+   meleeStrike swingId dedup + arc culling, final-damage application through
+   Enemies.damageEnemy (defense now lives in the W12 canonical resolver —
+   see resolver.test.js for class/defense/crit math), EntityDamaged/Killed/
+   BossDefeated emitted once per kill, hurtPlayer defense subtraction vs
+   TC.Stats.resolve().defense, fall/void bypass, i-frame rejection. */
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
@@ -47,19 +47,23 @@ test('meleeStrike: each enemy hit once per swingId; arc culls enemies behind', (
   });
 });
 
-test('damageEnemy: enemy def.defense subtracted exactly once, min 1 lands', () => {
+test('damageEnemy: applies FINAL damage exactly once, min 1 floor (W12 contract)', () => {
   const g = boot();
   const TC = g.TC;
-  const e = makeEnemy(0, 0, { defense: 7 });
-  TC.Enemies.list.push(e);
-  TC.Enemies.damageEnemy(e, 20, 1, 0, false);
-  assert.strictEqual(e.hp, 87, 'round(20-7)=13 damage');
-  TC.Enemies.damageEnemy(e, 20, 1, 0, false);
-  assert.strictEqual(e.hp, 74);
-  const tank = makeEnemy(0, 0, { defense: 500 });
-  TC.Enemies.list.push(tank);
-  TC.Enemies.damageEnemy(tank, 3, 1, 0, false);
-  assert.strictEqual(tank.hp, 99, 'at least 1 damage lands through huge defense');
+  const e = makeEnemy(0, 0, { defense: 7 });   // defense is a RESOLVER concern;
+  TC.Enemies.list.push(e);                     // application must not re-apply it
+  const ev = countEvents(TC, ['EntityDamaged']);
+  assert.strictEqual(TC.Enemies.damageEnemy(e, 20, 1, 0, false), 20,
+    'final damage passes through unmodified (no hidden defense)');
+  assert.strictEqual(e.hp, 80);
+  assert.strictEqual(ev.counts.EntityDamaged, 1);
+  // min-1 floor stays an invariant of the application site
+  TC.Enemies.damageEnemy(e, 0.2, 1, 0, false);
+  assert.strictEqual(e.hp, 79, 'fractional/zero rounds up to at least 1');
+  // dead enemies are rejected outright (death occurs exactly once)
+  e.hp = 0;
+  ev.off();
+  assert.strictEqual(TC.Enemies.damageEnemy(e, 50, 1, 0, false), 0);
 });
 
 test('kill events: EntityKilled + BossDefeated emitted exactly once per boss kill', () => {

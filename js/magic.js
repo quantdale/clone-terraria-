@@ -49,9 +49,9 @@
    Regen stars stay module-local: the pool's 'falling_star' is a damaging
    ballistic projectile, nothing like these homing mana pickups.
 
-   Damage: castWeapon passes flat def.damage (today's formula). Stats-based
-   scaling (Math.round(def.damage * st.magicDamage)) is available via
-   TC.Stats but intentionally NOT applied — it would change current numbers.
+   Damage: bolts launch with flat def.damage; the magicDamage class
+   multiplier and crit rolls are applied at impact time by the canonical
+   TC.Combat.resolveHit (W12) — one scaling authority for every class.
 
    Tuning constants that would ideally live in constants.js (kept here since
    constants.js is lead-owned): MANA_BASE 20, MANA_CAP 200, CRYSTAL_GAIN 20,
@@ -108,16 +108,8 @@
   }
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
-  // Same roll shape as combat.js melee/arrows: +/-DMG_VARIANCE then a crit
-  // chance of CRIT_CHANCE plus any per-weapon bonus; crits deal double.
-  // (Fallback path only — pooled bolts roll inside TC.Projectiles.)
-  function rollDamage(base, critBonus) {
-    const v = CONST.DMG_VARIANCE || 0;
-    let d = base * (1 - v + Math.random() * 2 * v);
-    const crit = Math.random() < ((CONST.CRIT_CHANCE || 0) + (critBonus || 0));
-    if (crit) d *= 2;
-    return { dmg: Math.max(1, Math.round(d)), crit };
-  }
+  // (W12) Damage rolls moved to the canonical TC.Combat.resolveHit; both the
+  // pooled hit path and the fallback path above route through it.
 
   // Remove one of an id from the inventory (Inventory.remove is id-based).
   function consumeOne(inv, id) {
@@ -258,21 +250,15 @@
 
   // Fire one weapon projectile. Returns the pooled projectile (or a local
   // fallback bolt when TC.Projectiles is absent), or null.
-  // Base damage scales by the resolver's magicDamage multiplier (melee/ranged
-  // scale at their strike sites; magic scales here at fire time).
+  // Damage launches RAW: the canonical resolver applies the magicDamage
+  // class multiplier at impact time (TC.Combat.resolveHit via the pooled
+  // hit path), exactly like melee/ranged — one scaling authority (W12).
   function fire(def, x, y, ang) {
-    let mul = 1;
-    if (TC.Stats && typeof TC.Stats.resolve === 'function' && TC.player) {
-      try {
-        const st = TC.Stats.resolve(TC.player);
-        if (st && typeof st.magicDamage === 'number' && st.magicDamage > 0) mul = st.magicDamage;
-      } catch (e) {}
-    }
     if (TC.Projectiles && typeof TC.Projectiles.spawn === 'function') {
       const colors = def.colors || ['#ffffff'];
       const p = TC.Projectiles.spawn('magic_bolt', x, y, ang, {
         speed: def.speed || 400,
-        dmg: Math.round((def.damage || 5) * mul),
+        dmg: def.damage || 5,
         kb: def.knockback != null ? def.knockback : 3,
         pierce: def.pierce || 0,          // extra enemies after the first hit
         bounce: def.bounce || 0,          // wall bounces before shattering
@@ -374,8 +360,15 @@
           if (!e || e.hp <= 0 || b.hits.has(e)) continue;
           if (distToRect(b.x, b.y, e.x, e.y, e.w, e.h) > b.size + 3) continue;
           b.hits.add(e);
-          const roll = rollDamage(b.dmg, b.crit);
-          try { TC.Enemies.damageEnemy(e, roll.dmg, b.vx >= 0 ? 1 : -1, b.kb, roll.crit); } catch (e2) {}
+          if (TC.Combat && typeof TC.Combat.hitEnemy === 'function') {
+            TC.Combat.hitEnemy(e, b.vx >= 0 ? 1 : -1, {
+              base: b.dmg, cls: 'magic', attacker: TC.player,
+              critBonus: b.crit || 0, kb: b.kb,
+            });
+          } else {
+            try { TC.Enemies.damageEnemy(e, Math.max(1, Math.round(b.dmg)),
+                                         b.vx >= 0 ? 1 : -1, b.kb, false); } catch (e2) {}
+          }
           impactFxAt(b.x, b.y, b.colors, 0.8);
           if (b.pierce > 0) b.pierce--;
           else { dead = true; break; }
@@ -448,8 +441,8 @@
   // ====================================================================
   // Item use — kind 'magic' fires while LMB is held; potions and mana
   // crystals trigger on the click edge. player.js's useHeld() ignores
-  // unknown kinds, so these never double-fire. Base damage scales by
-  // TC.Stats magicDamage at fire() time (see header).
+  // unknown kinds, so these never double-fire. Bolts launch raw and scale
+  // at impact time through TC.Combat.resolveHit (see fire()).
   // ====================================================================
   function handleUse(dt, p) {
     const inp = TC.Input;
