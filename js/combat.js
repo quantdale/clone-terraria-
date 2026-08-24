@@ -498,11 +498,13 @@
 
   // Foundation scheduler: expose the tick as a 'combat'-phase system. It
   // drives TC.Projectiles.update internally (see Combat.update), so exactly
-  // ONE of { Systems.updateAll, main.js's direct Combat.update call } may be
-  // active at a time — running both would double-step every projectile.
+  // ONE driver may be active — the scheduler is canonical. Gated to live
+  // simulation (no projectile stepping on title / while paused).
   if (TC.Systems && typeof TC.Systems.register === 'function') {
     TC.Systems.register('combat', 'core.combat', {
       update: function (dt) { Combat.update(dt); }
+    }, {
+      when: function () { return TC.state === 'playing' && !(TC.UI && TC.UI.paused); }
     });
   }
 })();

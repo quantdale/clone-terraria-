@@ -63,11 +63,14 @@ test('systems: duplicate registration replaces in place, keeping the original sl
   const g = loadGame();
   const TC = g.TC;
   const ran = [];
+  // Production owns some input-phase registrations (ui); assert only the
+  // probe trio's relative order.
   TC.Systems.register('input', 'first', { update: () => ran.push('first') });
   TC.Systems.register('input', 'dup-me', { update: () => ran.push('old-dup') });
   TC.Systems.register('input', 'last', { update: () => ran.push('last') });
   TC.Systems.register('input', 'dup-me', { update: () => ran.push('new-dup') });
-  const order = Array.from(TC.Systems.resolveOrder('input'), (e) => e.name);
+  const order = Array.from(TC.Systems.resolveOrder('input'), (e) => e.name)
+    .filter((n) => ['first', 'dup-me', 'last'].includes(n));
   assert.deepStrictEqual(order, ['first', 'dup-me', 'last'], 'slot preserved on replace');
   TC.Systems.updateAll(1 / 60);
   assert.ok(ran.includes('new-dup') && !ran.includes('old-dup'),

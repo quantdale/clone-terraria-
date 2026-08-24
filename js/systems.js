@@ -23,27 +23,32 @@
   // TC.Systems — fixed update phases + registered systems
   // ===================================================================
 
-  // Phase order follows docs/ARCHITECTURE.md §6 and maps onto js/main.js
-  // step() (legacy calls migrate into phases gradually):
+  // Phase order is the canonical fixed-step schedule. It deliberately mirrors
+  // js/main.js's legacy step() order so scheduler migration preserves behavior:
   //   input         TC.Input polls, TC.UI.update (runs on title too)
-  //   commands      command queue (MineTile/PlaceTile/...) — future home
-  //   movement      TC.Player.update intent (physics folded in today)
+  //   commands      command queue drain (MineTile/PlaceTile/...) — now live
+  //   environment   TC.Sky, TC.Biomes (early — before player/AI spawn)
+  //   movement      TC.Player.update, Grapple pre/post (physics folded in)
   //   physics       collision resolution (inside entity updates today)
   //   projectiles   TC.Projectiles.update / TC.Combat arrows
-  //   ai            TC.Enemies.spawnDirector/update, TC.NPCs.update
-  //   combat        TC.Combat.update, status/buff ticks
-  //   environment   TC.Sky, TC.Biomes, TC.Music, TC.MiniMap
-  //   liquidsWiring TC.World.update (water flow, chunk rebuild, mechanisms)
-  //   items         TC.Items.update (magnet + pickup)
-  //   progression   TC.Save.autosave, spawn/progress rules, TC.Lighting
+  //   ai            TC.Enemies.spawnDirector/update, TC.NPCs, Fishing, Loot
+  //   items         TC.Items.update (magnet + pickup before combat)
+  //   combat        TC.Combat.update, status/buff ticks, Gear/Magic/Particles
+  //   liquidsWiring TC.World.update (water flow, chunk rebuild, mechanisms), Wiring, Liquids
+  //   progression   TC.Save.autosave, TC.Lighting, Music, MiniMap
   //   eventsFlush   drain the event queue after all mutation is done
-  const PHASES = ['input', 'commands', 'movement', 'physics', 'projectiles', 'ai',
-                  'combat', 'environment', 'liquidsWiring', 'items', 'progression', 'eventsFlush'];
+  const PHASES = ['input', 'commands', 'environment', 'movement', 'physics', 'projectiles', 'ai',
+                  'items', 'combat', 'liquidsWiring', 'progression', 'eventsFlush'];
 
   const byPhase = new Map(PHASES.map((p) => [p, new Map()])); // phase -> name -> entry
   const resolvedCache = new Map();                            // phase -> {order, cycle, cycleLogged}
   let cacheDirty = true;
   let regSeq = 0;
+  // Observability — current tick phase + per-system execution counters
+  let currentPhase = null;
+  let tickCount = 0;
+  const perSystemCounts = new Map(); // "phase/name" -> total calls
+  const perTickCounts = new Map(); // "phase/name" -> calls this tick (for exactly-once checks)
 
   function invalidate() { cacheDirty = true; }
 
@@ -81,6 +86,7 @@
     entry.sys = sys;
     entry.after = normalizeNames(opts && opts.after);
     entry.before = normalizeNames(opts && opts.before);
+    entry.when = (opts && typeof opts.when === 'function') ? opts.when : null;
     entry.hasInit = typeof sys.init === 'function';
     entry.hasUpdate = typeof sys.update === 'function';
     invalidate();
@@ -160,7 +166,11 @@
   // a throwing system is logged (rate-limited) and skipped, the tick goes on.
   // A cyclic phase is skipped with a one-time error log instead of crashing.
   function updateAll(dt) {
+    tickCount++;
+    perTickCounts.clear();
     for (const phase of PHASES) {
+      currentPhase = phase;
+      if (TC.Runtime && typeof TC.Runtime._setPhase === 'function') try { TC.Runtime._setPhase(phase); } catch (e) {}
       const res = resolveCached(phase);
       if (res.cycle) {
         if (!res.cycleLogged) {
@@ -171,9 +181,43 @@
       }
       for (const e of res.order) {
         if (!e.hasUpdate) continue;
+        // State gate: a system with `when` runs only while the predicate holds
+        // (title/pause gating lives here, not in every system body).
+        if (e.when) {
+          let go = false;
+          try { go = !!e.when(); } catch (err) { go = false; }
+          if (!go) continue;
+        }
+        const key = phase + '/' + e.name;
+        perTickCounts.set(key, (perTickCounts.get(key) || 0) + 1);
+        perSystemCounts.set(key, (perSystemCounts.get(key) || 0) + 1);
+        e._tickCalls = (e._tickCalls || 0) + 1;
+        if (TC.Runtime && typeof TC.Runtime._incSystem === 'function') try { TC.Runtime._incSystem(key); } catch (e2) {}
         guarded('Systems update ' + phase + '/' + e.name, e, () => e.sys.update(dt));
       }
     }
+    currentPhase = null;
+    if (TC.Runtime && typeof TC.Runtime._setPhase === 'function') try { TC.Runtime._setPhase(null); } catch (e) {}
+  }
+  function getCurrentPhase() { return currentPhase; }
+  function getTickCount() { return tickCount; }
+  function getCounts() {
+    const out = {};
+    perSystemCounts.forEach((v, k) => out[k] = v);
+    return out;
+  }
+  function getPerTickCounts() {
+    const out = {};
+    perTickCounts.forEach((v, k) => out[k] = v);
+    return out;
+  }
+  function resetCounts() {
+    perSystemCounts.clear();
+    perTickCounts.clear();
+    tickCount = 0;
+    currentPhase = null;
+    // also clear per-entry tick histograms for exactly-once tests
+    for (const phase of PHASES) for (const e of byPhase.get(phase).values()) e._tickCalls = 0;
   }
 
   // Debug snapshot: every system in execution order.
@@ -185,6 +229,7 @@
           phase: e.phase, name: e.name,
           hasInit: e.hasInit, hasUpdate: e.hasUpdate,
           after: e.after.slice(), before: e.before.slice(),
+          gated: !!e.when,
           inited: !!e.inited, errors: e.errors
         });
       }
@@ -236,22 +281,29 @@
   TC.Systems = {
     PHASES: PHASES.slice(),
     register: registerSystem, initAll, updateAll, resolveOrder, list: listSystems,
-    boot, runBoot
+    boot, runBoot,
+    currentPhase: getCurrentPhase, tickCount: getTickCount,
+    getCounts: getCounts, getPerTickCounts: getPerTickCounts, resetCounts: resetCounts
   };
 
   // ===================================================================
   // TC.RenderLayers — fixed-order draw layers
   // ===================================================================
 
-  // Layer order mirrors js/main.js draw(): background first, then world-space
-  // content under the camera transform, lighting as a screen-space overlay,
-  // HUD/menus/tooltips last in screen space.
-  const LAYERS = ['background', 'walls', 'liquidsBehind', 'tiles', 'items', 'enemies',
-                  'npcs', 'player', 'projectiles', 'combatFx', 'particles', 'lighting',
-                  'worldOverlays', 'hud', 'menus', 'tooltips'];
-  const WORLD_LAYERS = ['background', 'walls', 'liquidsBehind', 'tiles', 'items', 'enemies',
-                        'npcs', 'player', 'projectiles', 'combatFx', 'particles', 'worldOverlays'];
-  const SCREEN_LAYERS = ['lighting', 'hud', 'menus', 'tooltips'];
+  // Layer order is the canonical draw schedule (mirrors the legacy main.js
+  // draw() sequence): host-owned sky/background first, then world-space content
+  // under the camera transform (wiring's worldOverlays sits above decor but
+  // below entities, matching the legacy call site), then screen-space ambient
+  // tint, lighting multiply, per-frame overlays (minimap/cursor), HUD/menus,
+  // tooltips/debug last.
+  const LAYERS = ['background', 'walls', 'liquidsBehind', 'tiles', 'liquids',
+                  'worldDecor', 'worldOverlays', 'items', 'enemies', 'npcs', 'player',
+                  'projectiles', 'combatFx', 'particles', 'ambient', 'lighting',
+                  'overlays', 'hud', 'menus', 'tooltips'];
+  const WORLD_LAYERS = ['walls', 'liquidsBehind', 'tiles', 'liquids',
+                        'worldDecor', 'worldOverlays', 'items', 'enemies', 'npcs', 'player',
+                        'projectiles', 'combatFx', 'particles'];
+  const SCREEN_LAYERS = ['background', 'ambient', 'lighting', 'overlays', 'hud', 'menus', 'tooltips'];
   const worldSet = new Set(WORLD_LAYERS);
 
   const drawers = new Map(LAYERS.map((l) => [l, new Map()])); // layer -> name -> entry

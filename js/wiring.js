@@ -1353,13 +1353,18 @@
     }
   }
 
-  // Optional scheduler hooks; the lead may instead call update/draw directly
-  // (never both for update — timers would double-tick).
+  // Scheduler hooks: the lead's loop drives update via TC.Systems and draw
+  // via TC.RenderLayers (never call update directly AND through the scheduler
+  // — timers would double-tick). Gated to live simulation.
   function registerSystemHooks() {
     if (TC.Systems && typeof TC.Systems.register === "function") {
       TC.Systems.register("liquidsWiring", "wiring", {
         update: function (dt) {
           update(dt);
+        },
+      }, {
+        when: function () {
+          return TC.state === "playing" && !(TC.UI && TC.UI.paused);
         },
       });
     }

@@ -1,4 +1,19 @@
-/* main.js — bootstrapping, game loop, camera. Lead-owned. */
+/* main.js — browser host: canvas lifecycle, game-state transitions, camera,
+   and the production registration of every update system + render layer.
+   Lead-owned.
+
+   CONVERGENCE CONTRACT (runtime-authority campaign):
+   - The fixed-step simulation is executed ONLY through TC.Runtime.tick →
+     TC.Systems.updateAll. This file registers systems; it does not sequence
+     them. Phase ownership is documented in js/systems.js PHASES.
+   - Discrete world mutations flow through the command queue drained in the
+     scheduler's 'commands' phase (js/commands.js).
+   - Rendering dispatches exclusively through TC.RenderLayers.drawWorld /
+     drawScreen. This file registers drawers; it does not draw them manually.
+     The host owns exactly one thing visually: the sky/background clear that
+     must precede every layer (it cannot live inside a world-space transform).
+   - Headless consumers skip this file's host parts entirely and use
+     TC.Runtime.createWorld / advanceTicks (no Canvas/DOM/rAF needed). */
 'use strict';
 (function () {
   const TC = window.TC;
@@ -27,7 +42,7 @@
   };
 
   // ---- game state ----
-  TC.state = 'title';            // 'title' | 'playing' | 'paused'
+  TC.state = 'title';            // 'title' | 'playing'
   TC.world = null;
   TC.worldSeed = null;
   TC.player = null;
@@ -35,10 +50,7 @@
   TC.fps = 0;
 
   // Input ownership: a menu click that causes a transition must never also
-  // act as a gameplay input. The transition runs mid-step inside UI.update,
-  // and the activating button's mouseup can still be queued behind the
-  // synchronous worldgen — so entering gameplay drops every transient
-  // pointer/key state before the first gameplay frame consumes input.
+  // act as a gameplay input (see input.js barrier notes).
   function enterPlaying() {
     TC.state = 'playing';
     if (TC.Input && typeof TC.Input.barrier === 'function') TC.Input.barrier();
@@ -67,10 +79,7 @@
     }
     if (diffs || wallDiffs) TC.world.markAllDirty();
     if (TC.Lighting) TC.Lighting.init(TC.world);
-    // W1 liquid migration: claim ALL liquid (fresh worldgen output + any
-    // legacy WATER/LAVA diff tiles) into the TC.Liquids volume layer. From
-    // here on the layer is the single runtime authority; the tile ids are
-    // only a legacy representation consumed by this one-way import.
+    // W1 liquid migration: claim ALL liquid into the TC.Liquids volume layer.
     if (TC.Liquids && typeof TC.Liquids.importFromWorld === 'function') {
       try { TC.Liquids.importFromWorld(TC.world); } catch (e) {
         console.warn('[TC] liquid import failed:', e && e.message);
@@ -147,6 +156,9 @@
     TC.worldSeed = null;
     TC.player = null;
     TC.state = 'title';
+    if (TC.Commands && typeof TC.Commands.clearQueue === 'function') {
+      try { TC.Commands.clearQueue(); } catch (e) {}
+    }
     if (TC.Input && typeof TC.Input.barrier === 'function') TC.Input.barrier();
   };
 
@@ -165,79 +177,195 @@
     else { cam.x += (tx - cam.x) * 0.18; cam.y += (ty - cam.y) * 0.18; }
   }
 
-  // ---- simulation step ----
-  function step(dt) {
-    if (TC.Input) {
-      if (TC.Input.pressed('F3')) TC.debug = !TC.debug;
-      if (TC.Input.pressed('KeyM') && TC.Audio) TC.Audio.toggleMuted();
-    }
-    if (TC.UI) TC.UI.update(dt);   // runs on title too (menu buttons)
-    if (TC.state !== 'playing') return;
-    if (TC.Sky) TC.Sky.update(dt);
-    if (TC.Biomes) TC.Biomes.update(dt);
-    // Grapple pull thrust resolves before player physics; the rope
-    // constraint corrects position after movement (see js/grapple.js).
-    if (TC.Grapple && typeof TC.Grapple.preUpdate === 'function') TC.Grapple.preUpdate(dt);
-    if (TC.player) TC.player.update(dt);
-    if (TC.Grapple && typeof TC.Grapple.postUpdate === 'function') TC.Grapple.postUpdate(dt);
-    if (TC.Loot && TC.player) TC.Loot.update(TC.player, dt);
-    if (TC.Accessories && typeof TC.Accessories.update === 'function') TC.Accessories.update(dt);
-    if (TC.Fishing && typeof TC.Fishing.update === 'function') TC.Fishing.update(dt);
-    if (TC.Enemies) { TC.Enemies.spawnDirector(dt); TC.Enemies.update(dt); }
-    if (TC.NPCs) TC.NPCs.update(dt);
-    if (TC.Items) TC.Items.update(dt, TC.player);
-    if (TC.Combat) TC.Combat.update(dt);
-    if (TC.Gear) TC.Gear.update(dt);
-    if (TC.Magic && typeof TC.Magic.update === 'function') TC.Magic.update(dt);
-    if (TC.Particles) TC.Particles.update(dt);
-    if (TC.world) TC.world.update(dt);
-    if (TC.Wiring && typeof TC.Wiring.update === 'function') TC.Wiring.update(dt);
-    if (TC.Liquids && typeof TC.Liquids.update === 'function') TC.Liquids.update(dt);
-    if (TC.Lighting) TC.Lighting.update(dt, cam);
-    if (TC.Music) TC.Music.update(dt);
-    if (TC.MiniMap) TC.MiniMap.update(dt);
-    if (TC.Save) TC.Save.autosave(dt);
-    if (TC.Events) TC.Events.flush();
-    centerCamera(false);
+  // =====================================================================
+  // System registration — the canonical update schedule (see systems.js
+  // PHASES). Registration order breaks ties inside a phase, so it mirrors
+  // the legacy step() sequence within each phase bucket.
+  // =====================================================================
+  function simGate() {
+    return TC.state === 'playing' && !(TC.UI && TC.UI.paused);
   }
 
-  // ---- render ----
-  function draw() {
-    ctx.imageSmoothingEnabled = false;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  function registerSystems() {
+    if (!TC.Systems || typeof TC.Systems.register !== 'function') return;
 
-    if (TC.Sky) TC.Sky.draw(ctx, cam, viewW, viewH);
-    else { ctx.fillStyle = '#69b7f2'; ctx.fillRect(0, 0, viewW, viewH); }
+    // input — UI runs on title too (menu buttons); never gated.
+    TC.Systems.register('input', 'ui', {
+      update: function (dt) { if (TC.UI) TC.UI.update(dt); }
+    });
 
-    if (TC.world && TC.state !== 'title') {
-      TC.applyCam(ctx);
-      TC.world.draw(ctx, cam);
-      if (TC.Liquids && typeof TC.Liquids.draw === 'function') TC.Liquids.draw(ctx, cam, TC.world);
-      if (TC.Loot) TC.Loot.drawTiles(ctx, cam, TC.world);
-      if (TC.Wiring && typeof TC.Wiring.draw === 'function') TC.Wiring.draw(ctx, cam);
-      if (TC.Items) TC.Items.draw(ctx, cam);
-      if (TC.Enemies) TC.Enemies.draw(ctx, cam);
-      if (TC.NPCs) TC.NPCs.draw(ctx, cam);
-      if (TC.player) TC.player.draw(ctx, cam);
-      if (TC.Fishing && typeof TC.Fishing.draw === 'function') TC.Fishing.draw(ctx, cam);
-      if (TC.Combat) TC.Combat.draw(ctx, cam);
-      if (TC.Grapple && typeof TC.Grapple.drawWorld === 'function') TC.Grapple.drawWorld(ctx, cam);
-      if (TC.Gear) TC.Gear.draw(ctx, cam);
-      if (TC.Magic && typeof TC.Magic.drawWorld === 'function') TC.Magic.drawWorld(ctx, cam);
-      if (TC.Particles) TC.Particles.draw(ctx, cam);
-      TC.clearCam(ctx);
+    // environment — day/night before anything consumes daylight.
+    TC.Systems.register('environment', 'sky', {
+      update: function (dt) { if (TC.Sky) TC.Sky.update(dt); }
+    }, { when: simGate });
+    // biomes self-registers here (gated).
 
-      if (TC.Biomes) TC.Biomes.drawOverlay(ctx, viewW, viewH, cam);
-      if (TC.Lighting) TC.Lighting.draw(ctx, cam);
-      if (TC.MiniMap) TC.MiniMap.draw(ctx, viewW, viewH);
-      if (TC.Input) TC.Input.drawCursor(ctx, cam);
-    }
+    // movement — graddle pull thrust resolves BEFORE player physics; the
+    // rope constraint corrects position AFTER movement (see js/grapple.js).
+    TC.Systems.register('movement', 'grapple-pre', {
+      update: function (dt) { if (TC.Grapple && TC.Grapple.preUpdate) TC.Grapple.preUpdate(dt); }
+    }, { when: simGate, before: ['player'] });
+    TC.Systems.register('movement', 'player', {
+      update: function (dt) { if (TC.player) TC.player.update(dt); }
+    }, { when: simGate });
+    TC.Systems.register('movement', 'grapple-post', {
+      update: function (dt) { if (TC.Grapple && TC.Grapple.postUpdate) TC.Grapple.postUpdate(dt); }
+    }, { when: simGate, after: ['player'] });
+    TC.Systems.register('movement', 'loot', {
+      update: function (dt) { if (TC.Loot && TC.player) TC.Loot.update(TC.player, dt); }
+    }, { when: simGate });
 
-    if (TC.UI) TC.UI.draw(ctx, viewW, viewH);
-    if (TC.Magic && typeof TC.Magic.drawHud === 'function') TC.Magic.drawHud(ctx, viewW, viewH);
-    if (TC.Accessories && typeof TC.Accessories.drawHud === 'function') TC.Accessories.drawHud(ctx);
-    drawDebug(ctx);
-    if (TC.Debug && typeof TC.Debug.drawHud === 'function') TC.Debug.drawHud(ctx, viewW, viewH);
+    // ai — spawn director strictly before entity update.
+    TC.Systems.register('ai', 'fishing', {
+      update: function (dt) { if (TC.Fishing && TC.Fishing.update) TC.Fishing.update(dt); }
+    }, { when: simGate });
+    TC.Systems.register('ai', 'spawn-director', {
+      update: function (dt) { if (TC.Enemies) TC.Enemies.spawnDirector(dt); }
+    }, { when: simGate });
+    TC.Systems.register('ai', 'enemies', {
+      update: function (dt) { if (TC.Enemies) TC.Enemies.update(dt); }
+    }, { when: simGate, after: ['spawn-director'] });
+    TC.Systems.register('ai', 'npcs', {
+      update: function (dt) { if (TC.NPCs) TC.NPCs.update(dt); }
+    }, { when: simGate });
+
+    // items — magnet/pickup before combat consumes targets.
+    TC.Systems.register('items', 'items', {
+      update: function (dt) { if (TC.Items) TC.Items.update(dt, TC.player); }
+    }, { when: simGate });
+
+    // combat — core.combat self-registers first (drives Projectiles), then
+    // thrown gear, mana, status ticks, particle decay — legacy order.
+    TC.Systems.register('combat', 'accessories', {
+      update: function (dt) { if (TC.Accessories && TC.Accessories.update) TC.Accessories.update(dt); }
+    }, { when: simGate });
+    TC.Systems.register('combat', 'gear', {
+      update: function (dt) { if (TC.Gear) TC.Gear.update(dt); }
+    }, { when: simGate });
+    TC.Systems.register('combat', 'magic', {
+      update: function (dt) { if (TC.Magic && TC.Magic.update) TC.Magic.update(dt); }
+    }, { when: simGate });
+    TC.Systems.register('combat', 'particles', {
+      update: function (dt) { if (TC.Particles) TC.Particles.update(dt); }
+    }, { when: simGate });
+
+    // liquidsWiring — chunk rebuild first, then mechanisms, then settling.
+    TC.Systems.register('liquidsWiring', 'world', {
+      update: function (dt) { if (TC.world) TC.world.update(dt); }
+    }, { when: simGate });
+    // wiring self-registers here (gated); liquids wait for it (legacy order).
+    TC.Systems.register('liquidsWiring', 'liquids', {
+      update: function (dt) { if (TC.Liquids && TC.Liquids.update) TC.Liquids.update(dt); }
+    }, { when: simGate, after: ['wiring'] });
+
+    // progression — lighting refresh, soundtrack, map, autosave.
+    TC.Systems.register('progression', 'lighting', {
+      update: function (dt) { if (TC.Lighting) TC.Lighting.update(dt, cam); }
+    }, { when: simGate });
+    TC.Systems.register('progression', 'music', {
+      update: function (dt) { if (TC.Music && TC.Music.update) TC.Music.update(dt); }
+    }, { when: simGate });
+    TC.Systems.register('progression', 'minimap', {
+      update: function (dt) { if (TC.MiniMap && TC.MiniMap.update) TC.MiniMap.update(dt); }
+    }, { when: simGate });
+    TC.Systems.register('progression', 'autosave', {
+      update: function (dt) { if (TC.Save) TC.Save.autosave(dt); }
+    }, { when: simGate });
+
+    // eventsFlush — drain deferred events after all mutation.
+    TC.Systems.register('eventsFlush', 'core.flush', {
+      update: function () { if (TC.Events && TC.Events.flush) TC.Events.flush(); }
+    });
+
+    if (TC.Systems.initAll) TC.Systems.initAll();
+  }
+
+  // =====================================================================
+  // Render-layer registration — the canonical draw schedule (see systems.js
+  // LAYERS). The host draws only the background clear itself.
+  // =====================================================================
+  function worldGuard(fn) {
+    return function (c, camera) {
+      if (!TC.world || TC.state === 'title') return;
+      fn(c, camera);
+    };
+  }
+
+  function registerLayers() {
+    if (!TC.RenderLayers || typeof TC.RenderLayers.register !== 'function') return;
+    const R = TC.RenderLayers;
+
+    R.register('tiles', 'core.world', worldGuard(function (c, camera) {
+      TC.world.draw(c, camera);
+    }));
+    R.register('liquids', 'core.liquids', worldGuard(function (c, camera) {
+      if (TC.Liquids && typeof TC.Liquids.draw === 'function') TC.Liquids.draw(c, camera, TC.world);
+    }));
+    R.register('worldDecor', 'core.loot-tiles', worldGuard(function (c, camera) {
+      if (TC.Loot) TC.Loot.drawTiles(c, camera, TC.world);
+    }));
+    // wiring self-registers into worldOverlays (above decor, below entities —
+    // its legacy call site).
+
+    R.register('items', 'core.items', worldGuard(function (c, camera) {
+      if (TC.Items) TC.Items.draw(c, camera);
+    }));
+    R.register('enemies', 'core.enemies', worldGuard(function (c, camera) {
+      if (TC.Enemies) TC.Enemies.draw(c, camera);
+    }));
+    R.register('npcs', 'core.npcs', worldGuard(function (c, camera) {
+      if (TC.NPCs) TC.NPCs.draw(c, camera);
+    }));
+    R.register('player', 'core.player', worldGuard(function (c, camera) {
+      if (TC.player) TC.player.draw(c, camera);
+    }));
+    R.register('projectiles', 'core.fishing', worldGuard(function (c, camera) {
+      if (TC.Fishing && typeof TC.Fishing.draw === 'function') TC.Fishing.draw(c, camera);
+    }));
+    R.register('projectiles', 'core.combat', worldGuard(function (c, camera) {
+      if (TC.Combat) TC.Combat.draw(c, camera);
+    }));
+    R.register('combatFx', 'core.grapple', worldGuard(function (c, camera) {
+      if (TC.Grapple && typeof TC.Grapple.drawWorld === 'function') TC.Grapple.drawWorld(c, camera);
+    }));
+    R.register('combatFx', 'core.gear', worldGuard(function (c, camera) {
+      if (TC.Gear) TC.Gear.draw(c, camera);
+    }));
+    R.register('combatFx', 'core.magic', worldGuard(function (c, camera) {
+      if (TC.Magic && typeof TC.Magic.drawWorld === 'function') TC.Magic.drawWorld(c, camera);
+    }));
+    R.register('particles', 'core.particles', worldGuard(function (c, camera) {
+      if (TC.Particles) TC.Particles.draw(c, camera);
+    }));
+
+    // screen space
+    R.register('ambient', 'core.biomes', function (c, view) {
+      if (TC.Biomes && TC.state !== 'title') TC.Biomes.drawOverlay(c, view.w, view.h, view.cam);
+    });
+    R.register('lighting', 'core.lighting', function (c, view) {
+      if (TC.world && TC.state !== 'title' && TC.Lighting) TC.Lighting.draw(c, view.cam);
+    });
+    R.register('overlays', 'core.minimap', function (c, view) {
+      if (TC.MiniMap && TC.world && TC.state !== 'title') TC.MiniMap.draw(c, view.w, view.h);
+    });
+    R.register('overlays', 'core.cursor', function (c, view) {
+      if (TC.Input) TC.Input.drawCursor(c, view.cam);
+    });
+    R.register('hud', 'core.ui', function (c, view) {
+      if (TC.UI) TC.UI.draw(c, view.w, view.h);
+    });
+    R.register('hud', 'core.magic', function (c, view) {
+      if (TC.Magic && typeof TC.Magic.drawHud === 'function') TC.Magic.drawHud(c, view.w, view.h);
+    });
+    R.register('hud', 'core.accessories', function (c, view) {
+      if (TC.Accessories && typeof TC.Accessories.drawHud === 'function') TC.Accessories.drawHud(c);
+    });
+    R.register('tooltips', 'core.debug-legacy', function (c, view) {
+      drawDebug(c);
+    });
+    R.register('tooltips', 'core.debug', function (c, view) {
+      if (TC.Debug && typeof TC.Debug.drawHud === 'function') TC.Debug.drawHud(c, view.w, view.h);
+    });
   }
 
   function drawDebug(c) {
@@ -264,6 +392,21 @@
     c.restore();
   }
 
+  // ---- render dispatch (RenderLayers is THE pipeline) ----
+  function draw() {
+    ctx.imageSmoothingEnabled = false;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+    // Host-owned background clear: precedes every registered layer.
+    if (TC.Sky) TC.Sky.draw(ctx, cam, viewW, viewH);
+    else { ctx.fillStyle = '#69b7f2'; ctx.fillRect(0, 0, viewW, viewH); }
+
+    if (TC.world && TC.state !== 'title') {
+      TC.RenderLayers.drawWorld(ctx, cam);
+    }
+    TC.RenderLayers.drawScreen(ctx, viewW, viewH);
+  }
+
   // ---- main loop ----
   let last = performance.now(), acc = 0;
   const STEP = 1 / 60;
@@ -277,7 +420,10 @@
     if (fpsAcc >= 0.5) { TC.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
 
     acc += dt;
-    while (acc >= STEP) { step(STEP); acc -= STEP; }
+    while (acc >= STEP) {
+      TC.Runtime.tick(STEP);   // canonical fixed-step authority
+      acc -= STEP;
+    }
     if (TC.Debug && typeof TC.Debug.frame === 'function') TC.Debug.frame(dt);
     draw();
     if (TC.Input) TC.Input.endFrame();
@@ -291,5 +437,7 @@
     try { TC.Registry.validate(); } catch (e) { console.warn('[TC] registry validation:', e.message); }
   }
   if (TC.Systems && TC.Systems.runBoot) TC.Systems.runBoot();
+  registerSystems();
+  registerLayers();
   requestAnimationFrame(frame);
 })();

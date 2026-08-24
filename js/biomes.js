@@ -263,11 +263,13 @@
   TC.Biomes = Biomes;
 
   // ---- foundation wiring ----
-  // Update scheduler: lets a Systems.updateAll-driven loop tick biomes in the
-  // 'environment' phase. Manual TC.Biomes.update(dt) callers must not ALSO
-  // run Systems.updateAll — one driver only.
+  // Update scheduler: the production loop ticks biomes in the 'environment'
+  // phase. Gated to live simulation: no detection/ambience on title or while
+  // paused.
   if (TC.Systems && typeof TC.Systems.register === 'function') {
-    TC.Systems.register('environment', 'biomes', { update: tick });
+    TC.Systems.register('environment', 'biomes', { update: tick }, {
+      when: function () { return TC.state === 'playing' && !(TC.UI && TC.UI.paused); }
+    });
   }
   // Fresh world => fresh derived biome state (replaces the old newGame/
   // continueGame wraps once the lead emits WorldLoaded there).
