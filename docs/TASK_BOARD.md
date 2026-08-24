@@ -22,11 +22,12 @@ DONE      acceptance criteria proven
 
 ---
 
-# Status snapshot (authoritative, W18 truth-sync)
+# Status snapshot (authoritative, W19 truth-sync)
 
-Reconciled against the implementation on the W18 Runtime Authority Convergence
-checkpoint. Consult docs/ARCHITECTURE.md §19 (capability matrix), §22 (W18 runtime
-contracts) and §21 (W17 contracts) for per-module ownership detail.
+Reconciled against the implementation on the W19 Underworld Spawn Truth-Sync
+checkpoint. Consult docs/ARCHITECTURE.md §19 (capability matrix), §23 (W19
+contracts), §22 (W18 runtime contracts) and §21 (W17 contracts) for per-module
+ownership detail.
 
 | Area | Tasks | Status |
 |---|---|---|
@@ -39,7 +40,7 @@ contracts) and §21 (W17 contracts) for per-module ownership detail.
 | Tile shapes/traversal/grapple | PHY-001..PHY-005 | DONE |
 | Liquids | LIQ-001..LIQ-005 | DONE (LIQ-006 pumps remains TODO) |
 | Worldgen platform | WGEN-001..WGEN-005 | DONE (v3 passes incl. deep caves + micro-biomes) |
-| Combat & progression | COM-001..COM-007 | DONE (canonical resolveHit, generic statuses, enemy defs/AI/spawn split, LootTables, Progression conditions+graph, Storm Jelly vertical arc, **W17 Wall of Flesh production gateway**: environment-aware summon, direction-locked wall, multi-phase state machine, bounded hungry/servant/projectile lifecycle, infernal_core loot, post-Wall recipes/NPC stock/spawn gateway) |
+| Combat & progression | COM-001..COM-007 | DONE (canonical resolveHit, generic statuses, enemy defs/AI/spawn split, LootTables, Progression conditions+graph, Storm Jelly vertical arc, **W17 Wall of Flesh production gateway**, **W19 underworld spawn truth-sync**: depth-first `zoneOf` classification, shared `TC.Biomes.underworldTopPx/isUnderworldAt` boundary, declarative post-Wall ember_wraith entry) |
 | Inventory/crafting | INV-001/002, CRF-001/002 | DONE (progression-aware recipe conditions included; craft clicks route through CraftRecipe transactions) |
 | NPCs/towns | NPC-001..NPC-004 | DONE (housing, shops, context dialog; condition-gated unlocks/stock) |
 | Localization | LOC-001..LOC-003 | TODO |
@@ -48,21 +49,27 @@ contracts) and §21 (W17 contracts) for per-module ownership detail.
 | Multiplayer | NET-001..004 | TODO (P2; W18 delivered the NET-001 precondition: headless simulation via TC.Runtime — full runner/networking still TODO) |
 | Extensibility/mods | MOD-001..004 | TODO |
 
-### Newly discovered follow-ups (from the same audit, updated W18)
+### Newly discovered follow-ups (updated W19)
 
-- W18 closed the dual update/render paths: `TC.Runtime.tick → TC.Systems.updateAll`
-  and `TC.RenderLayers.drawWorld/drawScreen` ARE the production loop. Remaining
-  deliberate fallbacks: direct `Player.useHeld/interact` only when js/commands.js is
-  absent; guarded legacy tick sequence only when js/systems.js is absent.
-- Known pre-existing flake (reproduced on the W17 base commit, not caused by W18):
-  `journey-i-progression.spec.js` storm-core pickup can fail when the player dies
-  during the real-time boss-damage loop (magnet requires a living player);
-  `journey-j-underworld-frontier.spec.js` can observe wof `state: 'combat'` instead of
-  'enter' on slow machines (tick-count race vs rAF frames). Both warrant deterministic
-  harness hardening.
+- W19 closed both known browser-journey flakes and hardened two more
+  latent observation races surfaced by full-gate reruns: `journey-i` keeps
+  the fighter alive through real-time boss-damage/pickup windows and chases
+  bouncing loot instead of teleporting once (then returns to the arena so
+  station-adjacent crafting asserts see the anvil); `journey-j` accepts
+  `enter|combat` at first observation while still proving the transition;
+  `journey-b` re-acquires the minable tile underfoot mid-loop and accepts a
+  drop already magnet-collected; `runtime-authority.spec.js` re-aims during
+  held mining. All suites pass repeatedly under load.
+- W19 fixed the last W17 defect: the spawn director classified deep players
+  as `cave`, so the declared Underworld roster and post-Wall ember_wraith
+  entry never spawned. Zoning is now depth-first via a single shared boundary
+  query (ARCHITECTURE.md §23) with deterministic coverage in
+  `tests/unit/enemyspawn-underworld.test.js`.
 - UI cursor-stack drag/drop and bulk helpers (sort/quick stack/split) remain
   presentation-layer inventory rearrangements with conservation covered by Inventory
   invariants; converting them to MoveItem batches is optional future work.
+- Localization remains the largest untouched epic; new user-visible strings
+  added by W17–W19 are few but will need keys once LOC-001 lands.
 
 ---
 

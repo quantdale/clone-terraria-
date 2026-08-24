@@ -533,7 +533,7 @@ conditions.test.js, summon.test.js, journey-i-progression.spec.js (full arc).
 
 ### Summon contract (player.js, W17)
 
-Every summon item declares `summon:{time,biome,requires,placement}` where `time` is `night|day|any` (default `night` for legacy), `biome` is the CURRENT biome (`TC.Biomes.current`, not `biome.X.discovered`), `requires` is the W14 condition grammar, and `placement` selects a custom spawn profile (`underworld_wall` for the Wall). Legacy `condition`/`requires` aliases are honored. `currentBiomeTag()` prefers depth-derived underworld detection to avoid hysteresis lag. Invalid summons (wrong time/biome/progression/duplicate boss/placement failure) emit a clear toast and consume **zero** items; exactly one item is consumed only after `TC.Enemies.spawnBoss` succeeds (or the Blood Moon event starts). Existing night-only bosses retain their `night` gate.
+Every summon item declares `summon:{time,biome,requires,placement}` where `time` is `night|day|any` (default `night` for legacy), `biome` is the CURRENT biome (`TC.Biomes.current`, not `biome.X.discovered`), `requires` is the W14 condition grammar, and `placement` selects a custom spawn profile (`underworld_wall` for the Wall). Legacy `condition`/`requires` aliases are honored. Since W19 the underworld check routes through the ONE shared pure query `TC.Biomes.isUnderworldAt` (see §23) so validation can never drift from encounter lifecycle or spawn zoning. Invalid summons (wrong time/biome/progression/duplicate boss/placement failure) emit a clear toast and consume **zero** items; exactly one item is consumed only after `TC.Enemies.spawnBoss` succeeds (or the Blood Moon event starts). Existing night-only bosses retain their `night` gate.
 
 ### Wall encounter lifecycle (enemies.js + enemyai.js, W17)
 
@@ -541,7 +541,7 @@ The Wall is a direction-locked, noclip sweeping wall, not a flying tracker. `Pla
 
 ### Loot & progression gateway (enemydefs.js + progression.js + biomes.js + npcs.js, W17)
 
-`wof` loot is data-driven via `TC.LootTables` (unique `infernal_core 6-10` + `blood_shard` + `gold_bar` + coins, validated, exactly-once via `killEnemy`). Post-Wall gateway is gated on `boss.wall_of_flesh.defeated` (canonical) plus companion flags `world.infernal_gateway.opened`/`event.underworld_frontier.completed` set by `progression.js` BossDefeated listener. Unlocks: `hellforged_blade`/`infernal_greaves`/`infernal_hook` recipes (`requires: 'boss.wall_of_flesh.defeated'`), Guide `dialogFlags` and Merchant `shopOf` rows gated on the same flag, `Biomes.getSpawnOverride()` underworld post-Wall supplement (`ember_wraith 1.6` when flag set), and `Enemyspawn`/`Biomes`/`Progression.spawnMultiplier` already respect the flag. All ride existing providers; no save-format bump.
+`wof` loot is data-driven via `TC.LootTables` (unique `infernal_core 6-10` + `blood_shard` + `gold_bar` + coins, validated, exactly-once via `killEnemy`). Post-Wall gateway is gated on `boss.wall_of_flesh.defeated` (canonical) plus companion flags `world.infernal_gateway.opened`/`event.underworld_frontier.completed` set by `progression.js` BossDefeated listener. Unlocks: `hellforged_blade`/`infernal_greaves`/`infernal_hook` recipes (`requires: 'boss.wall_of_flesh.defeated'`), Guide `dialogFlags` and Merchant `shopOf` rows gated on the same flag, the underworld post-Wall spawn supplement (`ember_wraith`, declared with the shared `[type, weight, condition]` grammar since W19 — see §23), and `Enemyspawn`/`Biomes`/`Progression.spawnMultiplier` already respect the flag. All ride existing providers; no save-format bump.
 
 ### Observability & perf (debug.js + enemies.js + tools/perf-probe-w17-wof.js, W17)
 
@@ -608,3 +608,93 @@ v2 envelopes keep loading unchanged.
 
 runtime-authority.test.js (9), headless-sim.test.js (3), runtime-authority.spec.js (3
 browser), tools/bench-runtime.js benchmark.
+
+---
+
+## 23. Campaign contracts (W19 — Underworld Spawn Truth-Sync)
+
+Reconciliation audit of the W17 frontier found the encounter, summon policy,
+loot and progression gateway production-complete EXCEPT one live defect: the
+spawn director classified deep players as `cave`, so the Underworld roster —
+and the post-Wall gateway entry — never reached runtime spawns. This section
+documents the corrected contracts.
+
+### Authoritative Underworld boundary (biomes.js, W19)
+
+ONE pure, deterministic query owns the boundary; summon validation (player.js
+`currentBiomeTag`), Wall lifecycle confinement (enemyai.js/enemies.js band +
+despawn checks) and spawn zoning (enemyspawn.js) all derive from it:
+
+- `TC.Biomes.underworldTopPx()` → authoritative boundary in world pixels
+  (`GEN.underworld.startY * TS`); headless-safe, no world/Canvas access;
+- `TC.Biomes.isUnderworldAt(xPx, yPx)` → canonical membership including the
+  4-tile enter grace above the line (xPx reserved for future shapes).
+
+No consumer recomputes `(GEN.underworld.startY||355)*TS` with private slack;
+deliberate per-consumer margins are expressed relative to `underworldTopPx()`
+(Wall escape: −10 tiles; legacy fallbacks keep a guarded literal).
+
+### Depth-first spawn zoning (enemyspawn.js, W19)
+
+`TC.EnemySpawn.zoneOf(p, w, dl)` is the extracted classifier (exported for
+tests): underworld membership via the shared query outranks the generic
+15-tiles-below-surface cave rule; shallower depths keep unchanged
+cave/day/night behavior. Zones: `day | night | cave | underworld`.
+
+`zoneTable(zone, pcol)` contract update: entries anywhere in the effective
+table — biome override base OR extras — may carry `[type, weight, condition]`;
+conditions evaluate through `TC.Progression.test` and FAIL CLOSED (unknown
+flag strings/shapes drop the entry). The biome override replaces the vanilla
+table for every zone except ordinary `cave`. Blood Moon precedence stays on
+the surface `night` zone only (`BLOOD_MOON_TABLE` early return); underground
+zones keep their own ecology by design — intentional and tested.
+Spawn cadence key `attemptUnderworld: 2.2` added to lead `CONST.SPAWN`.
+
+### Declarative post-Wall spawn consequence
+
+The underworld supplement moved from bespoke flag code in biomes.js into the
+shared grammar: `getSpawnOverride()` always returns the underworld base plus
+`['ember_wraith', 1.6, 'boss.wall_of_flesh.defeated']`; `zoneTable` filters
+the gated entry until the canonical progression flag exists. Defeating the
+Wall therefore changes the live spawn table through the same declarative path
+as recipes/NPC stock/loot — no second progression store.
+
+### Harness hardening (journey-i / journey-j)
+
+Both known W18 flakes fixed without weakening gameplay assertions: journey-i
+keeps the fighter on full hp + i-frames during real-time boss-damage loops
+and loot pickup windows (a dead player has no magnet / triggers boss despawn);
+journey-j accepts `enter|combat` at first observation (the 0.9s enter window
+races rAF) while the poll loop still observes the enter→combat transition.
+The journey-j defeat loop additionally pins survivability so the documented
+`player_dead` lifecycle cannot pre-empt the canonical kill.
+
+### Save impact
+
+None. No schema/provider changes; progression rides the existing
+`systems.core.progression` provider; v1 blobs and v2 envelopes unaffected.
+
+### Test coverage added
+
+`tests/unit/enemyspawn-underworld.test.js` (8): depth-first classification,
+roster isolation vs vanilla cave, unchanged surface/cave tables, Blood Moon
+precedence (surface night only), post-Wall grammar absent-before/present-after,
+fail-closed conditions, director-level underworld spawn proof.
+`tests/unit/wof-frontier.test.js` ember_wraith case now proves the unlock
+through the real zoneTable pipeline (stronger than the prior getter peek).
+
+### Performance evidence (tools/perf-probe-w17-wof.js, W19 refresh)
+
+Probe corrected to keep a LIVE wall under measurement (the terminal sweep
+previously emptied later benches): representative worst-case load = wall +
+servants at cap (peakServants 6 observed) + hostile volley (12 hostile cap /
+17 pool peak). Headless results: single wall AI ≈ 10.2 µs/op, wall+servants
+≈ 15.6 µs/op, full Enemies.update under encounter load ≈ 11.8 µs/op, spawn
+zoning (`zoneOf`+`zoneTable`) ≈ 0.57 µs/op, director tick ≈ 0.31 µs/op.
+Worst op ≈ 0.09% of the 16.67 ms fixed-step budget.
+
+### Remaining limitations
+
+Unchanged from §21: no localization; Hardmode-equivalent expansion deferred.
+Underworld roster stays deliberately small (demon_eye/cave_bat/zombie +
+post-Wall ember_wraith).
