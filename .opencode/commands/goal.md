@@ -1,0 +1,4 @@
+---
+description: Resume the planner-generated or native active development campaign
+---
+Read applicable `AGENTS.md`, `.agent/PLANNER_HANDOFF.md`, `.agent/EXECUTION_PROMPT.md` if present, and native campaign/state/OpenSpec files. Reconcile `$ARGUMENTS` and the planned baseline with current Git/tests/implementation. Resume an `ACTIVE` prompt from the first genuinely incomplete requirement through its completion gate or a genuine durable blocker. Otherwise use native continuation semantics; if none exists, report that a planner pass is required. Preserve stricter local rules, validate, fix introduced Critical/High regressions, and commit/push per repository policy.

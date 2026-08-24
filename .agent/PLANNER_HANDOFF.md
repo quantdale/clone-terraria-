@@ -1,0 +1,9 @@
+# Universal Planner → Executor Handoff
+
+This additive protocol preserves all stricter repository-specific rules.
+
+The planner writes one execution-ready major campaign to `.agent/EXECUTION_PROMPT.md` with `Status`, `Planned-From`, `Planned-At`, `Target-Branch`, mission, findings/rationale, preserved behavior, scope/out-of-scope, ordered workstreams, constraints, migrations where relevant, tests, integration/E2E validation, acceptance criteria, completion gate, Git requirements, and final reporting. Before writing it, inspect actual code/config/tests/docs, recent commits/diffs, useful issues/PRs, and native agent/state files. Build on completed work, avoid duplication/unnecessary rewrites, require no known Critical/High regressions, commit/push the planning-only change, then stop without implementing.
+
+For `/goal continue`, `continue`, or the shared `goal` command/skill: read applicable repository instructions, this file, `EXECUTION_PROMPT.md` if present, and native goal/campaign/state/OpenSpec files; inspect current Git/tests/implementation; reconcile `Planned-From` with already-landed work; if `ACTIVE`, resume the first genuinely incomplete requirement without redoing completed work; work autonomously, follow existing patterns, run required validation, repair introduced Critical/High regressions, update durable state, and commit/push per repository policy. Mark `COMPLETED` only when acceptance criteria pass; `BLOCKED` only for a genuine blocker.
+
+If no active planner prompt exists, fall back to native continuation semantics. If neither exists, report that a planner pass is required instead of inventing a campaign.
