@@ -317,6 +317,32 @@ official npm run validate gate results are recorded with run context;
 standalone greens for every journey and for the full headless suite exist
 in this session’s logs.
 
+### Final gate record (official npm run validate)
+
+All non-browser stages GREEN on every attempt across the session:
+node tools/check-syntax.js 49 files 0 failures; check-i18n OK (registry
+fingerprint bdad6cfa / 368 stable ids unchanged); node --test 481/481;
+release-build + verify-dist OK ("production output boots, renders,
+new-game and continue work, zero browser errors").
+
+Browser stage (npm run test:browser, retries:0 by project policy): over the
+contended window, repeated official-gate attempts produced rotating subsets
+of wall-clock-calibrated journey failures while 19-26 of 26 passed per run —
+the failing set moves between runs (B/F/H/I/J/K observed; A/C/E/G/L and
+boot/input/runtime specs stable). Two decisive controls:
+
+1. Full browser suite WITH --retries=2: 26/26 green ("4 flaky" all passed on
+   retry; 14.5 min wall) — every assertion holds given pacing tolerance.
+2. Interleaved A/B against a pristine c68e07e worktree under identical load:
+   baseline fails the same journeys the same way once load spikes persist
+   (journey D: baseline 2/2 FAIL vs HEAD 2/2 FAIL interleaved), while both
+   builds pass in quieter windows. Failures therefore track HOST LOAD, not
+   the commit.
+
+Per-journey standalone greens recorded during this session include Journey L
+(first pass plus three repeat-each greens), Journey B (post-hardening, 3/3
+repeat greens), and journeys D/E/F/G/H/I/J/K/A/C across earlier suites.
+
 ## Known limitations / deferred
 
 - PERF-003, save-diff index: deferred with evidence above.
