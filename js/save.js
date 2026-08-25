@@ -325,10 +325,16 @@
   };
 
   // Periodic autosave while a world is live; failures are silent.
+  // W22: a joined network client holds a presentation mirror, never world
+  // truth — autosaving it would corrupt the local save with replicated
+  // state, so client sessions are skipped here (single gate, no wraps).
   let acc = 0;
   TC.Save.autosave = function (dt) {
     const interval = (TC.CONST && TC.CONST.AUTOSAVE_INTERVAL) || FALLBACK_INTERVAL;
     if (!TC.world || !TC.world.tiles || !TC.player) { acc = 0; return; }
+    if (TC.NetClient && TC.NetClient.drivesTick && TC.NetClient.drivesTick()) {
+      acc = 0; return;
+    }
     acc += dt;
     if (acc >= interval) {
       acc = 0;

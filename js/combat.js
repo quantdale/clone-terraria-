@@ -411,8 +411,10 @@
   // exists. rejected === 'iframes' means the hit landed during invulnerability
   // (or post-death) and the player took nothing — the numbers are informational.
   Combat.hurtPlayer = function (dmg, kbx, kby, src, opts) {
-    if (!TC.player || typeof TC.player.damage !== 'function') return null;
-    const p = TC.player;
+    // W22: opts.target lets authoritative callers hurt a SPECIFIC player
+    // (multi-player contact damage); default remains the primary singleton.
+    const p = (opts && opts.target) || TC.player;
+    if (!p || typeof p.damage !== 'function') return null;
     const o = opts || {};
     const res = Combat.resolveHit({
       base: dmg,

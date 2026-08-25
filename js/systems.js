@@ -93,6 +93,28 @@
     return entry;
   }
 
+  // Remove a registered system by name across all phases (W22: lets session
+
+  // owners like TC.NetServer tear down their scheduler hooks cleanly instead
+
+  // of re-registering over them). Returns true when an entry was removed.
+
+  function unregisterSystem(name) {
+
+    let removed = false;
+
+    for (const bucket of byPhase.values()) {
+
+      if (bucket.delete(name)) removed = true;
+
+    }
+
+    if (removed) invalidate();
+
+    return removed;
+
+  }
+
   // Stable topological sort of one phase: after/before edges, ties broken by
   // registration order. Returns {order, cycle} — cycle lists stuck names.
   function computeOrder(bucket) {
@@ -280,7 +302,8 @@
 
   TC.Systems = {
     PHASES: PHASES.slice(),
-    register: registerSystem, initAll, updateAll, resolveOrder, list: listSystems,
+    register: registerSystem, unregister: unregisterSystem,
+    initAll, updateAll, resolveOrder, list: listSystems,
     boot, runBoot,
     currentPhase: getCurrentPhase, tickCount: getTickCount,
     getCounts: getCounts, getPerTickCounts: getPerTickCounts, resetCounts: resetCounts

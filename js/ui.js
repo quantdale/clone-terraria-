@@ -320,6 +320,37 @@
   }
   UI.toast = toast;
 
+  // ---- W22 multiplayer session watcher (developer-quality flow) ----
+  // Surfaces join/connect state transitions as toasts and returns a client
+  // whose link died mid-play to a coherent title state. No gameplay logic.
+  let netWatchPhase = null;
+  function watchNetSession() {
+    const host = TC.__netHost;
+    const client = TC.__netClient ||
+      ((TC.NetClient && TC.NetClient.active) ? TC.NetClient.active() : null);
+    if (host && !host.running && netWatchPhase === 'hosting') {
+      netWatchPhase = null;
+      toast(t('ui.net.server_closed'));
+    } else if (host && host.running) {
+      netWatchPhase = 'hosting';
+    }
+    if (!client) return;
+    const ph = client.phase + ':' + (client.status || '');
+    if (ph !== netWatchPhase) {
+      if (client.phase === 'playing') toast(t('ui.net.connected'));
+      else if (client.phase === 'syncing') toast(t('ui.net.connecting'));
+      else if (client.phase === 'closed') {
+        const key = client.status || 'ui.net.link_lost';
+        try { toast(t(key)); } catch (e) { toast(key); }
+        // A drop during play must not strand the user in a stale mirror.
+        if (TC.state === 'playing' && !(TC.NetClient.drivesTick && TC.NetClient.drivesTick())) {
+          TC.quitToTitle();
+        }
+      }
+      netWatchPhase = ph;
+    }
+  }
+
   // ---- progression announcements (W5, localized W20) ----
   // WorldProgressChanged milestones surface as banner toasts: boss kills and
   // biome discoveries. Observation only; a missing bus never breaks the UI.
@@ -476,6 +507,39 @@
     if (!ok) return;
     TC.newGame();
     resetPanels();
+  }
+
+  // ---- W22 multiplayer entries (developer-quality local flow) ----
+  function actHostMultiplayer() {
+    if (!TC.NetServer || !TC.Players) { toast(t('ui.net.unavailable')); return; }
+    try {
+      const seed = ((Math.random() * 2147483647) | 0);
+      TC.newGame(seed);
+      const server = TC.NetServer.create({ adoptWorld: true });
+      const r = server.start();
+      if (!r.ok) { toast(t('ui.net.host_failed', { error: r.error })); return; }
+      const a = server.attachLocal(t('ui.net.host_name'));
+      if (!a.ok) { toast(t('ui.net.host_failed', { error: a.error })); return; }
+      TC.__netHost = server;
+      toast(t('ui.net.host_started'));
+    } catch (e) {
+      toast(t('ui.net.host_failed', { error: String(e && e.message || e).slice(0, 48) }));
+    }
+  }
+  function actJoinServer() {
+    if (!TC.NetClient || !TC.NetTransport) { toast(t('ui.net.unavailable')); return; }
+    let url = null;
+    try { url = window.prompt(t('ui.net.join_prompt'), 'ws://localhost:7777'); } catch (e) {}
+    if (!url) return;
+    try {
+      const ep = TC.NetTransport.websocket(url);
+      const client = TC.NetClient.create({ name: t('ui.net.guest_name') });
+      client.connect(ep);
+      TC.__netClient = client;
+      toast(t('ui.net.connecting'));
+    } catch (e) {
+      toast(t('ui.net.host_failed', { error: String(e && e.message || e).slice(0, 48) }));
+    }
   }
   function soundLabel() {
     return t('ui.pause.sound', {
@@ -716,6 +780,8 @@
       let hasSave = false;
       try { hasSave = !!(TC.Save && TC.Save.hasSave && TC.Save.hasSave()); } catch (e) {}
       if (hasSave) defs.push({ id: 'continue', label: t('ui.menu.continue_world'), act: actContinue });
+      defs.push({ id: 'hostmp', label: t('ui.menu.host_multiplayer'), act: actHostMultiplayer });
+      defs.push({ id: 'joinmp', label: t('ui.menu.join_server'), act: actJoinServer });
       for (let i = 0; i < defs.length; i++) {
         L.buttons.push({
           id: defs[i].id, label: defs[i].label, act: defs[i].act,
@@ -1883,6 +1949,7 @@
 
   // ---- public API ----
   UI.update = function (dt) {
+    watchNetSession();
     if (TC.player && TC.player.dead) deadT += dt;
     // ease the breath bubble row in/out quickly as the player submerges/surfaces
     const br = TC.player ? TC.player.breath : null;

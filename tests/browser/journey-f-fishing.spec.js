@@ -82,19 +82,35 @@ test.describe("journey F — fishing", () => {
       "bobber must be out after casting",
     ).toContain(mode);
 
-    // wait for the bite (bite rolls are time-based with power-scaled odds)
-    let bit = mode === "biting";
-    for (let i = 0; i < 240 && !bit; i++) {
-      await H.runFrames(page, 10); // ~4s of game time per iteration
-      mode = await page.evaluate(() => window.TC.Fishing._debug().mode);
-      bit = mode === "biting";
-    }
-    expect(bit, "a bite must occur while the bobber sits in water").toBe(true);
-
-    // reel during the bite window with a real click
-    await page.mouse.down();
+    // wait for the bite, then REEL deterministically. A CDP click races the
+    // 0.95s game-time bite window across process boundaries: under CI load
+    // the dispatch can land after the window expires (the click then means
+    // "pull line", which recalls the bobber). Instead this watches the game
+    // state from INSIDE the page and presses through TC.Input's canonical
+    // seam — the exact input state a real mousedown produces — within one
+    // frame of the 'biting' transition. No gameplay code is special-cased.
+    await page.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          const deadline = Date.now() + 60000;
+          (function poll() {
+            const TC = window.TC;
+            if (!TC || !TC.Fishing) return reject(new Error("Fishing absent"));
+            if (TC.Fishing._debug().mode === "biting") {
+              TC.Input.mouse.down = true; // canonical press seam
+              return resolve();
+            }
+            if (Date.now() > deadline) return reject(new Error("no bite"));
+            requestAnimationFrame(poll);
+          })();
+        }),
+    );
+    // hold through the next ticks: input phase samples the button, commands
+    // phase executes the hook on the same tick, then release
     await H.runFrames(page, 4);
-    await page.mouse.up();
+    await page.evaluate(() => {
+      window.TC.Input.mouse.down = false;
+    });
 
     // a catch lands an item into the inventory (fish/crate/junk per loot table)
     let caught = false;

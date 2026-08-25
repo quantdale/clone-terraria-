@@ -18,11 +18,28 @@ python -m http.server 8377
 Development/validation commands (`node` >= 22 (glob-capable `node --test`) + `npm ci` required):
 
 ```
-npm test            # node:test suites (unit/core/save/combat/player/npc/world)
+npm test            # node:test suites (unit/core/save/combat/player/npc/world/net)
 npm run test:browser  # Playwright journeys (headless Chromium)
 npm run build       # reproducible dist/ assembly
 npm run validate    # syntax + tests + build + build-verify + browser suite
 ```
+npm run test:net      # multiplayer protocol/session/replication suites
+```
+
+## Multiplayer (W22 vertical slice)
+
+Authoritative server; clients propose intents only. Two ways to play locally:
+
+1. **Dedicated headless host** - `node tools/mp-server.js [--seed 1337] [--port 7777]`,
+   then open the game in each browser and pick **Join Local Server**
+   (`ws://localhost:7777`).
+2. **Browser host** - pick **Host Local Multiplayer** on one machine's title screen;
+   other browsers join it the same way.
+
+The host's world is the save; joined clients never write saves. Movement, mining,
+placement, combat, loot and inventory are simulated only by the authority and
+replicated through per-client region streams (see docs/ARCHITECTURE.md, section 26).
+
 
 ## Controls
 

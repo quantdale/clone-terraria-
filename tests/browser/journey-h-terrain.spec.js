@@ -120,9 +120,13 @@ test.describe("journey H — terrain shapes", () => {
     }
     await page.keyboard.up("KeyS");
     expect(below, "S-drop must fall through the deck to the floor").toBe(true);
-    expect(deckFeet).toBeLessThan(
-      await page.evaluate(() => window.TC.player.y),
+    // compare feet-to-feet: the deck landing height vs the floor landing
+    // height (the old assertion compared on-deck FEET against on-floor TOP,
+    // a one-player-height margin that flipped on sub-pixel landings)
+    const finalFeet = await page.evaluate(
+      () => window.TC.player.y + window.TC.player.h,
     );
+    expect(finalFeet).toBeGreaterThan(deckFeet + 16);
 
     await page.screenshot({ path: "test-results/journey-h-platform.png" });
     H.assertNoErrors(errors, "journey H/platform");

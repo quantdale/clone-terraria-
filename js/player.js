@@ -567,13 +567,19 @@
         this.blinkHold = 0.12;
       }
 
-      const inp = TC.Input;
-      if (inp) this.readHotbar(inp);
+      // W22 input ownership: an explicit inputSource (network session) wins;
+      // without one this is the legacy local-player path reading TC.Input.
+      const inp = this.inputSource || TC.Input;
+      if (!this.inputSource && inp) this.readHotbar(inp);
 
       // intent
       let ix = 0,
         jump = false;
-      if (inp && typeof inp.axis === "function") {
+      if (this.inputSource && typeof this.inputSource.axis === "function") {
+        const a = this.inputSource.axis();
+        ix = a ? a.x || 0 : 0;
+        jump = !!(a && a.jump);
+      } else if (inp && typeof inp.axis === "function") {
         const a = inp.axis();
         ix = a ? a.x || 0 : 0;
         jump = !!(a && a.jump);

@@ -169,6 +169,29 @@
     if (TC.Enemies && TC.Enemies.list) lines.push('enemies ' + TC.Enemies.list.length);
     if (TC.Items && TC.Items.drops) lines.push('drops ' + TC.Items.drops.length);
 
+    // W22 multiplayer observability: one bounded line per active role.
+    try {
+      const host = TC.__netHost;
+      if (host && host.running) {
+        const s = host.summary();
+        const st = s.stats;
+        lines.push('net HOST ' + s.sid + ' players ' + s.players + ' conns ' + s.conns +
+                   ' in ' + st.msgsIn + '/' + (st.bytesIn | 0) + 'B out ' + st.msgsOut + '/' + (st.bytesOut | 0) + 'B');
+        lines.push('net regions full ' + st.regionsSentFull + ' delta ' + st.regionsSentDelta +
+                   ' acks ' + st.regionsAcked + ' cmds +' + st.cmdsAccepted + '/-' + st.cmdsRejected +
+                   ' resyncs ' + st.resyncsServed);
+      }
+      const client = TC.__netClient || (TC.NetClient && TC.NetClient.active && TC.NetClient.active());
+      if (client) {
+        const s = client.summary();
+        const st = client.stats;
+        lines.push('net CLIENT ' + (s.pid || '?') + ' phase ' + s.phase +
+                   ' tick ' + s.tick + ' in ' + st.msgsIn + ' out ' + st.msgsOut +
+                   ' regions ' + st.regionsApplied + ' snaps ' + st.snapshotsApplied +
+                   ' rejIn ' + st.rejectedIn);
+      }
+    } catch (e) {}
+
     const flags = guardedCall('Progression', 'all');
     if (flags) lines.push('flags ' + (flags.length ? flags.join(', ') : 'none'));
     // WOF encounter observability (W17): state/phase/elapsed/servants/projectiles

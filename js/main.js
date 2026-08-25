@@ -151,6 +151,31 @@
   };
 
   TC.quitToTitle = function () {
+    // W22: a joined network client holds a PRESENTATION MIRROR, never truth —
+    // it must not overwrite the local save with replicated state.
+    const netClient = TC.NetClient && TC.NetClient.active ? TC.NetClient.active() : null;
+    if (netClient && netClient.isActive()) {
+      netClient.disconnect('quit-to-title');
+      if (TC.Runtime && typeof TC.Runtime.reset === 'function') TC.Runtime.reset();
+      if (TC.WorldRegions && typeof TC.WorldRegions.reset === 'function') {
+        try { TC.WorldRegions.reset(); } catch (e) {}
+      }
+      if (TC.Commands && typeof TC.Commands.clearQueue === 'function') {
+        try { TC.Commands.clearQueue(); } catch (e) {}
+      }
+      TC.world = null;
+      TC.worldSeed = null;
+      TC.player = null;
+      TC.state = 'title';
+      if (TC.Input && typeof TC.Input.barrier === 'function') TC.Input.barrier();
+      return;
+    }
+    // W22: hosting a session? Tear it down with the world (the HOST world is
+    // truth, so the regular save below stays correct).
+    if (TC.__netHost) {
+      try { TC.__netHost.stop('host-quit'); } catch (e) {}
+      TC.__netHost = null;
+    }
     TC.Save.save();
     TC.world = null;
     TC.worldSeed = null;
@@ -229,7 +254,19 @@
       update: function (dt) { if (TC.Grapple && TC.Grapple.preUpdate) TC.Grapple.preUpdate(dt); }
     }, { when: simGate, before: ['player'] });
     TC.Systems.register('movement', 'player', {
-      update: function (dt) { if (TC.player) { TC.player.mining = false; TC.player.update(dt); } }
+      update: function (dt) {
+        // W22: every authoritative player entity steps through the same
+        // physics; single-player is the degenerate one-entry case.
+        const players = (TC.Players && TC.Players.count && TC.Players.count() > 0)
+          ? TC.Players.all()
+          : (TC.player ? [TC.player] : []);
+        for (let i = 0; i < players.length; i++) {
+          const pl = players[i];
+          if (!pl) continue;
+          pl.mining = false;
+          pl.update(dt);
+        }
+      }
     }, { when: simGate });
     TC.Systems.register('movement', 'grapple-post', {
       update: function (dt) { if (TC.Grapple && TC.Grapple.postUpdate) TC.Grapple.postUpdate(dt); }
@@ -444,7 +481,10 @@
 
     acc += dt;
     while (acc >= STEP) {
-      TC.Runtime.tick(STEP);   // canonical fixed-step authority
+      // W22: a joined network client advances presentation + input sampling
+      // only — the authoritative simulation lives on the server it joined.
+      if (TC.NetClient && TC.NetClient.drivesTick()) TC.NetClient.frame(STEP);
+      else TC.Runtime.tick(STEP);   // canonical fixed-step authority
       acc -= STEP;
     }
     if (TC.Debug && typeof TC.Debug.frame === 'function') TC.Debug.frame(dt);

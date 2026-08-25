@@ -902,3 +902,145 @@ settings envelope), never inside saves. Registry fingerprint unchanged
 - tests/browser/journey-l-regions-lighting.spec.js — real-browser journey
   (day/night rendering, torch field, violet dynamic source, minimap
   locality, quality persistence, reload fingerprint equality).
+
+
+## 26. Campaign contracts (W22 — Authoritative Multiplayer Foundation & Two-Client Slice)
+
+### 26.1 Authority model (binding)
+
+The server/authoritative session owns world truth: world seed + state, the
+simulation tick, player entities, positions/velocities after simulation,
+enemies, projectiles, mining/placement results, inventory mutations, combat
+results, loot, shared-world progression and replicated region revisions.
+Clients own ONLY intent and presentation. A client may propose movement input,
+jump/drop state, aim, item use, mining targets, placement targets, interaction
+and inventory moves; it may never declare "I moved to X", "this block is now
+air", "give me an item", "that enemy lost HP" or "my inventory contains X".
+Every mutation flows through the canonical `TC.Commands` transactions inside
+the canonical fixed-step scheduler (`TC.Runtime.tick`).
+
+### 26.2 Player identity — `TC.Players` (js/players.js)
+
+Stable per-session ids (`p1`, `p2`, …), `create/remove/get/all/entry/idOf/
+primary/setPrimary/retainOnly/resetForNewWorld`. Exactly one LOCAL entry is
+primary; `TC.player` remains an alias of it, so legacy single-player code is
+untouched when no session exists. Remote mirrors are flagged `remote:true`
+and can never become primary. World/session teardown uses `retainOnly`/
+`resetForNewWorld` so identities cannot leak between worlds.
+
+### 26.3 Protocol v1 — `TC.NetProto` (js/netproto.js)
+
+Envelope `{v,t,sid,pid,cseq,sseq,tick,p}`; strict fail-closed validation
+(unknown fields, wrong types, non-finite numbers, oversize frames → reject).
+Message types: hello / welcome / reject / snapshot / input / cmd / cmdres /
+worldupd / ack / resync / bye. Only whitelisted command names ride `cmd`
+(MineTile, MineWall, PlaceTile, PlaceWall, UseItem, MoveItem, EquipItem,
+InteractTile). Region codec: full layers as hex pairs; deltas as
+`[cellIdx,tile,wall]` triples baselined against the last sent copy.
+Deterministic digests (`digestWorld/digestPlayers/digestInventory`) hash
+gameplay state only (tiles, walls, essentials) for replay/resync checks.
+
+Sequence rules: client→server cseq strictly increasing per stream (input/cmd
+separately); duplicates/stale frames counted and rejected; server→client sseq
+strictly increasing; a bound connection may only speak as its own pid
+(spoof → reject). Reconnect raises a cseq floor so dead-generation packets
+cannot apply.
+
+Continuous vs discrete: per-tick sampled movement/jump/down/aim/use/hotbar
+rides `input` frames (latest-wins, stale rejected, zeroed after 30 ticks of
+silence = safe default). Discrete gameplay rides `cmd` intents executed in the
+scheduler's commands phase via the registered `net-commands` system (runs
+after core.queue drain), through the SAME `TC.Commands.submit` validation as
+local play. The server derives tool/power/dt itself; clients cannot declare
+mining speed or oversized dt.
+
+### 26.4 Transport boundary — `TC.NetTransport` (js/nettransport.js)
+
+Endpoints expose `send/onMessage/onStatus/close`. `loopbackPair()` gives a
+deterministic manual-pump duplex with hostile injection (dropNext/dupNext/
+swapNext); `websocket(url)` wraps the platform WebSocket (browser native /
+Node ≥ 22 global). Transport moves opaque strings only. The Node-side real
+server is the dependency-free RFC6455 shim `tools/net/wsserver.js`
+(handshake, masked frames, ping/pong, close; fragmentation reassembled;
+everything else fails closed) attached to an ordinary http server by
+`tools/mp-server.js`.
+
+### 26.5 Server runner — `TC.NetServer` (js/netserver.js)
+
+Lifecycle: `create(opts)` → `start({seed|adoptWorld})` (creates/adopts world
+via Runtime) → `attachLocal(name)` (host pawn) → `connect(ep,{name})` →
+per-tick `tick()` (processInbound → Runtime.tick(STEP) → replicate) →
+`stop(reason)`. Registers scheduler systems `input/net-remote-intents`
+(remote held-use intent + hotbar selection through the same seam as local
+player-intent) and `commands/net-commands`. Standalone hosts use
+`runForever()` (wall-clock fixed-step driver).
+
+Replication (first NET-004 prototype): every connection owns a PRIVATE
+WorldRegions consumer `'net:<cid>'`; renderer/lighting/minimap cursors are
+never touched (multi-consumer invariant preserved). Interest = regions
+intersecting ±56 tiles around the player's position. Join/rejoin streams
+full region snapshots (≤12 regions/message, reason 'streaming' until
+'complete'); steady state sends baselined cell deltas under a budget of 4
+changed interested regions/tick/connection. Entity lines (players always,
+enemies/drops interest-filtered, capped) ride every worldupd; own-inventory
+refresh rides worldupd every 30 ticks. Acks are accounting + desync detector:
+a client acking a revision above the authority forces a fresh snapshot.
+Disconnect parks the identity in `detached` (inputs zeroed, entity kept);
+`hello.rejoin{sid,pid}` rebinds generation, resends snapshots; explicit bye
+or 18000-tick grace expiry removes the entity and forgets the consumer.
+Diagnostics: `summary()` + stats {msgs/bytes in/out by type, rejected
+breakdown, cmds accepted/rejected, regionsSentFull/Delta, acks, snapshots,
+resyncs, joins, reconnects}; F3 shows one bounded line per active role.
+
+### 26.6 Client controller — `TC.NetClient` (js/netclient.js)
+
+Phases idle→connecting→syncing→playing→closed. While joined, main.js routes
+fixed steps to `TC.NetClient.frame(dt)` (input sampling, mirror application,
+presentation-only advancement: sky/biomes/world chunks/lighting/minimap/
+particles/UI/events + camera follow). The mirror world is regenerated from
+the authoritative seed, then relevant regions/e entities/inventory are
+overwritten from snapshots/deltas — production render pipeline consumes it
+unchanged. Clients never simulate enemies/combat/spawning locally and never
+autosave (`Save.autosave` gates on `NetClient.drivesTick()`; quitToTitle
+skips saving a mirror). Discrete intents go through `sendCmd(name,ctx)` —
+slots only, inventories resolved server-side, cross-player selection
+structurally impossible.
+
+### 26.7 Multi-player simulation seams
+
+`main.js` movement iterates all registered players (single-player =
+degenerate one-entry case); enemy contact damage and hostile shots iterate
+players via `Combat.hurtPlayer(..., {target})`; drop magnet/pickup selects
+the nearest eligible collector among all players (`items.js`). Enemy AI still
+targets the primary pawn — multi-target AI is future work. Enemies carry a
+stable `eid` (additive) used as replication identity.
+
+### 26.8 UI flow (developer quality)
+
+Title menu gains "Host Local Multiplayer" (starts an in-tab session over the
+current/new world; host plays through the normal single-player path while
+the session serves clients) and "Join Local Server" (prompt for ws:// URL).
+Toasts surface connecting/connected/link-lost/server-closed transitions; a
+link loss during play returns the client to title automatically. All strings
+live under `ui.net.*` / `ui.menu.*` in js/locales/en.js.
+
+### 26.9 Persistence boundary
+
+Session/socket data is NEVER persisted. The HOST saves the shared world with
+the existing envelope exactly as single-player does; joined clients cannot
+write saves at all. Existing save formats and compatibility untouched.
+
+### 26.10 Tests & benchmarks
+
+Headless (tests/net/): proto hostility, players registry, loopback +
+REAL WebSocket echo, session slice (join/move/mine/place/combat/inventory
+dup-safety/hostile packets/disconnect-resync/deterministic two-client
+replay digests), replication guarantees (consumer independence, interest
+crossing, edit-while-away, forced resync, burst coalescing, teardown),
+cross-realm join of the REAL NetClient over a bridge realm.
+Browser: journey-m-multiplayer.spec.js — two Chromium pages over the REAL
+Node mp-server: same-world join, movement replication, mine→loot→place chain
+with exactly-once inventory accounting, newcomer resync after reload,
+coherent shutdown. Benchmarks: tools/bench-multiplayer.js (idle-2p,
+move-2p, mine-burst, resync-churn, 1-vs-2 client comparison; VM-realm tax
+applies as documented in W21 — relative deltas are the signal).

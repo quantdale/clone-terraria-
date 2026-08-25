@@ -75,10 +75,12 @@
   // ---- state ----
   const list = [];
   let clock = 0; // animation time (visual only; read by AI via aiCtx)
+  let eidSeq = 0; // W22: stable per-session entity id for network replication
 
   // ---- factory ----
   function makeEnemy(type, def, x, y) {
     return {
+      eid: ++eidSeq,
       type,
       def,
       x,
@@ -436,27 +438,36 @@
         hostileShots.splice(i, 1);
         continue;
       }
-      const p = TC.player;
-      if (!p || p.dead) continue;
+      const p0 = TC.player;
+      if (!p0 || p0.dead) continue;
       const r = h.p.hitRadius || 8;
-      if (
-        h.p.x + r > p.x &&
-        h.p.x - r < p.x + p.w &&
-        h.p.y + r > p.y &&
-        h.p.y - r < p.y + p.h &&
-        TC.Combat &&
-        typeof TC.Combat.hurtPlayer === "function"
-      ) {
-        try {
-          TC.Combat.hurtPlayer(
-            h.dmg,
-            (h.p.vx >= 0 ? 1 : -1) * 170,
-            -150,
-            h.src,
-          );
-        } catch (err) {}
-        h.p.age = (h.p.maxAge || 1) + 1; // expire on the pool's next tick
-        hostileShots.splice(i, 1);
+      // W22: hostile shots threaten EVERY authoritative player, not just the
+      // primary singleton (first hit wins; the shot then expires).
+      const victims = (TC.Players && TC.Players.all) ? TC.Players.all() : [p0];
+      for (let vi = 0; vi < victims.length; vi++) {
+        const p = victims[vi];
+        if (!p || p.dead) continue;
+        if (
+          h.p.x + r > p.x &&
+          h.p.x - r < p.x + p.w &&
+          h.p.y + r > p.y &&
+          h.p.y - r < p.y + p.h &&
+          TC.Combat &&
+          typeof TC.Combat.hurtPlayer === "function"
+        ) {
+          try {
+            TC.Combat.hurtPlayer(
+              h.dmg,
+              (h.p.vx >= 0 ? 1 : -1) * 170,
+              -150,
+              h.src,
+              { target: p },
+            );
+          } catch (err) {}
+          h.p.age = (h.p.maxAge || 1) + 1; // expire on the pool's next tick
+          hostileShots.splice(i, 1);
+          break;
+        }
       }
     }
   }
@@ -645,28 +656,43 @@
       }
       moveAndCollide(e, dt);
 
-      // contact damage
-      if (
-        p &&
-        !p.dead &&
-        e.fade >= 1 &&
-        e.touchTimer <= 0 &&
-        e.x < p.x + p.w &&
-        e.x + e.w > p.x &&
-        e.y < p.y + p.h &&
-        e.y + e.h > p.y &&
-        TC.Combat &&
-        typeof TC.Combat.hurtPlayer === "function"
-      ) {
-        const dir = p.x + p.w / 2 >= e.x + e.w / 2 ? 1 : -1;
-        TC.Combat.hurtPlayer(
-          e.def.dmg,
-          dir * TOUCH_KB_X,
-          TOUCH_KB_Y,
-          e.def.name,
-        );
-        e.touchTimer = TC.CONST.ENEMY_TOUCH_COOLDOWN;
+      // contact damage — W22: every authoritative player can be touched,
+      // not only the primary singleton
+      if (TC.Players && TC.Players.all) {
+        const players = TC.Players.all();
+        for (let pi = 0; pi < players.length; pi++) {
+          touchContact(e, players[pi]);
+        }
+      } else {
+        touchContact(e, p);
       }
+    }
+  }
+
+  // One enemy-vs-one-player contact check (extracted verbatim from the old
+  // single-player branch so behavior is unchanged when only one exists).
+  function touchContact(e, p) {
+    if (
+      p &&
+      !p.dead &&
+      e.fade >= 1 &&
+      e.touchTimer <= 0 &&
+      e.x < p.x + p.w &&
+      e.x + e.w > p.x &&
+      e.y < p.y + p.h &&
+      e.y + e.h > p.y &&
+      TC.Combat &&
+      typeof TC.Combat.hurtPlayer === "function"
+    ) {
+      const dir = p.x + p.w / 2 >= e.x + e.w / 2 ? 1 : -1;
+      TC.Combat.hurtPlayer(
+        e.def.dmg,
+        dir * TOUCH_KB_X,
+        TOUCH_KB_Y,
+        e.def.name,
+        { target: p },
+      );
+      e.touchTimer = TC.CONST.ENEMY_TOUCH_COOLDOWN;
     }
   }
 

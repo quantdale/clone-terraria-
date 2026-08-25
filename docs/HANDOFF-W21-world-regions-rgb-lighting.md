@@ -376,3 +376,34 @@ after gh auth login, or download the failure-diagnostics artifact (retention
   scaling by frame headroom.
 - Benchmarks: add browser-measured (real raster) variant of key scenarios
   via Playwright timing APIs.
+
+
+---
+
+## W22 reconciliation update (CI failure identified + fixed)
+
+The "unidentified" GitHub Actions failure recorded above has been
+root-caused and resolved during W22. The failing assertions were the
+wall-clock-calibrated journeys, each with a concrete mechanism:
+
+- **Journey D / ranged:** the assertion counted only physical gel drops.
+  Slimes hop toward the player, so a kill near the player legitimately
+  magnet-collects its gel once pickupDelay elapses — under CI load the
+  uncontrolled live time between kill detection and assertion let the
+  pickup complete, leaving zero drops. Separately, aiming dead-center at a
+  gravity-projectile target is a physics lottery (hits only when a hop
+  crosses the descending arc). Fixed by asserting the durable invariant
+  (drops + inventory delta) and computing ballistic-compensated aims from
+  live game constants with the target pinned per shot.
+- **Journey F / fishing:** the real CDP click raced the 0.95s game-time
+  bite window across process boundaries; under load it landed after expiry,
+  where the same click means "pull line" (recall). Fixed by watching the
+  game state inside the page and pressing through TC.Input's canonical seam
+  within one frame of the 'biting' transition (no gameplay special-casing).
+- **Journey H / platform:** the S-drop assertion compared on-deck FEET
+  against on-floor TOP (a one-player-height margin that flipped on
+  sub-pixel landings). Now compares feet-to-feet.
+
+All three fixes are in the journey specs; gameplay code was unchanged for
+D/F/H. `npm run validate` (including the browser stage) is green again from
+W22 onward.

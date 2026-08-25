@@ -52,6 +52,14 @@ localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
 
 ### Newly discovered follow-ups (updated W21)
 
+- **W22 multiplayer follow-ups:** client-side prediction/interpolation for
+  remote entities (authority stays server-owned); enemy AI targeting beyond
+  the primary pawn; delta compression of region payloads (the baselined hex
+  encoding is deliberately simple first); seeded runtime RNG for full
+  lockstep enemy determinism (AI currently uses Math.random by long-standing
+  policy - replay digests therefore cover world/inventory/player state);
+  crafting/shop commands over the network whitelist; interest-radius tuning
+  and priority queues; detached-identity grace made configurable per host.
 - **W21 perf follow-ups:** browser-measured (real raster) benchmark variant;
   settings-menu exposure for the lighting quality profile (needs localized
   labels); chunk-canvas reuse across worlds; NET-004 prototype on top of
@@ -955,39 +963,75 @@ Compare optimized Canvas 2D against a narrow PixiJS/WebGL prototype before appro
 
 **Priority:** P2  
 **Depends on:** architecture stabilization  
-**Effort:** High
+**Effort:** High  
+**Status:** DONE (W22 reconciliation)
 
-Simulation starts/updates without Canvas or DOM.
-
----
+The W18 runtime-authority campaign already delivered the runner:
+`TC.Runtime` boots without Canvas/DOM/rAF, advances deterministic fixed
+ticks via `TC.Systems.updateAll`, creates/resets worlds headlessly
+(`createWorld/advanceTicks/reset/getState`), drains queued commands and
+supports multiple player entities once `TC.Players` provides them. W22
+audited it against this checklist (proof: tests/core/headless-sim.test.js
+plus the whole tests/net/ suite running real sessions through it), closed
+the remaining server-host seams (per-player input injection, multi-player
+movement iteration, scheduler hook teardown via the new Systems.unregister)
+and marked the task complete rather than building a second framework.
 
 ## NET-002 — Authoritative command protocol
 
 **Priority:** P2  
 **Depends on:** NET-001, ARC-006  
-**Effort:** High
+**Effort:** High  
+**Status:** DONE (W22)
 
----
+Protocol v1 lives in js/netproto.js: versioned envelope
+`{v,t,sid,pid,cseq,sseq,tick,p}`, strict fail-closed schema validation
+(unknown fields/types, non-finite numbers and oversize frames all
+reject), a whitelist of network-callable commands, monotonic
+client/server sequence rules with stale/duplicate rejection plus
+reconnect cseq floors, region full/delta codecs and deterministic state
+digests. Transports: deterministic loopback pair with hostile injection
+(js/nettransport.js), platform WebSocket client, and
+tools/net/wsserver.js — a zero-dependency Node RFC6455 server shim
+driven by tools/mp-server.js.
 
 ## NET-003 — Two-client vertical slice
 
 **Priority:** P2  
 **Depends on:** NET-002  
-**Effort:** Very High
+**Effort:** Very High  
+**Status:** DONE (W22)
 
-Scope only movement, mining/placement, one enemy/combat interaction, inventory/save and reconnect.
-
----
+Delivered exactly the scoped slice: join into ONE shared world;
+server-authoritative per-player movement (input cannot move another
+player); mining/placement replicate exactly once with duplicate or
+rejected intents consuming nothing/one item as appropriate; one combat
+path (pooled arrows) produces a single EntityKilled and single loot
+spawn observed by both clients; inventory mutations are authoritative
+and replay-proof; disconnect/rejoin resyncs explicitly (edits made while
+absent arrive; stale-generation packets are rejected). Proof:
+tests/net/session.test.js, tests/net/crossrealm.test.js (the REAL
+shipped client controller joined across VM realms) and
+tests/browser/journey-m-multiplayer.spec.js (two Chromium pages over the
+real Node host). Client-side prediction deliberately out of scope:
+correct authority first.
 
 ## NET-004 — Interest management/chunk replication
 
-**Priority:** P3  
+**Priority:** P2  
 **Depends on:** NET-003, chunk model  
-**Effort:** Very High
+**Effort:** Very High  
+**Status:** PROTOTYPE DONE (W22); productionization open
 
----
-
-# EPIC MOD — Extensibility
+First prototype on the W21 substrate: every connection owns a private
+WorldRegions consumer ('net:<cid>') so renderer/lighting/minimap
+independence is preserved; interest = regions intersecting ~56 tiles
+around each player; join/rejoin streams bounded full-region snapshots;
+steady state streams last-sent-baselined cell deltas under a
+4-regions/tick/connection budget; acks act as accounting plus desync
+detector (a future revision claim forces a fresh snapshot). Deferred:
+payload compression, priority queues, radius tuning, entity delta
+encoding. Proof: tests/net/replication.test.js + F3 stats lines.
 
 ## MOD-001 — Resource-pack manifest/loader
 

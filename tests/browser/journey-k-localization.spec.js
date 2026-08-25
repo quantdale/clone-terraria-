@@ -17,6 +17,7 @@ const { test, expect } = require("@playwright/test");
 const H = require("./helpers.js");
 
 test.describe("journey K — localization", () => {
+  test.setTimeout(150 * 1000);
   test("locale switch, identity stability, persistence and fallback return", async ({ page }) => {
     const errors = await H.openGame(page, "#test");
     await H.newWorld(page, 424242, 20);

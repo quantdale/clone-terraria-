@@ -409,10 +409,21 @@
     clock += dt;
     mergeDrops();
 
-    const canMagnet = !!(player && !player.dead && player.inventory &&
-                         typeof player.inventory.add === 'function');
-    const pcx = canMagnet ? player.x + player.w / 2 : 0;
-    const pcy = canMagnet ? player.y + player.h / 2 : 0;
+    // W22: a drop may be pulled/collected by ANY authoritative player; the
+    // nearest eligible one wins. Single-player is the one-collector case
+    // with identical behavior.
+    const collectors = [];
+    if (TC.Players && TC.Players.count && TC.Players.count() > 0) {
+      const all = TC.Players.all();
+      for (let i = 0; i < all.length; i++) {
+        const pl = all[i];
+        if (pl && !pl.dead && pl.inventory &&
+            typeof pl.inventory.add === 'function') collectors.push(pl);
+      }
+    } else if (player && !player.dead && player.inventory &&
+               typeof player.inventory.add === 'function') {
+      collectors.push(player);
+    }
     const PULL = CONST.PICKUP_PULL, PULL2 = PULL * PULL;
     const COLLECT = CONST.PICKUP_COLLECT, COLLECT2 = COLLECT * COLLECT;
 
@@ -422,13 +433,20 @@
       if (d.age >= CONST.DROP_LIFETIME) { drops.splice(i, 1); continue; }
       if (d.pickupDelay > 0) d.pickupDelay -= dt;
 
-      const dx = pcx - d.x, dy = pcy - d.y;
-      const dist2 = dx * dx + dy * dy;
-      const homing = canMagnet && d.pickupDelay <= 0 && dist2 < PULL2;
+      let target = null, td2 = Infinity;
+      for (let c = 0; c < collectors.length; c++) {
+        const pl = collectors[c];
+        const dx = pl.x + pl.w / 2 - d.x, dy = pl.y + pl.h / 2 - d.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < td2) { td2 = d2; target = pl; }
+      }
+
+      const homing = target && d.pickupDelay <= 0 && td2 < PULL2;
 
       if (homing) {                    // override gravity, home to the player
-        const dist = Math.sqrt(dist2) || 1;
+        const dist = Math.sqrt(td2) || 1;
         const sp = Math.min(HOME_SPEED_MAX, HOME_SPEED_MIN + (PULL - dist) * 7);
+        const dx = target.x + target.w / 2 - d.x, dy = target.y + target.h / 2 - d.y;
         d.vx = dx / dist * sp;
         d.vy = dy / dist * sp;
       } else {
@@ -443,8 +461,8 @@
         else d.vx -= d.vx > 0 ? f : -f;
       }
 
-      if (canMagnet && d.pickupDelay <= 0 && dist2 < COLLECT2) {
-        const left = player.inventory.add(d.id, d.count);
+      if (target && d.pickupDelay <= 0 && td2 < COLLECT2) {
+        const left = target.inventory.add(d.id, d.count);
         if (left <= 0) {
           drops.splice(i, 1);
           if (TC.Audio) { try { TC.Audio.play('pickup'); } catch (e) {} }

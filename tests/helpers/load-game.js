@@ -191,6 +191,12 @@ function loadGame(opts) {
     isNaN,
     encodeURIComponent,
     decodeURIComponent,
+    // W22: host-backed timers — net modules schedule work from inside the
+    // VM realm (transport error deferral, standalone server driver).
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
     document: documentStub,
     localStorage: storage,
     location: { hash: opts.hash || "" },
