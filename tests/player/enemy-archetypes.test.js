@@ -201,8 +201,7 @@ test('boss storm_jelly: three-phase escalation with lightning volleys', () => {
   e.hp = Math.floor(e.maxHp * 0.3);
   e.cycleTimer = 0.05;
   let boltsSeen = 0;
-  const realRandom = Math.random;
-  Math.random = () => 0.12; // forces weightedPick to choose bolt (1.4 vs 2.2)
+  TC.GameRng.override('ai', () => 0.12); // forces weightedPick to choose bolt (1.4 vs 2.2)
   try {
     for (let i = 0; i < 60 * 6; i++) {
       const before = TC.Projectiles.activeCount();
@@ -210,7 +209,7 @@ test('boss storm_jelly: three-phase escalation with lightning volleys', () => {
       boltsSeen += Math.max(0, TC.Projectiles.activeCount() - before);
       if (e.bstate === 'hover' && boltsSeen >= 3) break;
     }
-  } finally { Math.random = realRandom; }
+  } finally { TC.GameRng.clearOverrides(); }
   assert.ok(e.phase3 === true, 'phase 3 reached');
   assert.ok(e.phase2 === true);
   assert.ok(boltsSeen >= 1, 'lightning volley fired pooled projectiles');

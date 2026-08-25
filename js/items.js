@@ -335,14 +335,17 @@
   }
 
   function spawnDrop(x, y, id, count, scatter) {
+    // Scatter physics is authoritative (drop motion decides who can pick up
+    // what, and when): ride the seeded 'misc' stream so replays converge.
+    const R = TC.GameRng.stream('misc');
     const d = {
       x: x, y: y,
-      vx: (Math.random() - 0.5) * (scatter ? 120 : 36),
-      vy: scatter ? -(60 + Math.random() * 80) : -(30 + Math.random() * 40),
+      vx: (R.float() - 0.5) * (scatter ? 120 : 36),
+      vy: scatter ? -(60 + R.float() * 80) : -(30 + R.float() * 40),
       id: String(id),
       count: Math.max(1, Math.floor(count) || 1),
       age: 0,
-      phase: Math.random() * Math.PI * 2,
+      phase: R.float() * Math.PI * 2,
       pickupDelay: scatter ? 0.9 : 0.35,   // grace so thrown drops escape the magnet
       onGround: false
     };

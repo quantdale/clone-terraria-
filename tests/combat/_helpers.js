@@ -10,14 +10,15 @@ function boot(seed) {
   return g;
 }
 
-// Deterministic damage rolls: Math.random()->0.5 makes the DMG_VARIANCE
-// factor exactly 1 and never rolls a crit (0.5 >= CRIT_CHANCE 0.08), so
-// every rollDamage site yields Math.round(base) exactly. The vm sandbox
-// shares the host Math object, so this reaches inside the game code.
-function deterministicRolls(fn) {
-  const real = Math.random;
-  Math.random = function () { return 0.5; };
-  try { return fn(); } finally { Math.random = real; }
+// Deterministic damage rolls: every authoritative GameRng stream returns
+// 0.5, making the DMG_VARIANCE factor exactly 1 and never rolling a crit
+// (0.5 >= CRIT_CHANCE 0.08), so every rollDamage site yields
+// Math.round(base) exactly. (Pre-W23 this pinned host Math.random; gameplay
+// randomness now lives in TC.GameRng.) Takes the realm's TC so the pin
+// lands on the game instance under test.
+function deterministicRolls(TC, fn) {
+  TC.GameRng.override(null, function () { return 0.5; });
+  try { return fn(); } finally { TC.GameRng.clearOverrides(); }
 }
 
 let enemySeq = 0;

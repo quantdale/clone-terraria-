@@ -67,7 +67,7 @@ test('tile collision kills an arrow before it tunnels into the wall', () => {
 test('pierce: falling_star damages each enemy once and dies after first+pierce hits', () => {
   const g = boot();
   const TC = g.TC;
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     const tx0 = Math.floor(TC.player.x / TS);
     const rowY = TC.world.surfaceY[tx0] - 50;
     const startX = (tx0 + 2) * TS;
@@ -137,7 +137,7 @@ test('homing: acquires nearest target, excludes already-hit enemies', () => {
     homing: 8, homingRange: 400, bounce: 0, light: 0, color: '#ffffff'
   };
   try {
-    deterministicRolls(() => {
+    deterministicRolls(TC, () => {
       const tx0 = Math.floor(TC.player.x / TS);
       const y = (TC.world.surfaceY[tx0] - 50) * TS + 8;
       const startX = (tx0 + 2) * TS;
@@ -166,7 +166,7 @@ test('homing: acquires nearest target, excludes already-hit enemies', () => {
 test('explosion: grenade detonation damages each enemy in radius exactly once + flash light', () => {
   const g = boot();
   const TC = g.TC;
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     const tx0 = Math.floor(TC.player.x / TS);
     const gx = (tx0 + 2) * TS, gy = (TC.world.surfaceY[tx0] - 50) * TS;
     const e1 = makeEnemy(gx + 25, gy - 8);

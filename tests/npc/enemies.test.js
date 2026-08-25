@@ -1,6 +1,6 @@
 /* tests/npc/enemies.test.js — TARGET: TC.Enemies behaviors.
-   Covers deterministic loot rolls from ENEMY_DEFS[].drops (Math.random
-   patched through the vm sandbox's shared Math), boss-death servant/part
+   Covers deterministic loot rolls from ENEMY_DEFS[].drops (pinned through
+   the W23 TC.GameRng test seam), boss-death servant/part
    cleanup, EntityKilled/BossDefeated single-fire payloads, spawnDirector
    honoring Progression.spawnMultiplier + Biomes.getSpawnOverride, and the
    CONST.MAX_ENEMIES population cap. */
@@ -15,15 +15,11 @@ function boot(seed) {
   return g;
 }
 
-// The loader injects the host Math into the sandbox by reference, so patching
-// Math.random here is visible inside the vm — restore it synchronously.
+// Pin every authoritative GameRng stream to fn (W23 seam). The pre-W23
+// version patched host Math.random through the shared vm Math object.
 function patchRandom(g, fn) {
-  const targets = new Set([Math]);
-  const ctxMath = g.ctx.Math;
-  if (ctxMath && typeof ctxMath === 'object') targets.add(ctxMath);
-  const saved = [];
-  for (const m of targets) { saved.push([m, m.random]); m.random = fn; }
-  return () => { for (const [m, o] of saved) m.random = o; };
+  g.TC.GameRng.override(null, fn);
+  return () => g.TC.GameRng.clearOverrides();
 }
 
 // Minimal live-enemy shape sufficient for damageEnemy/killEnemy.

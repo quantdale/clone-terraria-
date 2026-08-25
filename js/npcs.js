@@ -210,8 +210,8 @@
     }
   };
 
-  // ---- small local helpers ----
-  function rand(a, b) { return a + Math.random() * (b - a); }
+  // ---- small local helpers (wander timing is server truth → seeded 'misc') ----
+  function rand(a, b) { return a + TC.GameRng.stream('misc').float() * (b - a); }
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
   function approach(v, target, rate, dt) { return v + (target - v) * Math.min(1, rate * dt); }
   function num(v) { return (typeof v === 'number' && isFinite(v)) ? v : null; }

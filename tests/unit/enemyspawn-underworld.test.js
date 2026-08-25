@@ -165,16 +165,16 @@ test('malformed or unknown conditions fail closed in the spawn grammar', () => {
   assert.strictEqual(TC.Progression.test({ boss: 'wall_of_flesh' }), true, 'boss shorthand honors set flags');
 });
 
-// Deterministic but VARYING rng: a tiny LCG so placement attempts explore
-// different spots (unlike a pinned 0.5, which would retry one solid tile).
-function withRng(seed, fn) {
-  const real = Math.random;
+// Deterministic but VARYING rng: a tiny LCG pinned into the 'spawn' GameRng
+// stream so placement attempts explore different spots (unlike a pinned 0.5,
+// which would retry one solid tile).
+function withRng(TC, seed, fn) {
   let s = seed >>> 0;
-  Math.random = function () {
+  TC.GameRng.override('spawn', function () {
     s = (s * 1664525 + 1013904223) >>> 0;
     return s / 4294967296;
-  };
-  try { return fn(); } finally { Math.random = real; }
+  });
+  try { return fn(); } finally { TC.GameRng.clearOverrides(); }
 }
 
 test('director-level: an underworld player spawns underworld enemies', () => {
@@ -182,7 +182,7 @@ test('director-level: an underworld player spawns underworld enemies', () => {
   const TC = g.TC;
   toUnderworld(TC);
   const ROSTER = new Set(['demon_eye', 'cave_bat', 'zombie']);
-  withRng(0xC0FFEE, () => {
+  withRng(TC, 0xC0FFEE, () => {
     for (let i = 0; i < 12; i++) {
       TC.Enemies.list.length = 0; // keep headroom so every tick may spawn
       TC.EnemySpawn.spawnDirector(10); // large dt expires the rate timer

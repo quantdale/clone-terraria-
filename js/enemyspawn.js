@@ -23,9 +23,10 @@
   const TC = window.TC;
   if (TC.EnemySpawn) return;
 
-  // ---- helpers ----
+  // ---- helpers (gameplay randomness rides the seeded GameRng 'spawn'
+  // stream for deterministic authoritative replay; W23) ----
   function rand(a, b) {
-    return a + Math.random() * (b - a);
+    return a + TC.GameRng.stream('spawn').float() * (b - a);
   }
   function clamp(v, a, b) {
     return v < a ? a : v > b ? b : v;
@@ -38,7 +39,7 @@
   function weightedPick(table) {
     let total = 0;
     for (let i = 0; i < table.length; i++) total += table[i][1];
-    let r = Math.random() * total;
+    let r = TC.GameRng.stream('spawn').float() * total;
     for (let i = 0; i < table.length; i++) {
       r -= table[i][1];
       if (r <= 0) return table[i][0];
@@ -122,7 +123,7 @@
     if (dl < 0.5) {
       if (!bmRolledTonight) {
         bmRolledTonight = true;
-        if (!bloodMoon && Math.random() < 0.125) setBloodMoon(true);
+        if (!bloodMoon && TC.GameRng.stream('spawn').chance(0.125)) setBloodMoon(true);
       }
     } else if (bloodMoon) {
       setBloodMoon(false); // dawn
@@ -329,7 +330,7 @@
 
     const prow = (p.y + p.h / 2) / ts;
     for (let attempt = 0; attempt < 14; attempt++) {
-      const ang = Math.random() * Math.PI * 2;
+      const ang = TC.GameRng.stream('spawn').float() * Math.PI * 2;
       const dist = rand(C.ENEMY_MIN_DIST, C.ENEMY_MAX_DIST);
       const tx = clamp(Math.round(pcol + Math.cos(ang) * dist), 1, w.width - 2);
       const ty = clamp(

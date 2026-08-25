@@ -18,7 +18,7 @@ function resetPlayer(TC) {
 test('meleeStrike: each enemy hit once per swingId; arc culls enemies behind', () => {
   const g = boot();
   const TC = g.TC;
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     const p = resetPlayer(TC);
     const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
     const front = makeEnemy(cx + 18, cy - 8);         // center ~cx+26: inside 34r
@@ -69,7 +69,7 @@ test('damageEnemy: applies FINAL damage exactly once, min 1 floor (W12 contract)
 test('kill events: EntityKilled + BossDefeated emitted exactly once per boss kill', () => {
   const g = boot();
   const TC = g.TC;
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     const boss = makeEnemy(0, 0,
       { name: 'Test Boss', ai: 'eye_boss', boss: true, hp: 30 }, { hp: 30 });
     TC.Enemies.list.push(boss);
@@ -91,7 +91,7 @@ test('hurtPlayer: defense subtraction equals Stats.resolve().defense', () => {
   const D = TC.Stats.resolve(p).defense;
   assert.strictEqual(D, 2, 'guard_ring adds flat 2 defense');
 
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     const res = TC.Combat.hurtPlayer(50, 0, 0, 'test_slime');
     assert.strictEqual(res.finalDamage, 50 - D);
     assert.strictEqual(res.defenseApplied, D);
@@ -109,7 +109,7 @@ test('hurtPlayer: fall and void bypass defense entirely', () => {
   const TC = g.TC;
   const p = resetPlayer(TC);
   p.accessories = [{ id: 'guard_ring', prefix: null }, null, null, null, null];
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     for (const src of ['fall', 'void']) {
       p.iframes = 0;
       const res = TC.Combat.hurtPlayer(30, 0, 0, src);
@@ -132,15 +132,14 @@ test('meleeStrike: crit threshold equals st.critChance exactly (no base double-a
   const dummy = makeEnemy(cx + 18, cy - 8);
   TC.Enemies.list.push(dummy);
 
-  const real = Math.random;
   const strikeAt = (rand) => {
     dummy.hp = 100;
     dummy.lastHitSwing = 0;
-    Math.random = () => rand;               // variance factor 1; roll == rand
+    TC.GameRng.override('combat', () => rand); // variance factor 1; roll == rand
     try {
       TC.Combat.meleeStrike(cx, cy, 34, -1, 1, 10, 0, 7001);
     } finally {
-      Math.random = real;
+      TC.GameRng.clearOverrides();
     }
     return 100 - dummy.hp;                  // 10 = normal, 20 = crit
   };
@@ -164,7 +163,7 @@ test('REGRESSION: end-to-end hp loss equals hurtPlayer finalDamage (defense appl
   const TC = g.TC;
   const p = resetPlayer(TC);
   p.accessories = [{ id: 'guard_ring', prefix: null }, null, null, null, null];
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     const hpBefore = p.hp;
     const res = TC.Combat.hurtPlayer(50, 0, 0, 'test_slime');
     assert.strictEqual(hpBefore - p.hp, res.finalDamage,

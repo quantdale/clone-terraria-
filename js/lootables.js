@@ -13,7 +13,8 @@
    scatters canonical currency via TC.Economy.dropCoins.
 
    Determinism: roll(table, {rng}) accepts an injectable RNG for tests;
-   gameplay paths default to Math.random (runtime loot, not worldgen).
+   gameplay paths default to the seeded GameRng 'loot' stream (runtime loot,
+   not worldgen) since W23.
 
    Events: none emitted here — drops enter the world through TC.Items and
    TC.Economy, which own their own InventoryChanged emissions exactly once.
@@ -24,7 +25,9 @@
   window.TC = window.TC || {};
   const TC = window.TC;
 
-  function defaultRng() { return Math.random(); }
+  function defaultRng() {
+    return TC.GameRng ? TC.GameRng.stream('loot').float() : Math.random();
+  }
 
   function isRng(fn) { return typeof fn === 'function'; }
 

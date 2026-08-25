@@ -189,7 +189,7 @@
     }
     starTimer -= dt;
     if (starTimer > 0) return;
-    starTimer = STAR_INTERVAL + Math.random() * STAR_INTERVAL_VAR;
+    starTimer = STAR_INTERVAL + TC.GameRng.stream('combat').float() * STAR_INTERVAL_VAR;
     spawnStar(pl);
   }
 
@@ -200,18 +200,18 @@
 
     const world = TC.world;
     const TS = TC.CONST.TS;
-    const px = pl.x + pl.w / 2 + (Math.random() * 2 - 1) * STAR_SPREAD_X;
+    const px = pl.x + pl.w / 2 + (TC.GameRng.stream('combat').float() * 2 - 1) * STAR_SPREAD_X;
     const tx = clamp(Math.floor(px / TS), 0, world.width - 1);
     const surf = world.surfaceY ? world.surfaceY[tx] : null;
     if (surf == null) return;
     if (Math.abs(pl.y / TS - surf) > STAR_SURFACE_BAND) return;   // underground: skip
     const py = Math.max(2, surf - STAR_ABOVE_SURFACE) * TS;
-    const ang = Math.PI / 2 + (Math.random() * 2 - 1) * STAR_ANGLE_VAR;
+    const ang = Math.PI / 2 + (TC.GameRng.stream('combat').float() * 2 - 1) * STAR_ANGLE_VAR;
 
     const p = projSpawn('falling_star', px, py, ang,
       { speed: STAR_SPEED, dmg: STAR_DMG, kb: 5 });
     if (!p) return;
-    if (Math.random() < STAR_DROP_CHANCE) watch(p, dropFallenStar, true);
+    if (TC.GameRng.stream('loot').chance(STAR_DROP_CHANCE)) watch(p, dropFallenStar, true);
   }
 
   // ======================================================================

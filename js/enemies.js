@@ -39,11 +39,12 @@
     });
   }
 
-  // ---- small local helpers (runtime gameplay randomness; Math.random is fine here) ----
+  // ---- small local helpers (gameplay randomness rides the seeded GameRng
+  // 'ai'/'loot' streams for deterministic authoritative replay; W23) ----
   // approach/daylight/weightedPick moved to enemyai.js with the behaviors
   // that used them; physics/rendering keep rand/clamp/hexA here.
   function rand(a, b) {
-    return a + Math.random() * (b - a);
+    return a + TC.GameRng.stream('ai').float() * (b - a);
   }
   function clamp(v, a, b) {
     return v < a ? a : v > b ? b : v;
@@ -98,7 +99,7 @@
       sitTimer: rand(0.4, 1.2), // slime: pause between hops
       phase: rand(0, Math.PI * 2), // wobble / walk-cycle offset
       jitterTimer: rand(1, 2), // bat: erratic course-change countdown
-      orbitDir: Math.random() < 0.5 ? -1 : 1, // bat: which way it circles
+      orbitDir: TC.GameRng.stream('ai').sign(), // bat: which way it circles
       bstate: "hover", // eye_boss: hover | telegraph | dash
       dashTimer: rand(3, 4.5), // eye_boss: seconds until next dash
       servants: 0, // eye_boss: live demon_eye minions
@@ -236,8 +237,8 @@
     const drops = e.def.drops || [];
     for (let k = 0; k < drops.length; k++) {
       const d = drops[k];
-      if (Math.random() >= (d.chance == null ? 1 : d.chance)) continue;
-      const n = d.min + Math.floor(Math.random() * (d.max - d.min + 1));
+      if (!TC.GameRng.stream('loot').chance(d.chance == null ? 1 : d.chance)) continue;
+      const n = d.min + Math.floor(TC.GameRng.stream('loot').float() * (d.max - d.min + 1));
       if (n > 0 && TC.Items && typeof TC.Items.spawnDrop === "function") {
         TC.Items.spawnDrop(cx, cy, d.id, n, true);
       }
@@ -245,7 +246,7 @@
     const coins = e.def.coins;
     if (Array.isArray(coins) && coins.length >= 2) {
       const amount =
-        coins[0] + Math.floor(Math.random() * (coins[1] - coins[0] + 1));
+        coins[0] + Math.floor(TC.GameRng.stream('loot').float() * (coins[1] - coins[0] + 1));
       if (
         amount > 0 &&
         TC.Economy &&
@@ -366,7 +367,7 @@
       (!TC.EnemySpawn || TC.EnemySpawn.isBloodMoon()) &&
       !e.def.boss &&
       !e.def.part &&
-      Math.random() < (e.def.bloodShard == null ? 0.4 : e.def.bloodShard) &&
+      TC.GameRng.stream('loot').chance(e.def.bloodShard == null ? 0.4 : e.def.bloodShard) &&
       TC.Items &&
       typeof TC.Items.spawnDrop === "function"
     ) {
@@ -374,7 +375,7 @@
         cx,
         cy,
         "blood_shard",
-        1 + (Math.random() < 0.4 ? 1 : 0),
+        1 + (TC.GameRng.stream('loot').chance(0.4) ? 1 : 0),
         true,
       );
     }

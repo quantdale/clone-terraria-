@@ -97,7 +97,7 @@ test('potion sickness: blocks drinking while active and expires over time', () =
 test('fire(): bolt launches raw and magicDamage scales exactly once at impact (W12)', () => {
   const g = boot();
   const TC = g.TC;
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     const ev = countEvents(TC, ['ProjectileSpawned']);
     const unsub = TC.Stats.registerSource('test.magicmul', 500,
       (player, out) => { out.magicDamage *= 2; });

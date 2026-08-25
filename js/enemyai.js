@@ -23,9 +23,10 @@
 
   const ai = {};
 
-  // ---- shared helpers (gameplay randomness; Math.random is fine here) ----
+  // ---- shared helpers (gameplay randomness rides the seeded GameRng 'ai'
+  // stream so authoritative replay stays deterministic; W23) ----
   const util = {
-    rand(a, b) { return a + Math.random() * (b - a); },
+    rand(a, b) { return a + TC.GameRng.stream('ai').float() * (b - a); },
     clamp(v, a, b) { return v < a ? a : v > b ? b : v; },
     approach(v, target, rate, dt) { return v + (target - v) * Math.min(1, rate * dt); },
     hexA(hex, a) {
@@ -42,7 +43,7 @@
     weightedPick(table) {
       let total = 0;
       for (let i = 0; i < table.length; i++) total += table[i][1];
-      let r = Math.random() * total;
+      let r = TC.GameRng.stream('ai').float() * total;
       for (let i = 0; i < table.length; i++) {
         r -= table[i][1];
         if (r <= 0) return table[i][0];
@@ -179,7 +180,7 @@
     const pl = TC.player;
     if (pl && !pl.dead)
       base = Math.atan2(pl.y + pl.h / 2 - cy, pl.x + pl.w / 2 - cx);
-    const n = 5 + Math.floor(Math.random() * 3); // arc burst of 5-7 spores
+    const n = 5 + Math.floor(TC.GameRng.stream('ai').float() * 3); // arc burst of 5-7 spores
     const dmg = Math.round(e.def.dmg * 0.55);
     for (let k = 0; k < n; k++) {
       const ang = base + (k / (n - 1) - 0.5) * 0.76;
@@ -200,7 +201,7 @@
   }
 
   function shedSporelings(e, bx, by) {
-    const n = 2 + (Math.random() < 0.5 ? 1 : 0); // 2-3 minions
+    const n = 2 + (TC.GameRng.stream('ai').chance(0.5) ? 1 : 0); // 2-3 minions
     for (let k = 0; k < n; k++)
       TC.Enemies.spawnServantOf(e, "sporeling", bx, by);
   }
@@ -294,7 +295,7 @@
       if (e.jitterTimer <= 0) {
         // sudden erratic course change
         e.jitterTimer = rand(1, 2);
-        const ja = Math.random() * Math.PI * 2;
+        const ja = TC.GameRng.stream('ai').float() * Math.PI * 2;
         e.vx += Math.cos(ja) * rand(50, 110);
         e.vy += Math.sin(ja) * rand(50, 110);
       }
@@ -685,7 +686,7 @@
         e.summonTimer -= dt;
         if (e.summonTimer <= 0) {
           e.summonTimer = rand(4.5, 5.5);
-          const n = 1 + (Math.random() < 0.5 ? 1 : 0);
+          const n = 1 + (TC.GameRng.stream('ai').chance(0.5) ? 1 : 0);
           for (let k = 0; k < n && e.servants < 3; k++)
             spawnServantOf(e, "demon_eye", ecx, ecy);
         }
@@ -936,7 +937,7 @@
     for (let k = 0; k < n; k++) {
       const t = n === 1 ? 0 : (k / (n - 1) - 0.5);
       const ang = base + t * spread;
-      const pr = TC.Projectiles.spawn('magic_bolt', sx, sy, ang, { owner: null, speed: 300 + Math.random() * 22, dmg: dmg, kb: 2.5, life: 2.8, hitRadius: 9, color: '#ff7a3a' });
+      const pr = TC.Projectiles.spawn('magic_bolt', sx, sy, ang, { owner: null, speed: 300 + TC.GameRng.stream('ai').float() * 22, dmg: dmg, kb: 2.5, life: 2.8, hitRadius: 9, color: '#ff7a3a' });
       if (TC.Enemies && typeof TC.Enemies.trackHostileShot === 'function') TC.Enemies.trackHostileShot(pr, e, dmg);
     }
     puffAt(sx, sy, ['#ff7a3a', '#ffb86a']);
@@ -1081,8 +1082,8 @@
     if (e.wofTimer <= 0 && p && !p.dead) {
       let choice;
       if (e.wofPhase === 1) choice = 'bolt';
-      else if (e.wofPhase === 2) choice = Math.random() < 0.55 ? 'fan' : 'bolt';
-      else choice = Math.random() < 0.6 ? 'spread' : 'fan';
+      else if (e.wofPhase === 2) choice = TC.GameRng.stream('ai').chance(0.55) ? 'fan' : 'bolt';
+      else choice = TC.GameRng.stream('ai').chance(0.6) ? 'spread' : 'fan';
       e.wofAttack = choice;
       e.wofTele = e.wofPhase === 1 ? 0.42 : e.wofPhase === 2 ? 0.36 : 0.30;
       puffAt(ecx + e.wofDir * 12, ecy - e.h * 0.22, ['#ff5a48', '#ffe0a0']);

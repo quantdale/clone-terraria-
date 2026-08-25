@@ -135,7 +135,10 @@
     const base = Number(o.base);
     if (!isFinite(base) || base <= 0) return fail('invalid-base');
 
-    const rng = (typeof o.rng === 'function') ? o.rng : Math.random;
+    // W23: bare calls default to the seeded 'combat' stream so authoritative
+    // crit/variance rolls replay deterministically; injected spec.rng wins.
+    const rng = (typeof o.rng === 'function') ? o.rng
+      : (TC.GameRng ? TC.GameRng.stream('combat').float : Math.random);
     const clsId = DAMAGE_CLASSES[o.cls] ? o.cls : 'generic';
     const clsDef = DAMAGE_CLASSES[clsId];
     const attacker = o.attacker || null;

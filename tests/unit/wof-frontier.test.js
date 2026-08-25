@@ -257,7 +257,7 @@ test('wof master/servant cleanup on master death', () => {
   }
   assert.ok(wof.servants >= 2, 'servants ' + wof.servants);
   // kill via canonical path
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     while (wof.hp > 0) TC.Combat.hitEnemy(wof, 1, { base: 500, cls: 'melee', attacker: TC.player, kb: 3 });
   });
   assert.ok(!TC.Enemies.list.some((e) => e.type === 'wof'), 'wall dead');
@@ -348,7 +348,7 @@ test('player attacks against wof route through Combat.resolveHit', () => {
   const wof = TC.Enemies.list.find((e) => e.type === 'wof');
   assert.ok(wof);
   const hpBefore = wof.hp;
-  const res = deterministicRolls(() => TC.Combat.hitEnemy(wof, 1, { base: 40, cls: 'melee', attacker: TC.player, kb: 3 }));
+  const res = deterministicRolls(TC, () => TC.Combat.hitEnemy(wof, 1, { base: 40, cls: 'melee', attacker: TC.player, kb: 3 }));
   assert.ok(res && res.ok, 'hitEnemy resolved');
   assert.notStrictEqual(wof.hp, hpBefore, 'hp changed via canonical path');
 });
@@ -403,7 +403,7 @@ test('wof death emits exactly once: one EntityKilled, one BossDefeated, one loot
   TC.Events.on('WorldProgressChanged', onProgress);
   // ensure infernal_core not already in world
   const preDrops = TC.Items.drops.length;
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     TC.Combat.hitEnemy(wof, 1, { base: 9999, cls: 'melee', attacker: TC.player, kb: 3 });
   });
   TC.Events.off('EntityKilled', onKilled);
@@ -444,7 +444,7 @@ test('post-wof recipes locked before defeat, available after', () => {
   const def = heldSummon(TC, 'flesh_sigil');
   TC.player.doSummon(def, 'flesh_sigil');
   const wof = TC.Enemies.list.find((e) => e.type === 'wof');
-  deterministicRolls(() => TC.Combat.hitEnemy(wof, 1, { base: 9999, cls: 'melee', attacker: TC.player, kb: 3 }));
+  deterministicRolls(TC, () => TC.Combat.hitEnemy(wof, 1, { base: 9999, cls: 'melee', attacker: TC.player, kb: 3 }));
   assert.ok(TC.Progression.has('boss.wall_of_flesh.defeated'));
   const after = TC.Crafting.available(inv, stations).some((r) => r.out === 'hellforged_blade');
   assert.ok(after, 'available after');
@@ -465,7 +465,7 @@ test('post-wof merchant stock and guide dialog unlock', () => {
   const def = heldSummon(TC, 'flesh_sigil');
   TC.player.doSummon(def, 'flesh_sigil');
   const wof = TC.Enemies.list.find((e) => e.type === 'wof');
-  deterministicRolls(() => TC.Combat.hitEnemy(wof, 1, { base: 9999, cls: 'melee', attacker: TC.player, kb: 3 }));
+  deterministicRolls(TC, () => TC.Combat.hitEnemy(wof, 1, { base: 9999, cls: 'melee', attacker: TC.player, kb: 3 }));
   const afterStock = TC.NPCs.shopOf('merchant');
   assert.ok(afterStock && afterStock.some((e) => e.itemId === 'infernal_core'), 'merchant unlock after');
   assert.ok(afterStock && afterStock.some((e) => e.itemId === 'infernal_hook'), 'hook stock after');
@@ -489,7 +489,7 @@ test('post-wof underworld spawn table includes ember_wraith', () => {
   const def = heldSummon(TC, 'flesh_sigil');
   TC.player.doSummon(def, 'flesh_sigil');
   const wof = TC.Enemies.list.find((e) => e.type === 'wof');
-  deterministicRolls(() => TC.Combat.hitEnemy(wof, 1, { base: 9999, cls: 'melee', attacker: TC.player, kb: 3 }));
+  deterministicRolls(TC, () => TC.Combat.hitEnemy(wof, 1, { base: 9999, cls: 'melee', attacker: TC.player, kb: 3 }));
   const after = TC.EnemySpawn.zoneTable('underworld', col).map((e) => e[0]);
   assert.ok(after.includes('ember_wraith'), 'ember_wraith after');
 });
@@ -504,7 +504,7 @@ test('wof defeat flag survives save/load and unlocks remain', () => {
   const def = heldSummon(TC, 'flesh_sigil');
   TC.player.doSummon(def, 'flesh_sigil');
   const wof = TC.Enemies.list.find((e) => e.type === 'wof');
-  deterministicRolls(() => TC.Combat.hitEnemy(wof, 1, { base: 9999, cls: 'melee', attacker: TC.player, kb: 3 }));
+  deterministicRolls(TC, () => TC.Combat.hitEnemy(wof, 1, { base: 9999, cls: 'melee', attacker: TC.player, kb: 3 }));
   assert.ok(TC.Progression.has('boss.wall_of_flesh.defeated'));
   // save and reload in fresh boot
   const saved = TC.Save.save();

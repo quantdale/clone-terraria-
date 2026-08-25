@@ -245,7 +245,7 @@ test('hurtPlayer: lava inflicts the Burning status declared by BUFF_DEFS.fromSou
   assert.strictEqual(st.id, 'burning');
   assert.strictEqual(st.dur, 4);
   TC.Buffs.clear();
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     const res = TC.Combat.hurtPlayer(10, 0, 0, 'lava');
     assert.ok(res && !res.rejected);
   });
@@ -253,7 +253,7 @@ test('hurtPlayer: lava inflicts the Burning status declared by BUFF_DEFS.fromSou
   assert.strictEqual(TC.Buffs.list[0].time, 4);
   TC.Buffs.clear();
   // ordinary defended intake does not inflict statuses
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     const res2 = TC.Combat.hurtPlayer(10, 0, 0, 'test_slime');
     assert.ok(!TC.Buffs.has('burning'));
     assert.ok(res2.finalDamage >= 1);
@@ -267,7 +267,7 @@ test('hurtPlayer: fall and void bypass defense through the resolver policy', () 
   const TC = g.TC;
   const p = resetPlayer(TC);
   p.accessories = [{ id: 'guard_ring', prefix: null }, null, null, null, null];
-  deterministicRolls(() => {
+  deterministicRolls(TC, () => {
     for (const src of TC.Combat.ENVIRONMENTAL_SOURCES) {
       p.iframes = 0;
       const res = TC.Combat.hurtPlayer(30, 0, 0, src);
