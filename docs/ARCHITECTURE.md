@@ -1044,3 +1044,78 @@ with exactly-once inventory accounting, newcomer resync after reload,
 coherent shutdown. Benchmarks: tools/bench-multiplayer.js (idle-2p,
 move-2p, mine-burst, resync-churn, 1-vs-2 client comparison; VM-realm tax
 applies as documented in W21 — relative deltas are the signal).
+
+## 27. Campaign contracts (W23 — Multiplayer Productionization)
+
+## 27. Campaign contracts (W23 — Multiplayer Productionization)
+
+Deterministic gameplay RNG (`js/gamerng.js` — `TC.GameRng`). Five named mulberry32
+streams (ai/spawn/loot/combat/misc) derived per-name from one seed; reset on
+WorldLoaded from `TC.worldSeed`; `state()/restore()/digest()` expose exact stream
+state for replay proofs; `override()/clearOverrides()` is the test seam that replaced
+host-Math.random pinning. Every gameplay-affecting runtime draw routes here:
+enemy AI decisions, spawn placement/zoning/Blood-Moon rolls, drop tables + coins +
+blood shards, crit/variance, drop scatter physics, NPC wander, falling stars.
+Presentation-only randomness (particles/blink/trails) and worldgen stay outside.
+Replay proof: two independent realms with the same seed+command/input trace
+converge on world+players+inventory+enemy-AI digests AND the RNG digest
+(tests/net/rng-replay.test.js) — the W22 enemy-AI exclusion is closed.
+
+Multi-player targeting (`js/targeting.js` — `TC.Targets`; of/nearest/all/count/anchor).
+Eligible = registered live players with finite positions (empty-registry single-player
+falls back to the legacy singleton exactly as W22 shipped). Nearest-by-d2 with
+deterministic tie-break by stable id and per-entity stickiness (a challenger must be
+>=20% closer to steal aggro). Consumed by every enemyai archetype + wof helpers,
+enemies.update despawn (persist while ANY player is near), spawnBoss/spawnEnemy
+anchors, render eye-tracking, enemyspawn director (per-attempt seeded anchor across
+the roster). Deliberate primary/local uses: camera follow, input sampling, HUD,
+client self-mirror identification. Attack attribution: resolveHit treats ANY
+registered attacker as player-owned and scales through ITS stats;
+meleeStrike/shootArrow take byPlayer; magic bolts carry owner -> impact attribution;
+mana bookkeeping ticks per registered player; shockwave hits every player in radius.
+
+Networked transaction parity (protocol v2 — `TC.NetProto.VERSION = 2`, v1 envelopes
+get a clean explicit rejection). Whitelist adds CraftRecipe / ShopBuy / ShopSell /
+ContainerMove with strict bounded per-command ctx schemas (unknown or nested-object
+fields reject at the protocol layer). cmdres carries an optional authoritative result
+bundle {action, inv, chest}; worldupd gains the same bounded chest section plus rm
+tombstones plus inSeq for prediction reconciliation. Server authority:
+- CraftRecipe resolves the recipe from the client STABLE registry id only; stations
+  re-scan around the acting player; progression gates apply canonically;
+- ShopBuy/ShopSell are proximity-gated against live NPC kinds before the transaction;
+- InteractTile on a chest binds a per-connection container session; sessions expire
+  on tile loss / out-of-reach / disconnect; ContainerMove requires the server-bound
+  session and supports authoritative auto-placement (omitted toSlot merges then
+  fills empties under exactly one InventoryChanged emission). UI craft/shop/chest
+  paths route through one txSubmit seam: local transactions standalone, proposals
+  while joined; the result bundle refreshes mirrors immediately.
+
+Replication productionization (NET-004 no longer a prototype): stable ids everywhere
+(drops gain per-session identity 'd<did>'; enemies e<eid>; players registry ids);
+per-connection baselined entity deltas (only changed fields cross the wire in fixed
+key order — deterministic encoding), explicit rm tombstones on death/pickup/despawn/
+interest-exit/disconnect, periodic keyframes (keyframeEveryTicks) healing lost
+baselines, presentation cadence decoupled from the 60 Hz sim
+(replicateEveryTicks, default 2 => 30 Hz), idle suppression (no empty worldupd),
+dirty-region delivery prioritized nearest-player-first within the budget, and a
+per-tick outbound byte budget per connection (maxOutBytesPerTick) with baselines
+committed only after admission. Measured idle-2p outbound dropped 86.0 -> ~29 KiB/s
+(-66% vs W22; target was >=35%). Host knobs are server options exposed via
+tools/mp-server.js flags (--interest/--budget/--rate/--keyframe/--detach-grace/--max-out-kb).
+
+Latency masking (presentation-only): TC.NetTransport.impairedPair models deterministic
+latency/jitter/drop/dup/reorder/stall over virtual time with a seeded PRNG (ordered
+delivery unless reorderChance is set — matching reliable-transport semantics). Joined
+clients interpolate remote players/enemies DELAY ticks behind newest snapshots
+(hold-on-spawn, never extrapolate, snap above teleportDistPx, teleports counted) and
+predict SELF locomotion through the canonical Player.update with bounded
+reconciliation against worldupd.inSeq-bearing truth (soft blend, hard snap beyond
+predictHardSnapPx, history flush). Prediction never touches mining, loot, damage,
+inventory, crafting or world mutation.
+
+Tests: tests/core/gamerng.test.js; tests/net/{targeting,parity,rng-replay,replication2,latency,fourplayer,soak}.test.js; browser journeys M (slice) + N (productionization:
+networked craft round trip, non-primary targeting via /debug target attribution,
+interpolation buffers, resync, coherent shutdown). Benchmarks: extended
+tools/bench-multiplayer.js scenes (idle-4p, move-4p, separated-explore-4p,
+combat-multi-2p, tx-burst-craft-shop) + tools/soak-multiplayer.js (seeded 20k-tick
+soak/fuzz with durable JSON evidence).

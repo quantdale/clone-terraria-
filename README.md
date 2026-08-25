@@ -26,19 +26,28 @@ npm run validate    # syntax + tests + build + build-verify + browser suite
 npm run test:net      # multiplayer protocol/session/replication suites
 ```
 
-## Multiplayer (W22 vertical slice)
+## Multiplayer (W23 productionized)
 
-Authoritative server; clients propose intents only. Two ways to play locally:
+Authoritative server; clients propose intents only. 2–4 players per session.
+Two ways to play locally:
 
-1. **Dedicated headless host** - `node tools/mp-server.js [--seed 1337] [--port 7777]`,
-   then open the game in each browser and pick **Join Local Server**
-   (`ws://localhost:7777`).
+1. **Dedicated headless host** - `node tools/mp-server.js [--seed 1337] [--port 7777]`
+   with tuning flags `--interest 56 --budget 4 --rate 2 --keyframe 600
+   --detach-grace 300 --max-out-kb 128`, then open the game in each browser and
+   pick **Join Local Server** (`ws://localhost:7777`).
 2. **Browser host** - pick **Host Local Multiplayer** on one machine's title screen;
    other browsers join it the same way.
 
 The host's world is the save; joined clients never write saves. Movement, mining,
-placement, combat, loot and inventory are simulated only by the authority and
-replicated through per-client region streams (see docs/ARCHITECTURE.md, section 26).
+placement, combat, loot, inventory, crafting, shop trading and chest transfers are
+simulated only by the authority and replicated through baselined per-client region
+and entity streams (protocol v2 — see docs/ARCHITECTURE.md §26/§27).
+Latency masking is client-presentation-only: remote entities render through
+interpolated snapshot buffers and the local pawn predicts locomotion through the
+canonical movement code, reconciled against server truth (small errors blend,
+large divergences snap). Determinism: gameplay randomness runs on seeded named
+streams (`TC.GameRng`), so same-seed sessions replay identically including enemy
+AI and loot.
 
 
 ## Controls

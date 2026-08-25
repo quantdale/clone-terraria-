@@ -1,8 +1,13 @@
 # W23 — Multiplayer Productionization: Gameplay Parity, Latency, Determinism & Scalable Replication
 
-**Status:** ACTIVE  
+**Status:** COMPLETED  
 **Planned-From:** `1fa43f4bdbbd5d38f98fb143d51927f416df7b80`  
-**Planned-At:** `2026-08-26T01:38:00+08:00`  
+**Completed-At:** 2026-08-26 (see git log; base after reconciliation `d87523f`)  
+**Evidence:** docs/HANDOFF-W23-multiplayer-productionization.md — all acceptance
+criteria proven: protocol v2 craft/shop/container parity, TC.Targets policy,
+TC.GameRng replay determinism (enemy AI included), interpolation/prediction,
+NET-004 productionized (-66% idle-2p outbound), 4-player + soak + journey N
+evidence, full `npm run validate` green on final head.
 **Target-Branch:** `main`  
 **Campaign-Type:** major implementation + integration + hardening  
 **Execution entrypoint:** repository-native `goal` continuation (`/goal continue`, `continue`, or equivalent supported by the active harness)

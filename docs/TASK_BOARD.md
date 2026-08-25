@@ -47,24 +47,24 @@ localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
 | World regions / RGB lighting / benchmarks (W21) | PERF-004, VIS-002, LGT-001, LGT-002(re), PERF-002 | DONE (`TC.WorldRegions` canonical multi-consumer invalidation authority; renderer+lighting+minimap are independent consumers; RGB lighting production-integrated with colored emissive + dynamic sources and quality profiles via `TC.Lighting.setQuality`/TC.Settings; minimap region-driven with catch-up; `tools/bench-scenarios.js` ten-scene harness with before/after evidence — see ARCHITECTURE.md §25 and docs/HANDOFF-W21-world-regions-rgb-lighting.md). PERF-003 measured-but-deferred (evidence in handoff); save-diff optimization measured-and-deferred (~2ms/op once per autosave). |
 | Rendering/lighting/audio depth | VIS/LGT/ART/AUD epics | LGT-002 done (dynamic lights); rest TODO/P2 |
 | Performance | PERF-001 | DONE (TC.Debug instrumentation + F3 overlay); PERF-002 partially covered by `tools/bench-runtime.js` fixed-step benchmark; PERF-003..005 TODO |
-| Multiplayer | NET-001..004 | TODO (P2; W18 delivered the NET-001 precondition: headless simulation via TC.Runtime — full runner/networking still TODO) |
+| Multiplayer | NET-001..004 | DONE through W22 foundation + W23 productionization (see rows below; NET-004 productionization closed by W23) |
 | Extensibility/mods | MOD-001..004 | TODO |
 
-### Newly discovered follow-ups (updated W21)
+### Newly discovered follow-ups (updated W23)
 
-- **W22 multiplayer follow-ups:** client-side prediction/interpolation for
-  remote entities (authority stays server-owned); enemy AI targeting beyond
-  the primary pawn; delta compression of region payloads (the baselined hex
-  encoding is deliberately simple first); seeded runtime RNG for full
-  lockstep enemy determinism (AI currently uses Math.random by long-standing
-  policy - replay digests therefore cover world/inventory/player state);
-  crafting/shop commands over the network whitelist; interest-radius tuning
-  and priority queues; detached-identity grace made configurable per host.
+- **W23 status:** multiplayer productionization LANDED — deterministic
+  GameRng authority (enemy AI now inside replay digests), `TC.Targets`
+  multi-player targeting policy, protocol v2 with networked craft/shop/
+  container transactions, baselined entity replication with tombstones +
+  keyframes (-66% idle-2p outbound vs W22), interpolation/prediction latency
+  masking, four-player + soak/fuzz coverage, journey N. Remaining future
+  work: real secondary-language catalogs, LIQ-006 pumps, MOD epic,
+  PERF-003/005, compression of region payloads beyond RLE-free hex deltas
+  (measured acceptable at W23 volumes), >4 player scaling.
 - **W21 perf follow-ups:** browser-measured (real raster) benchmark variant;
   settings-menu exposure for the lighting quality profile (needs localized
-  labels); chunk-canvas reuse across worlds; NET-004 prototype on top of
-  WorldRegions revisions. Journey wall-clock calibration remains sensitive to
-  host load (see the W21 handoff environment caveat).
+  labels); chunk-canvas reuse across worlds. Journey wall-clock calibration
+  remains sensitive to host load (see the W21 handoff environment caveat).
 
 - **Localization follow-ups (LOC epic closed, translation work open):**
   authoring real secondary-language catalogs (`js/locales/<id>.js` — the
@@ -1021,17 +1021,22 @@ correct authority first.
 **Priority:** P2  
 **Depends on:** NET-003, chunk model  
 **Effort:** Very High  
-**Status:** PROTOTYPE DONE (W22); productionization open
+**Status:** DONE (W22 prototype; W23 productionization)
 
-First prototype on the W21 substrate: every connection owns a private
-WorldRegions consumer ('net:<cid>') so renderer/lighting/minimap
-independence is preserved; interest = regions intersecting ~56 tiles
-around each player; join/rejoin streams bounded full-region snapshots;
-steady state streams last-sent-baselined cell deltas under a
-4-regions/tick/connection budget; acks act as accounting plus desync
-detector (a future revision claim forces a fresh snapshot). Deferred:
-payload compression, priority queues, radius tuning, entity delta
-encoding. Proof: tests/net/replication.test.js + F3 stats lines.
+W22 shipped the first prototype on the W21 substrate: private WorldRegions
+consumers, interest = regions intersecting ~56 tiles around each player,
+bounded full-region snapshots, last-ack-baselined cell deltas under a
+per-tick budget, acks as accounting plus desync detector.
+
+W23 productionized it: stable drop identity ('d<did>'), per-connection
+baselined ENTITY deltas (changed fields only), explicit rm tombstones,
+periodic keyframe recovery, presentation cadence decoupled from the 60 Hz
+simulation (30 Hz default), idle suppression (no empty worldupd),
+nearest-player-first dirty-region priority, per-tick outbound byte budget,
+and host-configurable knobs (--interest/--budget/--rate/--keyframe/--detach-
+grace/--max-out-kb). Measured idle-2p outbound fell 86.0 -> ~29 KiB/s.
+Proof: tests/net/replication2.test.js, tools/bench-multiplayer.js,
+tools/soak-multiplayer.js.
 
 ## MOD-001 — Resource-pack manifest/loader
 
