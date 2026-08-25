@@ -177,7 +177,7 @@
     const cx = e.x + e.w / 2 + f * e.w * 0.45,
       cy = e.y + e.h * 0.38;
     let base = f > 0 ? 0 : Math.PI;
-    const pl = TC.player;
+    const pl = TC.Targets.of(e);
     if (pl && !pl.dead)
       base = Math.atan2(pl.y + pl.h / 2 - cy, pl.x + pl.w / 2 - cx);
     const n = 5 + Math.floor(TC.GameRng.stream('ai').float() * 3); // arc burst of 5-7 spores
@@ -208,7 +208,7 @@
 
   // ---- archetype: slime ----
   ai["slime"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -229,7 +229,7 @@
 
   // ---- archetype: zombie ----
   ai["zombie"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -253,7 +253,7 @@
 
   // ---- archetype: eye ----
   ai["eye"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -285,7 +285,7 @@
 
   // ---- archetype: bat ----
   ai["bat"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -326,7 +326,7 @@
 
   // ---- archetype: walker ----
   ai["walker"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -389,7 +389,7 @@
 
   // ---- archetype: harpy ----
   ai["harpy"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -449,7 +449,7 @@
 
   // ---- archetype: stationary ----
   ai["stationary"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -499,7 +499,7 @@
 
   // ---- archetype: teleporter ----
   ai["teleporter"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -559,7 +559,7 @@
 
   // ---- archetype: king_slime ----
   ai["king_slime"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -603,7 +603,7 @@
 
   // ---- archetype: eye_boss ----
   ai["eye_boss"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -701,7 +701,7 @@
 
   // ---- archetype: skeletron ----
   ai["skeletron"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -791,7 +791,7 @@
 
   // ---- archetype: skele_hand ----
   ai["skele_hand"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -850,7 +850,7 @@
 
   // ---- archetype: hungry (W17 dedicated servant) ----
   ai["hungry"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const m = e.master;
     if (!m || m.hp <= 0 || (TC.Enemies && TC.Enemies.list.indexOf(m) < 0)) return false;
     const mcx = m.x + m.w / 2, mcy = m.y + m.h / 2;
@@ -915,7 +915,7 @@
   // ---- WOF projectile helpers (canonical hostile ownership) ----
   function fireWofBolt(e) {
     if (!(TC.Projectiles && typeof TC.Projectiles.spawn === 'function')) return;
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     if (!p || p.dead) return;
     const sx = e.wofDir === 1 ? e.x + e.w - 6 : e.x + 6;
     const sy = e.y + e.h * 0.32;
@@ -927,7 +927,7 @@
   }
   function fireWofFan(e, n) {
     if (!(TC.Projectiles && typeof TC.Projectiles.spawn === 'function')) return;
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     if (!p || p.dead) return;
     const sx = e.wofDir === 1 ? e.x + e.w - 6 : e.x + 6;
     const sy = e.y + e.h * 0.32;
@@ -945,7 +945,7 @@
 
   // ---- archetype: wof (W17 production wall) ----
   ai["wof"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const w = TC.world;
     const TS = TC.CONST.TS;
     const ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
@@ -1113,7 +1113,7 @@
 
   // ---- archetype: storm_jelly ----
   ai["storm_jelly"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;
@@ -1224,7 +1224,7 @@
 
   // ---- archetype: moss_mother ----
   ai["moss_mother"] = function (e, ctx, dt) {
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     const ecx = e.x + e.w / 2,
       ecy = e.y + e.h / 2;
     const pcx = p ? p.x + p.w / 2 : ecx;

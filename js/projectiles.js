@@ -158,7 +158,10 @@
     return {
       base: p.dmg * (mult == null ? 1 : mult),
       cls: p.def.cls || 'generic',
-      attacker: (p.owner && p.owner === TC.player) ? p.owner : null,
+      // W23: owner counts as player-owned when it is ANY registered player
+      attacker: (p.owner && (
+        (TC.Players && typeof TC.Players.idOf === 'function' && TC.Players.idOf(p.owner)) ||
+        p.owner === TC.player)) ? p.owner : null,
       critBonus: p.critBonus || 0,
       kb: p.kb,
     };

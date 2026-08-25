@@ -145,9 +145,14 @@
     const target = o.target || null;
 
     // Class-aware scaling ONLY for attacks owned by the local player.
-    const isPlayerAttack = !!(attacker && TC.player && attacker === TC.player);
+    // W23: "player-owned" means the attacker is ANY registered player
+    // (primary or remote mirror) so every player's attacks scale through
+    // their own TC.Stats snapshot — not just the legacy singleton's.
+    const isPlayerAttack = !!(attacker && (
+      (TC.Players && typeof TC.Players.idOf === 'function' && TC.Players.idOf(attacker)) ||
+      attacker === TC.player));
     let stats = null;
-    if (isPlayerAttack) stats = o.stats || safeStats(TC.player);
+    if (isPlayerAttack) stats = o.stats || safeStats(attacker);
 
     let mul = (typeof o.mult === 'number' && o.mult > 0) ? o.mult : 1;
     if (isPlayerAttack && clsDef.statField && stats) {
@@ -261,8 +266,9 @@
     }
   }
 
-  function playerStats() {
-    return (TC.player) ? safeStats(TC.player) : null;
+  function playerStats(byPlayer) {
+    const p = byPlayer || TC.player;
+    return p ? safeStats(p) : null;
   }
 
   // ---- public API ----
@@ -270,12 +276,15 @@
   // Hit each enemy whose center lies within r of (cx,cy) and whose angle from
   // the center falls in the sweep [a0..a1] (wraps through PI). An enemy is hit
   // at most once per swingId. Returns the number of enemies hit.
-  Combat.meleeStrike = function (cx, cy, r, a0, a1, dmg, kb, swingId) {
+  // W23: byPlayer attributes the swing to a specific registered player
+  // (remote players scale through their own stats); default stays primary.
+  Combat.meleeStrike = function (cx, cy, r, a0, a1, dmg, kb, swingId, byPlayer) {
     if (!TC.Enemies || !TC.Enemies.list ||
         typeof TC.Enemies.damageEnemy !== 'function') return 0;
     const span = normTau(a1 - a0);
     const fullCircle = span >= TAU - 1e-6;
-    const stats = playerStats();
+    const stats = playerStats(byPlayer);
+    const attacker = byPlayer || TC.player;
     let hits = 0;
     const list = TC.Enemies.list;
     for (let i = 0; i < list.length; i++) {
@@ -292,7 +301,7 @@
       }
       if (swingId != null) e.lastHitSwing = swingId;
       Combat.hitEnemy(e, dx >= 0 ? 1 : -1, {
-        base: dmg, cls: 'melee', attacker: TC.player, stats: stats, kb: kb,
+        base: dmg, cls: 'melee', attacker: attacker, stats: stats, kb: kb,
       });
       hits++;
     }
@@ -302,9 +311,10 @@
 
   // Class scaling now happens at RESOLUTION time (arrow type carries
   // cls:'ranged'), so the projectile launches with its raw damage.
-  Combat.shootArrow = function (x, y, angle, speed, dmg) {
+  Combat.shootArrow = function (x, y, angle, speed, dmg, byPlayer) {
     if (TC.Projectiles && typeof TC.Projectiles.spawn === 'function') {
-      TC.Projectiles.spawn('arrow', x, y, angle, { speed: speed, dmg: dmg });
+      TC.Projectiles.spawn('arrow', x, y, angle,
+        { speed: speed, dmg: dmg, owner: byPlayer || TC.player || null });
     } else {
       legacyArrows.push({
         x: x, y: y,
@@ -461,10 +471,10 @@
     return out;
   };
 
-  // Radial ground-slam around (x,y): damages the player with linear falloff
-  // to half damage at r, kicks them away, and throws a dust ring. Used by the
-  // granite golem's slam attack and Moss Mother's root slam. Returns true
-  // when the player was hit.
+  // Radial ground-slam around (x,y): damages EVERY eligible player within r
+  // with linear falloff to half damage at r, kicks them away, and throws a
+  // dust ring. Used by the granite golem's slam attack and Moss Mother's root
+  // slam. Returns true when at least one player was hit.
   Combat.shockwave = function (x, y, r, dmg, kb) {
     if (TC.Particles && TC.Particles.burst) {
       TC.Particles.burst(x, y, 18, {
@@ -472,17 +482,23 @@
         speed: 150, life: 0.5, size: 3, gravity: 500
       });
     }
-    const p = TC.player;
-    if (!p || p.dead || typeof p.damage !== 'function') return false;
-    const pcx = p.x + p.w / 2, pcy = p.y + p.h / 2;
-    const dx = pcx - x, dy = pcy - y;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    if (d > r) return false;
-    const falloff = 1 - d / r;                       // 1 at center, 0 at rim
-    const dir = dx >= 0 ? 1 : -1;
-    const res = Combat.hurtPlayer(Math.max(1, Math.round(dmg * (0.5 + 0.5 * falloff))),
-                                  dir * (kb || 240), -220, 'shockwave');
-    return !!(res && !res.rejected);
+    const victims = (TC.Targets && TC.Targets.all) ? TC.Targets.all()
+      : (TC.player ? [TC.player] : []);
+    let hitAny = false;
+    for (let vi = 0; vi < victims.length; vi++) {
+      const p = victims[vi];
+      if (!p || p.dead || typeof p.damage !== 'function') continue;
+      const pcx = p.x + p.w / 2, pcy = p.y + p.h / 2;
+      const dx = pcx - x, dy = pcy - y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d > r) continue;
+      const falloff = 1 - d / r;                     // 1 at center, 0 at rim
+      const dir = dx >= 0 ? 1 : -1;
+      const res = Combat.hurtPlayer(Math.max(1, Math.round(dmg * (0.5 + 0.5 * falloff))),
+                                    dir * (kb || 240), -220, 'shockwave', { target: p });
+      if (!!(res && !res.rejected)) hitAny = true;
+    }
+    return hitAny;
   };
 
   // Wipe every projectile: the pooled pool first (arrows, bolts, grenades,

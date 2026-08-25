@@ -205,9 +205,10 @@
   }
 
   // Player depth below the local surface, in tiles (depth-gated cave picks).
-  function playerDepthT() {
-    const w = TC.world,
-      p = TC.player;
+  // W23: measured for an explicit anchor player so multi-player directors do
+  // not silently read the primary singleton.
+  function playerDepthT(p) {
+    const w = TC.world;
     if (!w || !p || !w.surfaceY) return 0;
     const col = clamp(Math.floor((p.x + p.w / 2) / TC.CONST.TS), 0, w.width - 1);
     return (p.y + p.h / 2) / TC.CONST.TS - (w.surfaceY[col] || 0);
@@ -224,7 +225,7 @@
     return true;
   }
 
-  function zoneTable(zone, pcol) {
+  function zoneTable(zone, pcol, p) {
     const C = TC.CONST;
     const bio =
       TC.Biomes && typeof TC.Biomes.getSpawnOverride === "function"
@@ -238,7 +239,9 @@
     ).filter(entryConditionOk);
     if (zone === "night" && bloodMoon) return BLOOD_MOON_TABLE;
     const b = surfaceBiome(pcol);
-    const depth = playerDepthT();
+    // depth gates measure an explicit anchor; the 2-arg legacy call form
+    // falls back to the targeting policy anchor / primary singleton.
+    const depth = playerDepthT(p || (TC.Targets && TC.Targets.anchor ? TC.Targets.anchor() : TC.player));
     const extra = (EXTRA_SPAWN[zone] || []).filter((entry) => {
       if (!entryConditionOk(entry)) return false;
       const def = TC.ENEMY_DEFS[entry[0]];
@@ -292,12 +295,18 @@
   function spawnDirector(dt) {
     spawnTimer -= dt;
     if (spawnTimer > 0) return;
-    const p = TC.player,
-      w = TC.world;
-    if (!p || p.dead || !w) {
+    const w = TC.world;
+    // W23: each attempt anchors on ONE eligible player chosen deterministically
+    // from the seeded 'spawn' stream, so spawns surround every player instead
+    // of always the primary pawn. Single-player is the degenerate one-entry case.
+    const roster = (TC.Targets && TC.Targets.all) ? TC.Targets.all()
+      : (TC.player && !TC.player.dead ? [TC.player] : []);
+    if (!roster.length || !w) {
       spawnTimer = 0.5;
       return;
     }
+    const R = TC.GameRng.stream('spawn');
+    const p = roster[R.int(0, roster.length - 1)];
 
     const C = TC.CONST,
       ts = C.TS;
@@ -321,7 +330,7 @@
 
     const list = TC.Enemies ? TC.Enemies.list : null;
     if (!list || list.length >= C.MAX_ENEMIES) return;
-    const table = zoneTable(zone, pcol);
+    const table = zoneTable(zone, pcol, p);
     if (!table || !table.length) return;
 
     const type = weightedPick(table);

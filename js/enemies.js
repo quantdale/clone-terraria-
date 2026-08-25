@@ -525,7 +525,9 @@
     for (let i = 0; i < list.length; i++)
       if (list[i].def && list[i].def.boss) bosses++;
     if (bosses >= (TC.CONST.MAX_BOSSES || 1)) return null;
-    const p = TC.player;
+    // W23: default anchor is the targeting policy's anchor (primary while
+    // eligible, else any eligible player) — not blindly the singleton.
+    const p = TC.Targets ? TC.Targets.anchor() : TC.player;
     if (typeof x !== "number" || !isFinite(x))
       x = p ? p.x + p.w / 2 - def.w / 2 : 0;
     if (typeof y !== "number" || !isFinite(y))
@@ -619,7 +621,10 @@
   // ---- per-frame update ----
   function update(dt) {
     clock += dt;
-    const p = TC.player;
+    // W23: despawn/contact evaluate the full eligible roster, not just the
+    // primary pawn (Targets.all falls back to the singleton when absent).
+    const players = (TC.Targets && TC.Targets.all) ? TC.Targets.all()
+      : (TC.player ? [TC.player] : []);
 
     // Blood Moon dusk/dawn lifecycle lives in TC.EnemySpawn (W13 split).
     if (TC.EnemySpawn && typeof TC.EnemySpawn.tickEvent === "function") {
@@ -632,12 +637,18 @@
     for (let i = list.length - 1; i >= 0; i--) {
       const e = list[i];
 
-      // despawn far from the player (bosses and boss parts persist)
-      if (p && !e.def.boss && !e.def.part) {
-        const dx = (e.x + e.w / 2 - (p.x + p.w / 2)) / TC.CONST.TS;
-        const dy = (e.y + e.h / 2 - (p.y + p.h / 2)) / TC.CONST.TS;
+      // despawn only when far from EVERY eligible player (bosses and boss
+      // parts persist). With no players alive nothing distance-despawns.
+      if (!e.def.boss && !e.def.part && players.length > 0) {
         const max = TC.CONST.ENEMY_DESPAWN_DIST;
-        if (dx * dx + dy * dy > max * max) {
+        let nearAny = false;
+        for (let pi = 0; pi < players.length; pi++) {
+          const p = players[pi];
+          const dx = (e.x + e.w / 2 - (p.x + p.w / 2)) / TC.CONST.TS;
+          const dy = (e.y + e.h / 2 - (p.y + p.h / 2)) / TC.CONST.TS;
+          if (dx * dx + dy * dy <= max * max) { nearAny = true; break; }
+        }
+        if (!nearAny) {
           if (e.master && e.master.servants > 0) e.master.servants--;
           list.splice(i, 1);
           continue;
@@ -665,7 +676,7 @@
           touchContact(e, players[pi]);
         }
       } else {
-        touchContact(e, p);
+        touchContact(e, players[0] || null);
       }
     }
   }
@@ -804,7 +815,7 @@
     // iris + pupil track the player
     let tx = e.facing || 1,
       ty = 0;
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     if (p) {
       const dx = p.x + p.w / 2 - cx,
         dy = p.y + p.h / 2 - cy;
@@ -959,7 +970,7 @@
     // iris + pupil track the player
     let tx = e.facing || 1,
       ty = 0;
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     if (p) {
       const dx = p.x + p.w / 2 - cx,
         dy = p.y + p.h / 2 - cy;
@@ -1523,7 +1534,7 @@
       er = w * 0.3;
     let tx = e.dir || 1,
       ty = 0;
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     if (p) {
       const dx = p.x + p.w / 2 - ecx,
         dy = p.y + p.h / 2 - ecy;
@@ -1715,7 +1726,7 @@
     // single pale eye tracks the player
     let tx = e.facing || 1,
       ty = 0;
-    const p = TC.player;
+    const p = TC.Targets.of(e);
     if (p) {
       const dx = p.x + p.w / 2 - cx,
         dy = p.y + p.h / 2 - cy;
@@ -1991,7 +2002,7 @@
   function spawnEnemy(type, x, y) {
     const def = TC.ENEMY_DEFS ? TC.ENEMY_DEFS[type] : null;
     if (!def || def.boss) return null;
-    const p = TC.player;
+    const p = TC.Targets ? TC.Targets.anchor() : TC.player;
     if (typeof x !== "number" || !isFinite(x))
       x = p ? p.x + p.w / 2 - def.w / 2 : 0;
     if (typeof y !== "number" || !isFinite(y))

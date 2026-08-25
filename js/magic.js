@@ -262,7 +262,7 @@
   // Damage launches RAW: the canonical resolver applies the magicDamage
   // class multiplier at impact time (TC.Combat.resolveHit via the pooled
   // hit path), exactly like melee/ranged — one scaling authority (W12).
-  function fire(def, x, y, ang) {
+  function fire(def, x, y, ang, byPlayer) {
     if (TC.Projectiles && typeof TC.Projectiles.spawn === 'function') {
       const colors = def.colors || ['#ffffff'];
       const p = TC.Projectiles.spawn('magic_bolt', x, y, ang, {
@@ -277,7 +277,8 @@
         maxSpeed: def.maxSpeed || 0,
         life: def.life || 1.2,
         hitRadius: (def.size || 4) + 3,   // old circle-vs-rect test radius
-        colors: colors
+        colors: colors,
+        owner: byPlayer || TC.player || null
       });
       if (p) watchBolt(p, colors);
       if (TC.Lighting && typeof TC.Lighting.addDynamic === 'function') {
@@ -285,13 +286,13 @@
       }
       return p;
     }
-    return fireFallbackBolt(def, x, y, ang);
+    return fireFallbackBolt(def, x, y, ang, byPlayer);
   }
 
   // ---- fallback local sim (ONLY while TC.Projectiles is absent) ----
   const bolts = [];             // legacy fallback projectiles
 
-  function fireFallbackBolt(def, x, y, ang) {
+  function fireFallbackBolt(def, x, y, ang, byPlayer) {
     bolts.push({
       x: x, y: y,
       vx: Math.cos(ang) * (def.speed || 400),
@@ -308,6 +309,7 @@
       colors: def.colors || ['#ffffff'],
       type: def.type || 'bolt',
       trailT: 0,
+      owner: byPlayer || TC.player || null,
       hits: new Set()                   // enemies already struck (pierce bookkeeping)
     });
     return bolts[bolts.length - 1];
@@ -371,7 +373,7 @@
           b.hits.add(e);
           if (TC.Combat && typeof TC.Combat.hitEnemy === 'function') {
             TC.Combat.hitEnemy(e, b.vx >= 0 ? 1 : -1, {
-              base: b.dmg, cls: 'magic', attacker: TC.player,
+              base: b.dmg, cls: 'magic', attacker: b.owner || null,
               critBonus: b.crit || 0, kb: b.kb,
             });
           } else {
@@ -486,7 +488,7 @@
     }
     p.magicCd = def.useTime || 0.3;
     p.manaRegenDelay = REGEN_DELAY;
-    fire(def, cx + Math.cos(ang) * 10, cy + Math.sin(ang) * 10, ang);
+    fire(def, cx + Math.cos(ang) * 10, cy + Math.sin(ang) * 10, ang, p);
     pBurst(cx + Math.cos(ang) * 12, cy + Math.sin(ang) * 12, 3, def.colors || ['#ffffff'], 70, 0);
     p.aimAng = ang;
     p.swingSeq = (p.swingSeq || 0) + 1;
@@ -535,18 +537,25 @@
   // after TC.Combat.update). Also ticks the fallback bolts and stars.
   // ====================================================================
   function update(dt) {
-    const p = TC.player;
-    if (!p) return;
-    ensureMana(p);
+    // W23: per-player mana bookkeeping ticks for EVERY registered player;
+    // local-input ownership (handleUse) stays primary-only by design.
+    const players = (TC.Targets && TC.Targets.all) ? TC.Targets.all()
+      : (TC.player ? [TC.player] : []);
     if (noManaMsgT > 0) noManaMsgT -= dt;
-    if (p.potionSickness > 0) p.potionSickness = Math.max(0, p.potionSickness - dt);
-    if (p.magicCd > 0) p.magicCd -= dt;
+    for (let i = 0; i < players.length; i++) {
+      const q = players[i];
+      ensureMana(q);
+      if (q.potionSickness > 0) q.potionSickness = Math.max(0, q.potionSickness - dt);
+      if (q.magicCd > 0) q.magicCd -= dt;
+    }
+    const p = TC.player;
+    if (!p) { sweepWatched(); updateLocalBolts(dt); updateStars(dt); return; }
     if (TC.state !== 'playing' || p.dead) {
       sweepWatched(); updateLocalBolts(dt); updateStars(dt);
       return;
     }
     handleUse(dt, p);
-    updateRegen(dt, p);
+    for (let i = 0; i < players.length; i++) updateRegen(dt, players[i]);
     sweepWatched(); updateLocalBolts(dt); updateStars(dt);
   }
 

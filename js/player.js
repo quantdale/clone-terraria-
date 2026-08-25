@@ -1368,7 +1368,7 @@
       const dmg = (def.damage || 0) + ((ad && ad.damage) || 0);
       if (TC.Combat && typeof TC.Combat.shootArrow === "function") {
         try {
-          TC.Combat.shootArrow(cx, cy, ang, BOW_SPEED, dmg);
+          TC.Combat.shootArrow(cx, cy, ang, BOW_SPEED, dmg, this);
         } catch (e) {}
       }
       this.swing = {
@@ -1573,6 +1573,7 @@
             s.item.damage || 1,
             s.item.knockback || 3,
             s.id,
+            this,
           );
         } catch (e) {}
       }
