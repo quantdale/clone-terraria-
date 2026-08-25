@@ -1,465 +1,415 @@
-# W23 — Multiplayer Productionization: Gameplay Parity, Latency, Determinism & Scalable Replication
+# W24 — Liquid & Wiring Completion: Pumps, Multiplayer Liquid Replication, Mechanism Authority & Stress Hardening
 
-**Status:** COMPLETED  
-**Planned-From:** `1fa43f4bdbbd5d38f98fb143d51927f416df7b80`  
-**Completed-At:** 2026-08-26 (see git log; base after reconciliation `d87523f`)  
-**Evidence:** docs/HANDOFF-W23-multiplayer-productionization.md — all acceptance
-criteria proven: protocol v2 craft/shop/container parity, TC.Targets policy,
-TC.GameRng replay determinism (enemy AI included), interpolation/prediction,
-NET-004 productionized (-66% idle-2p outbound), 4-player + soak + journey N
-evidence, full `npm run validate` green on final head.
+**Status:** ACTIVE  
+**Planned-From:** `b6a14120a5ce3cb0e79775c2780a8913756de3ce`  
+**Planned-At:** 2026-08-26  
 **Target-Branch:** `main`  
-**Campaign-Type:** major implementation + integration + hardening  
+**Campaign-Type:** major implementation + integration + multiplayer parity + hardening  
 **Execution entrypoint:** repository-native `goal` continuation (`/goal continue`, `continue`, or equivalent supported by the active harness)
 
 ## Mission
 
-Productionize the W22 authoritative multiplayer slice into a robust, latency-tolerant, systemically fair **2–4 player** gameplay path without weakening the server-authority contract or regressing single-player behavior.
+Finish the liquids epic by delivering **LIQ-006 pumps and wiring integration as a production gameplay system**, and close the authority/replication gaps that would otherwise make pumps or ordinary liquid mutations incorrect in multiplayer.
 
-This is not a networking rewrite. Build directly on `TC.NetProto`, `TC.NetTransport`, `TC.NetServer`, `TC.NetClient`, `TC.Players`, `TC.WorldRegions`, `TC.Runtime`, `TC.Systems`, and `TC.Commands`. Close the user-visible gameplay gaps that remain after W22, then make replication and client presentation production-worthy under realistic latency/jitter and multi-client load.
+The end state is one canonical liquid authority (`TC.Liquids`) shared by single-player and the authoritative multiplayer host, with deterministic wire-driven inlet/outlet pumps, volume/type conservation, save compatibility, bounded processing, interest-managed liquid replication, and wiring mechanisms that correctly account for every registered player instead of only the primary `TC.player` singleton where gameplay semantics require all players.
 
-Do not stop after one coherent subset while material requirements below remain. The campaign is complete only when the full acceptance gate passes or a genuine external blocker is documented.
+Do not ship a host-only pump feature. A remote client must see the same liquid state after bucket use, natural settling, reactions, and pump transfer, and mechanism behavior must remain server-authoritative. Do not start the MOD epic, secondary-language catalog work, renderer migration, or unrelated content expansion in this campaign.
+
+The campaign is complete only when the full acceptance gate passes, documentation/state is truth-synced, and the final planning prompt is marked COMPLETED with durable evidence.
 
 ## Planner reconciliation / evidence
 
-The planner inspected current `main`, recent W18–W22 history/diffs, repository instructions/state files, `docs/TASK_BOARD.md`, `docs/ARCHITECTURE.md`, the W22 handoff, parity backlog, current network/runtime/command/AI source seams, test commands, PR state, and live GitHub Actions.
+The planner inspected current `main`, the completed W23 execution prompt and handoff, repository planner/goal protocol, task board, GitHub PR/CI state, package validation scripts, the authoritative liquid/wiring modules, multiplayer protocol/server/client region paths, and existing liquid/wiring/browser/network tests.
 
 Current truth at planning time:
 
-- `main` / `origin/main` head observed at `1fa43f4bdbbd5d38f98fb143d51927f416df7b80` (`feat(w22): authoritative multiplayer foundation & two-client vertical slice`).
-- GitHub Actions run `32865521488` for that head completed **successfully**.
-- No open PRs were observed for the repository.
-- W22 delivered the correct authority boundary, hostile protocol validation, two-client join/move/mine/place/combat/inventory/rejoin proof, private WorldRegions consumers, and a real WebSocket browser journey. Do **not** recreate those foundations.
-- `TC.Commands` already exposes canonical `CraftRecipe`, `ShopBuy`, and `ShopSell`, but protocol v1's network whitelist currently includes only MineTile/MineWall/PlaceTile/PlaceWall/UseItem/MoveItem/EquipItem/InteractTile. The server's `_execCommand` likewise has no network-safe mapping for crafting/shop operations. Treat this as a real multiplayer gameplay-parity gap, not a reason to bypass transactions.
-- Network MoveItem currently resolves both inventory endpoints to the acting player's inventory. Audit chest/container transfer flows and close any remote-player transaction gap through server-resolved authority rather than client-provided object references.
-- `enemyai.js` still uses `TC.player` throughout archetypes and explicitly treats `Math.random` as gameplay randomness. In multiplayer this means target selection remains primary-player-centric and full replay determinism excludes enemy AI. Audit every authoritative `TC.player` assumption and every gameplay-affecting `Math.random` use across the runtime, not just the first matches.
-- `TC.NetClient` applies authoritative local/remote player and enemy poses by direct assignment (`x/y/vx/vy` hard snaps). Loopback/LAN hides this; it is not sufficient under meaningful RTT/jitter.
-- `TC.NetServer.replicate()` sends a `worldupd` every tick containing full player/enemy/drop snapshot arrays even when little changed. Region cells are baselined deltas, but entity replication is not. W22 measured ~86 KiB/s outbound for two steady-state clients at 60 Hz.
-- NET-004 is explicitly only a prototype. Open W22 follow-ups include prediction/interpolation, multi-target AI, seeded runtime RNG, crafting/shop networking, payload compression, priority queues, interest tuning, and configurable detach grace.
-- The repository's canonical validation command remains `npm run validate` (syntax + i18n + all headless suites + release build/verify + Playwright browser suite).
+- `main` / `origin/main` is `b6a14120a5ce3cb0e79775c2780a8913756de3ce` (`docs(w23): truth-sync architecture/task-board/AGENTS/README + W23 handoff`).
+- GitHub Actions run `32900241438` for that W23 head completed **successfully**. W23 reports `npm run validate` green with 552 headless tests and 28/28 browser journeys A–N.
+- No open pull requests were observed.
+- W23 is terminal/COMPLETED. Do not reopen or recreate its multiplayer transaction, targeting, RNG, prediction/interpolation, or baselined entity-replication work.
+- `docs/TASK_BOARD.md` explicitly leaves **LIQ-006 — Pumps and wiring integration** TODO. LIQ-001..005 are already DONE. Other remaining families (real secondary-language catalogs, MOD-001..004, PERF-003/005, >4-player scale, optional region compression) are future campaigns unless required to satisfy a W24 invariant.
+- `TC.Liquids` is already the sole runtime liquid authority. It stores type+amount layers, uses an active-set/budgeted settle simulation, handles water/lava contact, buckets, immersion, rendering, sparse SaveCore persistence, and marks `TC.WorldRegions` with reason `liquid` on mutations. Its public `set()` is explicitly documented as a seam for future spigots/migration tooling.
+- `TC.Wiring` already has a bounded BFS pulse network (`PULSE_CAP`), switches/levers/plates/timers/dart traps/actuators, event-driven tile maintenance, persistence, and no core monkey patches. Its receiver set does **not** include pumps.
+- Important multiplayer wiring gap discovered during planning: authoritative wiring code still has gameplay paths that enumerate/check only `TC.player` (notably pressure-plate entity collection and door close safety; audit trap-player contact and every other mechanism path too). W23 deliberately fixed multiplayer targeting elsewhere, but mechanism semantics still need a complete registered-player audit.
+- Important multiplayer liquid gap discovered during planning: `TC.WorldRegions` sees liquid invalidations, but `TC.NetServer._regionLayers()` currently snapshots only **tiles + walls**; protocol full/delta region lines encode only those layers, and `TC.NetClient._applyRegionLine()` applies only tiles + walls. Therefore host liquid mutations can be authoritative yet remain visually/state-wise stale on joined clients. W24 must close this before LIQ-006 can be considered production-ready.
+- Protocol version is currently **v2**. Because adding authoritative liquid type/amount layers changes the region wire representation materially, W24 should make this an explicit protocol revision (v3) with clean old-version rejection rather than silently changing v2 semantics.
+- The canonical validation command remains `npm run validate` (`check` + `check:i18n` + all headless suites + release build/verify + Playwright).
 
-Treat historical parity/audit docs as clues where they conflict with live code. Live implementation/tests/current handoffs win.
+Treat historical parity docs as clues if they disagree with live code. Current implementation, current tests, W23 handoff, and this prompt win.
 
 ## Non-negotiable preserved behavior
 
-1. **Server authority remains absolute.** Clients send input/intents, never authoritative position, damage, inventory, loot, world mutation, prices, recipe validity, station proximity, NPC stock, or progression results.
-2. **Single-player remains the degenerate zero-network path.** Do not make ordinary local play require a session/server, and do not add networking overhead when no multiplayer session is active.
-3. Preserve current world/save compatibility unless a migration is strictly required and proven. Joined clients still cannot save a mirror; the host remains save owner.
-4. Preserve stable registry identity/fingerprint semantics and W20 localization identity rules. Any new user-visible text gets catalog keys and must pass `check:i18n`.
-5. Preserve canonical `TC.Runtime -> TC.Systems -> TC.Commands` ordering and transaction ownership. No parallel mutation path may be added for multiplayer convenience.
-6. Preserve `TC.WorldRegions` multi-consumer independence. Networking must never steal renderer/lighting/minimap invalidations.
-7. Preserve W17–W22 gameplay behavior and browser assertions unless a behavior change is intentional, documented, and covered by stronger acceptance evidence.
-8. Do not hide regressions with blanket retries, arbitrary sleeps, broad timeout inflation, disabled assertions, swallowed failures, or test-only gameplay shortcuts.
-9. Do not force-push, rewrite shared history, or discard unrelated user work.
-10. Do not assume a particular model, agent harness, or sub-agent system. If parallel execution is available, use disjoint ownership with one integration owner; otherwise execute sequentially.
+1. **One liquid authority only.** `TC.Liquids` remains the sole runtime authority for liquid type/volume. Do not reintroduce legacy WATER/LAVA tile simulation or create a second pump-specific liquid store.
+2. **Server authority remains absolute in multiplayer.** Joined clients submit intents only. The host owns wiring pulses, pump transfer, liquid settling/reactions, bucket outcomes, world mutation, damage, and save state.
+3. **Single-player stays the zero-network path.** Do not require a server/session for local play or add network work when no multiplayer session is active.
+4. Preserve canonical `TC.Runtime -> TC.Systems -> TC.Commands` ordering. Do not add a second update loop or bypass canonical interaction/command paths for network convenience.
+5. Preserve `TC.WorldRegions` multi-consumer independence. Renderer, lighting, minimap, networking, and any new liquid replication consumer cannot steal invalidations from each other.
+6. Preserve W21–W23 bounded-work principles: no whole-world scan per tick, per pump pulse, or per replication tick; no unbounded queues; no all-region resend on every liquid change.
+7. Preserve save compatibility. Existing worlds/saves must load. New content IDs must be additive and stable; never reorder/renumber existing registered IDs.
+8. Preserve W20 localization rules. Every new user-visible pump name/description/feedback string needs catalog keys and must pass `check:i18n`.
+9. Preserve deterministic gameplay. Pump endpoint ordering and liquid transfer outcomes must not depend on `Set` accident, object enumeration accident, wall-clock time, or `Math.random`. Gameplay randomness, if any is genuinely required, uses `TC.GameRng`; ideally pumps require none.
+10. Joined client liquid state is a **mirror/presentation state**, not a second simulation authority. Do not let client-side settle/pump/reaction logic race server replication.
+11. Preserve W23 protocol safety: strict bounded schemas, hostile-input rejection, monotonic sequencing, explicit resync, bounded payloads/backpressure, and clean version rejection.
+12. Do not hide failures with blanket retries, arbitrary sleeps, timeout inflation, weakened assertions, swallowed errors, or test-only gameplay shortcuts.
+13. No force-push, shared-history rewrite, or unrelated destructive cleanup.
+14. If parallel agents are available, assign disjoint file/workstream ownership and one integration owner. Otherwise execute sequentially. Never allow agents to overwrite each other's repository state.
 
-## Scope / out of scope
+## Scope
 
 ### In scope
 
-- authoritative multiplayer transaction parity for normal shared-world gameplay;
-- multi-player-aware enemy/boss targeting and other primary-player assumptions that materially affect gameplay;
-- deterministic gameplay RNG for authoritative runtime decisions needed to bring enemy/session replay under deterministic test coverage;
-- local movement prediction/reconciliation and remote entity interpolation suitable for realistic RTT/jitter;
-- productionization of NET-004: compact/baselined entity replication, region prioritization, interest tuning, bounded backpressure/work budgets, explicit removals/tombstones, and measurable bandwidth reduction;
-- 2–4 player session behavior, reconnect/resync, host options needed by the above;
-- adversarial, latency/jitter, deterministic replay, soak/fuzz, real-WebSocket browser, and benchmark coverage;
-- docs/task-board/architecture/AGENTS/README truth-sync and durable W23 handoff.
+- LIQ-006 inlet/outlet pump gameplay and wiring integration;
+- pump item/tile definitions, recipes, registry/localization/icons/rendering consistent with current procedural-content architecture;
+- deterministic bounded liquid transfer across one powered wiring component;
+- volume/type conservation, mixed-liquid safety, blocked/full-output behavior, and liquid reaction compatibility;
+- multiplayer replication of authoritative liquid type+amount for initial sync, incremental updates, interest changes, reconnect/resync, settling, bucket operations, reactions, and pumps;
+- protocol v3 region-layer schema/codecs and v2 rejection tests;
+- multiplayer-authoritative wiring audit/fixes for pressure plates, doors, trap/player contact, and other mechanism paths that incorrectly assume only `TC.player`;
+- save/load/backward-compatibility proof for new pump content and liquid/wiring state;
+- deterministic replay/conservation tests, network adversarial tests, browser E2E, stress/benchmark evidence;
+- truth-sync of `TASK_BOARD.md`, `ARCHITECTURE.md`, `AGENTS.md`, README where user-facing behavior changed, and a durable W24 handoff.
 
-### Out of scope unless required to satisfy an in-scope invariant
+### Out of scope unless required by a W24 invariant
 
-- public matchmaking, NAT traversal, accounts/authentication, relay infrastructure, cloud hosting;
-- MMO-scale player counts;
-- client-authoritative shortcuts or anti-cheat beyond the existing authoritative design;
-- unrelated content expansion, graphics/audio overhaul, modding/resource packs;
-- wholesale framework/bundler migration;
-- arbitrary third-party networking dependencies or a binary-protocol rewrite without benchmark evidence that the existing transport boundary cannot meet the campaign targets.
+- MOD-001..004/resource packs/data packs/sandboxed mod API;
+- additional real-language catalogs or RTL/font work;
+- Canvas2D→WebGL/Pixi migration or unrelated visual overhaul;
+- new bosses/biomes/weapons/NPC content unrelated to pump prerequisites;
+- public matchmaking, NAT traversal, auth, relays/cloud hosting;
+- >4-player scale work;
+- binary transport rewrite or general region compression project beyond what is needed to keep W24 liquid replication bounded;
+- NPC visual replication, chest drag parity, mana replication, or other W23 known limitations unrelated to liquids/mechanisms.
 
 ## Workstream 0 — Reconcile actual state before editing
 
 Before implementation:
 
-1. Fetch/prune/reconcile `main` with `origin/main`; inspect status, current HEAD, open PRs/issues relevant to W22/W23, and any commits that landed after `Planned-From`.
-2. Read applicable `AGENTS.md`, `.agent/PLANNER_HANDOFF.md`, this file, W22 handoff, `ARCHITECTURE.md` §26, current TASK_BOARD, package scripts, and native state/OpenSpec files if present.
-3. If work after `Planned-From` overlaps this campaign, classify each requirement as already satisfied, partially satisfied, stale, or still open. Do not redo landed work.
-4. Run the clean baseline gate before edits. At minimum run `npm run validate`; if environment prevents a stage, capture the exact blocker and still run every available narrower gate.
-5. Build a fresh W23 ledger (repo-native task/OpenSpec/state format if one exists; otherwise track it in the W23 handoff as work proceeds) containing:
-   - confirmed W22 follow-ups;
-   - stale/superseded follow-ups;
-   - newly discovered defects from whole-codebase audit;
-   - external blockers;
-   - evidence for every checked/completed item.
-6. Perform a **whole-codebase impact audit**, not merely a W22-file review. In particular search all authoritative gameplay modules for direct `TC.player` assumptions, gameplay-affecting nondeterminism, transaction bypasses, save/session leakage, and presentation code that could accidentally mutate authority.
+1. Fetch/prune/reconcile `main` with `origin/main`; inspect working-tree status, current HEAD, open PRs/issues relevant to W24, and any commits after `Planned-From`.
+2. Read applicable `AGENTS.md`, `.agent/PLANNER_HANDOFF.md`, this prompt, `.agents/skills/goal/SKILL.md`, W23 handoff, `docs/TASK_BOARD.md`, relevant architecture sections, package scripts, and any native state/OpenSpec files present.
+3. If post-plan work overlaps W24, classify every requirement as satisfied / partial / stale / open. Do not redo landed work.
+4. Run the clean baseline gate before edits: `npm run validate`. If an environment stage is genuinely unavailable, record the exact blocker and run every narrower available gate.
+5. Build a W24 ledger in the durable handoff/state mechanism with discovered defects, decisions, tests, benchmark numbers, and evidence as work proceeds.
+6. Perform a whole-path audit of `TC.Liquids`, `TC.Wiring`, world mutation, region invalidation, protocol/server/client replication, SaveCore providers, item/tile registration, commands/interactions, and joined-client scheduler gates. Do not assume the planner's named gaps are exhaustive.
 
-## Workstream 1 — Close authoritative gameplay-transaction parity gaps
+## Workstream 1 — Define and implement the pump gameplay contract
 
-Make networked gameplay use the same canonical transactions that single-player uses.
+Deliver two explicit mechanism endpoints: **inlet pump** and **outlet pump**.
 
-### 1.1 Command capability audit
+### 1.1 Content and placement
 
-Create a table of `TC.Commands.names()` versus:
-
-- local UI/player call sites;
-- network whitelist/schema support;
-- server-side safe context reconstruction;
-- required client feedback/refresh behavior;
-- headless + browser coverage.
-
-Do not assume the planner's named gaps are exhaustive.
-
-### 1.2 Crafting
-
-Add a safe network form of `CraftRecipe`.
+Add additive tile/item/recipe content following existing registry and wiring conventions.
 
 Requirements:
 
-- Client sends only bounded stable intent data (for example a stable recipe identifier plus no client-trusted station/progression truth).
-- Server resolves the recipe from canonical data, acting player's inventory, live nearby stations/environment, and progression conditions.
-- Duplicate/replayed/stale command sequences craft at most once.
-- Invalid recipe ids, missing ingredients, missing stations, progression locks, full inventory, malformed fields, and spoof attempts mutate nothing.
-- Successful craft produces immediate truthful inventory/UI feedback; do not wait for an arbitrary periodic refresh if that creates stale UX.
+- Stable item IDs and tile identities for inlet/outlet pumps; append only—never renumber old IDs.
+- Use existing materials/stations for recipes; do not introduce unrelated resource trees.
+- Pump cells may coexist with the independent liquid layer if the current tile semantics allow it; do not encode liquid inside pump tile IDs.
+- Placement/mining/support/drop behavior follows existing mechanism conventions and canonical transactions.
+- Procedural icon/render treatment must fit the current original-assets policy; do not import Terraria/Re-Logic assets.
+- All displayable names/tooltips/feedback use localization keys.
 
-### 1.3 Shops
+### 1.2 Powered-component semantics
 
-Add safe network forms for `ShopBuy` and `ShopSell`.
+When a wiring pulse traverses one connected component, collect pump endpoints reached by that **same bounded pulse** and process them once as a deterministic batch after receiver discovery. Doors/traps/actuators keep existing once-per-pulse semantics.
 
-Requirements:
+Use an explicit deterministic ordering (for example ascending world cell index) for endpoints. Do not make transfer results depend on map/set insertion order.
 
-- Server owns NPC/shop identity validation, stock, prices, progression gates, player proximity/interaction eligibility, currency, slot/count validation, and inventory capacity.
-- Client never declares a trusted price or stock row.
-- Exactly-once currency/item conservation holds under duplicate/reorder/reconnect cases.
-- Selling currency or invalid items continues to fail closed as local transactions require.
+A coherent v1 pump contract for this project:
 
-### 1.4 Containers / inventory routes
+- an inlet reads liquid from the liquid layer at its own tile coordinate;
+- an outlet writes liquid to the liquid layer at its own tile coordinate;
+- only endpoints reached by the same wire pulse may exchange volume;
+- an inlet cannot create volume; an outlet cannot destroy volume except where the existing liquid reaction rules intentionally consume liquids to form a tile;
+- transfer is bounded per pulse and by source volume/output capacity;
+- empty outputs accept a type; partially filled outputs accept only the same type;
+- incompatible liquid types never silently convert or overwrite each other;
+- mixed-type inlet networks are processed deterministically and cannot duplicate, erase, or transmute volume through ordering tricks;
+- blocked/solid/invalid endpoints fail closed and leave untransferred volume at the source;
+- repeated receivers/endpoints reached through loops fire/process once per pulse;
+- pump changes go through `TC.Liquids` mutation APIs so wakeups, `LiquidChanged`, `WorldRegions`, reactions/settling, rendering, and persistence remain coherent.
 
-Audit chest/container gameplay. Current network `MoveItem` forces both endpoints to the acting player's inventory; if remote chest transfer is therefore incomplete, implement a bounded server-authorized container reference/session mechanism rather than allowing arbitrary inventory selection.
+If implementation constraints justify a different source/sink cell convention, document the rationale before code lands and preserve all conservation/authority/replication acceptance criteria.
 
-Acceptance must prove:
+### 1.3 Boundedness
 
-- a remote client can open an eligible container through canonical interaction;
-- transfer player↔container and relevant quick-transfer paths conserve items exactly;
-- one client cannot mutate another player's inventory or a container it is not authorized/reachable to use;
-- disconnect/close invalidates stale container authority cleanly.
+Pump processing must be bounded by the existing wire traversal cap plus an explicit endpoint/transfer budget. A pathological wire grid or pump farm cannot cause an unbounded world scan or quadratic all-pairs transfer.
 
-### 1.5 Protocol safety
+Add counters/diagnostics sufficient to observe at least endpoints discovered, units moved, rejected/blocked endpoints, and cap hits in tests/benchmarks.
 
-If the wire schema changes materially, version it explicitly. Either:
+## Workstream 2 — Make liquid replication a first-class region layer
 
-- evolve v1 compatibly with strict new payload validation; or
-- bump protocol version and provide explicit clean version rejection.
+W24 must close the current tiles/walls-only network region gap.
 
-Never silently accept unknown payload fields or arbitrary nested client objects.
+### 2.1 Protocol v3
 
-## Workstream 2 — Make authoritative gameplay genuinely multi-player-aware
+Treat liquid replication as a material protocol change:
 
-W22 made contact damage/projectiles/pickups multi-player-aware but enemy behavior still commonly targets the primary pawn.
+- bump `TC.NetProto.VERSION` from 2 to 3;
+- retain explicit, clean rejection of v1/v2/unknown versions;
+- extend full-region representation to carry authoritative liquid **type + amount** layers;
+- extend delta representation so a changed cell can update tile, wall, liquid type, and liquid amount without ambiguous omission semantics;
+- validate all new arrays/hex fields/cell rows strictly with bounded lengths/ranges and reject malformed/oversize/unknown structures before mutation;
+- keep deterministic encoding: identical region state yields identical bytes.
 
-### 2.1 Canonical target selection
+Do not trust client-supplied liquid state. No C→S message may directly declare authoritative type/amount.
 
-Introduce or formalize one deterministic target-selection service/policy used by enemy AI instead of direct `TC.player` access where targeting is intended.
+### 2.2 Server baselines and interest management
 
-At minimum support:
-
-- eligible live players only;
-- distance/visibility/encounter constraints appropriate to existing behavior;
-- deterministic tie-breaking by stable player identity;
-- target stickiness/hysteresis so enemies do not thrash every tick;
-- boss-specific override policies where needed;
-- graceful no-target behavior;
-- single-player behavior equivalent to the current primary-player path.
-
-Do not mechanically replace every `TC.player`; classify uses. UI/camera/local-input ownership may correctly remain primary/local. Authoritative enemy/spawn/encounter decisions must not accidentally do so.
-
-### 2.2 Audit broader primary-player assumptions
-
-Inspect at least enemy AI, enemy spawning/zone placement, boss lifecycle/despawn, hostile projectile aim, NPC/world events, loot/pickup eligibility, interaction reach, and any runtime systems that use `TC.player` in gameplay decisions.
-
-Fix only semantics that should be multi-player-aware, but document deliberate primary-player-only uses.
-
-### 2.3 Multiplayer death/rejoin/encounter edge cases
-
-Prove sensible behavior when:
-
-- current target dies;
-- host dies while a remote player lives;
-- remote target disconnects and later rejoins;
-- players occupy different regions/biomes;
-- a boss/encounter is active during target loss.
-
-No boss or enemy should despawn merely because the legacy primary pawn died if another eligible player should sustain the encounter.
-
-## Workstream 3 — Deterministic authoritative gameplay RNG
-
-Bring gameplay-affecting runtime randomness under a deterministic service without forcing cosmetic randomness into lockstep.
-
-### 3.1 Audit/classify randomness
-
-Search the whole repository for `Math.random`, timestamp-derived randomness, and equivalent entropy sources. Classify every occurrence as:
-
-- authoritative gameplay outcome;
-- world generation (already deterministic contract; preserve its existing model unless required);
-- cosmetic/presentation-only;
-- identifier/session entropy that does not affect replayed gameplay state.
-
-### 3.2 Runtime RNG authority
-
-Implement a small explicit deterministic RNG authority for gameplay runtime decisions. Prefer named subsystem streams or another design that avoids unrelated cosmetic/order changes perturbing combat/AI outcomes.
+Extend `TC.NetServer` region snapshots/baselines to include liquid state.
 
 Requirements:
 
-- seed derives deterministically from authoritative session/world state;
-- gameplay AI/spawn/loot/other runtime decisions that affect replicated truth use it;
-- renderer/particles/audio may remain nondeterministic if they cannot mutate gameplay state;
-- resetting/loading/starting a world/session resets RNG state intentionally;
-- no joined client simulation depends on locally generating authoritative random outcomes.
+- initial join, interest entry, explicit resync, and reconnect receive complete liquid truth for streamed regions;
+- incremental liquid mutations use baselined/delta region replication rather than unconditional full-layer resend;
+- `TC.WorldRegions` reason `liquid` participates through the existing per-connection consumer without stealing other consumers' invalidations;
+- baseline/ack bookkeeping includes liquid layers so a client cannot ACK tile/wall revision while retaining stale liquid for the same region;
+- natural settling, bucket collect/place, water/lava reaction, pump transfer, and any authoritative `TC.Liquids.set/placeAt/collectAt` path converge remotely;
+- interest exit/re-entry and keyframe/resync paths restore truth even after dropped/stale updates;
+- outbound byte budgets/backpressure remain enforced.
 
-### 3.3 Determinism proof
+Prefer a bounded read-only region snapshot seam on `TC.Liquids` (or equivalent) over exposing mutable raw arrays across modules.
 
-Extend replay/state digests so two independent authoritative realms with the same seed + command/input trace converge including enemy AI/spawn outcomes covered by the new RNG authority.
+### 2.3 Client mirror application
 
-Run enough ticks and events to prove this is not a trivial static digest.
-
-## Workstream 4 — Latency masking without weakening authority
-
-### 4.1 Remote interpolation
-
-Stop rendering remote players/enemies as raw hard snaps.
-
-Implement a bounded authoritative snapshot buffer keyed by server tick/time and interpolate presentation transforms between snapshots. Define explicit behavior for:
-
-- spawn/first sight;
-- normal motion;
-- packet jitter/late snapshots;
-- teleport/large correction thresholds;
-- death/removal;
-- resync/reconnect/world change.
-
-Interpolation is presentation only. It must not feed authoritative collision, combat, inventory, or world mutation.
-
-### 4.2 Local movement prediction + reconciliation
-
-Add conservative prediction for the local joining player's locomotion so normal movement feels responsive under non-zero RTT.
+Extend `TC.NetClient._applyRegionLine()` (or its refactored equivalent) to apply liquid type/amount atomically with the corresponding region revision.
 
 Requirements:
 
-- server remains authoritative;
-- retain an input history keyed to client sequence/server tick;
-- authoritative snapshots acknowledge/correct predicted state;
-- small errors reconcile smoothly; large/divergent errors snap or converge under an explicit bounded policy;
-- prediction must not predict authoritative mining results, loot, damage, inventory, crafting, or world mutation;
-- collision/world edits that invalidate prediction reconcile safely;
-- resync/reconnect flushes stale prediction history.
+- full and delta region forms both apply liquid truth;
+- mirror writes do not send gameplay events back to the server or create an echo loop;
+- joined clients do not independently run authoritative liquid settling/pump/reaction mutation over the mirror;
+- local rendering/minimap/lighting invalidation still notices applied liquid changes where appropriate;
+- stale-generation / stale-sequence safeguards remain intact.
 
-Reuse canonical movement/collision semantics where practical; do not create a permanently divergent second physics engine.
+If the clean implementation needs a dedicated `TC.Liquids.applyMirrorRegion/applyMirrorCell` API, keep it presentation-only and explicitly separate from authoritative gameplay mutation APIs.
 
-### 4.3 Network-condition harness
+## Workstream 3 — Finish multiplayer authority for wiring mechanisms
 
-Extend deterministic test transport tooling to model latency, jitter, duplication, reorder, temporary stall, and disconnect/reconnect while preserving controllable/manual pumping.
+Audit every gameplay-affecting `TC.player` use in `js/wiring.js` and related mechanism paths. Classify legitimate local/presentation ownership separately from authoritative world semantics.
 
-Use it to prove correction and interpolation behavior rather than relying on arbitrary sleeps.
+At minimum fix and prove:
 
-## Workstream 5 — Productionize replication / NET-004
+1. **Pressure plates:** every eligible registered live player can press/release a plate; a remote authoritative player is not invisible to the mechanism. Existing NPC/enemy behavior remains intact.
+2. **Door close safety:** a wire pulse must not close a door into **any** live registered player's hitbox, not only the primary player.
+3. **Trap damage:** pooled/fallback trap projectiles that can damage players must test the correct authoritative player set and apply damage exactly once to the actual victim; one player cannot redirect damage to the host/primary pawn.
+4. **Actuators/collision:** multi-player collision semantics remain consistent when a host tile toggles ghost state.
+5. **Timers/switches/levers:** networked interaction remains server-authoritative and exactly-once under duplicate/replayed command handling.
 
-### 5.1 Entity delta protocol
+Use `TC.Players.entries()` or a small mechanism-appropriate player enumeration helper. Do **not** abuse `TC.Targets` for non-targeting semantics merely to avoid `TC.player`; `TC.Targets` remains the AI/target policy authority.
 
-Replace unconditional full entity arrays per tick with per-connection baselined replication for stable player/enemy/drop identities.
+Single-player behavior must remain equivalent when only the primary player is registered.
+
+## Workstream 4 — Persistence, identity, migration and localization
+
+### 4.1 Content identity
+
+New pump content makes an additive registry change. Therefore do **not** blindly assert the old W20 fingerprint remains the entire registry fingerprint.
 
 Requirements:
 
-- stable ids for every replicated entity class; add a stable drop identity if current drops cannot support deltas/removal safely;
-- send only changed fields under a bounded schema;
-- explicit spawn and removal/tombstone semantics;
-- periodic/keyframe recovery or explicit resync path so lost/stale baselines cannot become permanent corruption;
-- no ghost entities after leaving interest, death, pickup, disconnect, or resync;
-- deterministic encoding for identical state/baseline.
+- preserve every pre-W24 stable ID/mapping exactly;
+- append new pump IDs deterministically;
+- update the registry identity fixture/check intentionally so it proves old entries are unchanged and only the expected new entries were added;
+- record old fingerprint `bdad6cfa` / 368 stable ids and the new fingerprint/count in the W24 handoff;
+- fail the gate on accidental renumbering/deletion/rename of existing identities.
 
-### 5.2 Replication cadence
+### 4.2 Save compatibility
 
-Decouple presentation replication cadence from the authoritative 60 Hz simulation where beneficial. Preserve authoritative tick stamps so interpolation/reconciliation has correct timing.
+- Pre-W24 v2/legacy-compatible saves must still load.
+- Liquid provider data stays backward-readable. Do not bump a SaveCore provider version unless the serialized shape actually changes.
+- Pump tiles/items survive save → reload with stable identity.
+- Wiring runtime state continues to restore timers/actuators/ghosts. If pumps add no durable transient state, do not invent one; if schema changes, provide a migration and corruption tests.
+- No joined client may become save owner; host save ownership from W22/W23 remains unchanged.
 
-Input sampling may remain high-rate; outbound entity/world updates should be evidence-driven. Avoid empty `worldupd` spam when no state requiring delivery changed.
+### 4.3 Localization
 
-### 5.3 Region payload productionization
+Add English catalog keys for every new displayable pump surface. Preserve pseudo-locale stress behavior and English fallback. `npm run check:i18n` must remain green with the intentionally updated identity baseline.
 
-Build on the existing WorldRegions private-consumer model:
+## Workstream 5 — Determinism, conservation and adversarial correctness
 
-- prioritize changed regions by player relevance (distance, newly entered interest, reason/recency as appropriate);
-- ensure dirty interested regions cannot starve behind off-interest backlog;
-- tune configurable interest radius/budgets from measured evidence;
-- compact full-region payloads beyond raw hex when a simple deterministic no-dependency encoding materially reduces bytes;
-- keep delta/full snapshot logic fail-closed and bounded;
-- preserve renderer/lighting/minimap consumer independence.
+Add focused tests that prove invariants rather than only example outcomes.
 
-### 5.4 Backpressure and bounded work
+### 5.1 Pump conservation matrix
 
-Ensure slow clients cannot cause unbounded queues/memory growth or monopolize server tick work.
+Cover at least:
 
-Define and test bounded policies for:
+- one inlet → one outlet, exact volume conservation;
+- one inlet → multiple outlets;
+- multiple inlets → one/multiple outlets;
+- partial source and partial destination;
+- empty source / full output / solid or invalid endpoint;
+- water, lava, honey independently;
+- mixed liquid types on one powered component;
+- loops/duplicate wire paths do not double-process an endpoint;
+- water/lava contact still follows the existing canonical reaction rule rather than silently overwriting;
+- large endpoint counts hit budgets deterministically without losing/creating volume.
 
-- inbound inbox;
-- pending commands;
-- snapshot/resync queues;
-- dirty region/entity replication queues;
-- transport buffering where observable;
-- disconnect/drop/resync behavior when limits are exceeded.
+For every non-reaction test, total per-type volume before and after must match exactly. Reaction tests must account explicitly for volume consumed into the existing resulting tile semantics.
 
-### 5.5 Host/session tuning
+### 5.2 Replay determinism
 
-Make at least the already-deferred detach grace and interest/rate/budget knobs configurable through stable server options. For the Node dedicated host, expose practical CLI flags where appropriate and document defaults.
+Given the same world/liquid state and identical sequence of wiring pulses/ticks, independent headless runs must produce identical pump/liquid state digests and event/counter traces. Different initial states must not collapse to a static fake digest.
 
-Keep defaults safe and deterministic. Do not expose settings that let a client grant itself authority.
+### 5.3 Hostile protocol tests
 
-## Workstream 6 — 2–4 player systemic integration
+Add protocol/network tests for malformed liquid layers/cell deltas: bad lengths, bad type/amount ranges, non-finite values, unknown fields where schema forbids them, oversize payloads, stale version, stale revision, and replay/reorder cases. Rejected data mutates nothing.
 
-The W22 proof is two-client. W23 must establish that the architecture scales coherently to four active players without special-casing a single remote.
+## Workstream 6 — Multiplayer integration and E2E proof
 
-Exercise overlapping and separated interest regions, simultaneous mutations, combat, inventory/economy transactions, target switching, one client disconnect/rejoin, and one slow/stalled client while others continue.
+### 6.1 Headless two-client liquid convergence
 
-Any shared-world mutation must remain exactly once and converge for all interested clients.
+Prove through the real server/client controllers:
 
-## Workstream 7 — Testing, adversarial validation, soak and benchmarks
+- both clients join and receive identical initial liquid state in interested regions;
+- an authoritative bucket operation changes server truth and the other client converges;
+- natural liquid settling changes converge without full-world refresh;
+- a pump pulse moves liquid once, server volume is conserved, and both clients converge to the same type+amount cells;
+- water/lava reaction converges including the resulting world tile;
+- disconnect/rejoin/resync restores the current liquid truth, not the join-time baseline;
+- moving out of and back into interest restores current liquid truth;
+- a delayed/slow client cannot stall server simulation or corrupt another client's liquid state.
 
-### Headless tests
+### 6.2 Multiplayer mechanism proof
 
-Add/extend deterministic suites for at least:
+At least one non-primary player must:
 
-1. protocol schemas/versioning for all new message/command forms;
-2. craft/shop/container transaction parity and malicious client contexts;
-3. duplicate/stale/reordered command exactly-once invariants;
-4. multi-player enemy target selection and target-loss transitions;
-5. authoritative RNG replay determinism including enemy AI/spawn behavior;
-6. local prediction/reconciliation under latency/jitter and collision corrections;
-7. remote interpolation buffer behavior, teleports, removals, resync;
-8. entity delta spawn/change/remove/keyframe/resync semantics;
-9. region priority/interest crossing/starvation resistance;
-10. bounded queue/backpressure behavior;
-11. four-player convergence and one-slow-client isolation;
-12. disconnect/rejoin with in-flight inputs/commands and stale-generation rejection.
+- trigger a pressure plate through authoritative movement;
+- cause a connected receiver/pump to fire exactly once on the rising edge;
+- be protected by door close collision safety;
+- receive trap damage as itself where applicable, without damaging the primary player instead.
 
-### Browser / E2E
+### 6.3 Browser Journey O
 
-Keep journey M green and add a new real-browser multiplayer journey (journey N or the repository's next naming convention) over the real Node WebSocket host.
+Add a production-path Playwright journey over the real WebSocket host, following the A–N evidence style. It must visibly/diagnostically prove a coherent W24 story, for example:
 
-It must exercise production UI/input paths, not direct gameplay mutation hooks. At minimum prove:
+1. two Chromium clients join the same world;
+2. deterministic fixture/debug setup creates a small wired inlet/outlet pump rig and known liquid volumes through existing supported test seams;
+3. the non-primary client activates/presses the mechanism through a real gameplay/network intent;
+4. server transfer occurs once;
+5. both browsers observe matching inlet/outlet liquid state and mechanism result;
+6. one client disconnects, host changes liquid again, then rejoin/resync observes current truth;
+7. shutdown is clean.
 
-- two real Chromium clients join the same host;
-- a remote client performs one newly networked transaction path (craft/shop and, if applicable, chest/container transfer);
-- enemies can legitimately target a non-primary player and both clients observe coherent results;
-- remote entity motion is rendered through interpolation rather than visible fixed-rate teleporting (assert via exposed diagnostic state/tick buffers, not fragile pixel timing alone);
-- reconnect/resync remains coherent;
-- server shutdown returns clients cleanly.
+Use semantic diagnostics/assertions, not screenshot-only proof or arbitrary sleeps. If a new debug readout is required, keep it read-only and production-safe.
 
-If browser network throttling for WebSockets is unreliable, keep latency/jitter proofs in deterministic transport tests and use browser E2E for the real transport/UI boundary.
+## Workstream 7 — Performance, stress and recovery
 
-### Deterministic soak/fuzz
+Extend existing benchmark/soak tooling rather than inventing an unrelated harness.
 
-Add a bounded seeded multi-client soak/fuzz scenario long enough to catch lifecycle/queue/replication leaks (for example tens of thousands of authoritative ticks, not a token 100-tick smoke). Randomized actions must be driven by a test seed and produce reproducible failure traces.
+### 7.1 Liquid/pump stress benchmark
 
-Track at minimum:
+Add or extend `tools/bench-scenarios.js` with representative scenes:
 
-- final world/player/inventory/progression digests;
-- duplicate/lost mutation counts;
-- active/detached player/entity/consumer counts;
-- queue high-water marks;
-- bytes/messages sent;
-- resync count;
-- memory/collection counts where cheaply observable.
+- settled large pool / idle liquid;
+- active settling cascade;
+- many wired pump endpoints with repeated pulses;
+- mixed pump + ordinary world edits.
 
-### Benchmarks
+Record before/after median tick/subsystem timings and active/backlog/cap counters. There must be no whole-world-per-tick behavior and no unexplained material regression in unchanged scenes.
 
-Extend `tools/bench-multiplayer.js` (or a clearly named successor) with repeatable scenes:
+### 7.2 Multiplayer bandwidth benchmark
 
-- idle 1/2/4 players;
-- simultaneous movement 2/4 players;
-- separated-interest exploration;
-- mining/building burst;
-- combat with multi-target AI;
-- craft/shop/container transaction burst;
-- reconnect/resync churn;
-- one slow client/backpressure;
-- prediction/interpolation CPU overhead where measurable.
+Extend `tools/bench-multiplayer.js` with at least:
 
-Record W22's ~86 KiB/s two-client steady-state outbound baseline alongside W23 results.
+- idle two-player scene (must retain W23 idle suppression; no liquid changes must not create periodic liquid spam);
+- bounded liquid-settling churn;
+- pump-burst scene;
+- interest leave/re-entry/resync liquid scene.
 
-Performance acceptance:
+Report bytes/s and message/region counts before/after where comparable. Liquid deltas must respect configured byte budgets; do not solve W24 by sending full liquid regions every replication tick.
 
-- demonstrate a **material reduction** in steady-state two-client outbound bandwidth (target at least ~35% versus W22 unless a stronger measured constraint is discovered and documented);
-- four-client steady state must remain bounded and scale approximately with interested state rather than blindly multiplying full snapshots;
-- no newly introduced scene may show an unexplained >15% authoritative tick-time regression versus its reconciled baseline;
-- no unbounded queue/memory growth during the soak/backpressure scenarios.
+### 7.3 Soak/fuzz
 
-Do not game these numbers by reducing correctness, interest coverage, or update semantics without documenting the tradeoff.
+Run seeded soak/fuzz with repeated pump pulses, settling, bucket operations, region interest movement, reconnect/resync, and malformed/stale messages. Assert deterministic final digests/counters where appropriate, no negative/overflow liquid amounts, no volume creation, bounded queues, and leak-free teardown.
 
-## Workstream 8 — Documentation / truth sync
+## Workstream 8 — Documentation and durable handoff
 
-Before completion, update repository truth to match implementation:
+Before completion, truth-sync:
 
-- `docs/ARCHITECTURE.md` — add W23 contracts (targeting, gameplay RNG, protocol/replication changes, prediction/interpolation boundary, host tuning, failure/backpressure behavior, benchmarks);
-- `docs/TASK_BOARD.md` — reconcile stale status headings and NET-004/follow-ups against actual W23 results; distinguish DONE from remaining prototype/future work;
-- `AGENTS.md` — update module/public-contract tables and multiplayer rules so future agents do not reintroduce primary-player or client-authority regressions;
-- `README.md` — current multiplayer usage, limits, dedicated-host options, protocol compatibility as appropriate;
-- add `docs/HANDOFF-W23-multiplayer-productionization.md` with the durable completion evidence required below;
-- update this file's `Status` to `COMPLETED` only when every completion criterion is proven; use `BLOCKED` only for a genuine blocker with reproducible evidence.
+- `docs/ARCHITECTURE.md`: add a W24 section describing pump semantics, liquid authority, protocol v3 liquid-region format, client mirror boundary, wiring player-enumeration rule, boundedness, and evidence map;
+- `docs/TASK_BOARD.md`: mark LIQ-006 DONE only if acceptance is proven; replace stale W24 follow-ups with actual remaining work;
+- `AGENTS.md`: update module/API contracts and contributor rules for pumps/liquid replication/protocol v3; preserve the `TC.GameRng`, `TC.Targets`, `WorldRegions`, localization, and stable-ID rules;
+- `README.md` only where player-visible pumps/multiplayer liquid behavior should be documented;
+- `.agent/EXECUTION_PROMPT.md`: set `Status: COMPLETED` only after the completion gate passes and point to the W24 handoff;
+- `docs/HANDOFF-W24-liquid-wiring-completion.md`: durable report with starting/final SHAs, reconciliation, defects/root causes, design decisions, protocol change, identity/fingerprint delta, migrations, tests, browser evidence, benchmark numbers, CI result, remaining limitations, and exact next-campaign candidates.
+
+Do not mark unrelated MOD/performance/localization follow-ups DONE.
+
+## Required validation
+
+At minimum execute and preserve evidence for:
+
+```text
+npm run check
+npm run check:i18n
+npm run test:world
+npm run test:net
+npm run test:core
+npm test
+npm run build
+npm run verify:build
+npm run test:browser
+npm run validate
+```
+
+Also run the W24 benchmark/soak commands added or extended by this campaign.
+
+Targeted suites must include the existing liquid boundary/bucket/wiring coverage plus new pump, liquid-network, mechanism-multiplayer, protocol-v3, save/identity and Journey O coverage.
+
+If a test exposes a pre-existing Critical/High defect that blocks W24 correctness, root-cause and fix it in scope. Do not opportunistically refactor unrelated systems.
 
 ## Acceptance criteria
 
-W23 is complete only if all applicable items are true:
+W24 is complete only when **all** of the following are true:
 
-1. Clean/reconciled `main` baseline was established and post-`Planned-From` work was not overwritten or duplicated.
-2. Every user-facing canonical mutation reachable in the multiplayer slice has an explicit network disposition; crafting and shops are server-authoritative and working, and container transfer is either implemented safely or proven already complete with evidence.
-3. Remote clients cannot choose another player's inventory, forge shop prices/stock, bypass recipe/station/progression requirements, or cause duplicate/lost inventory/currency under replay/reorder/reconnect.
-4. Enemy/boss targeting is multi-player-aware through a canonical deterministic policy; direct primary-player assumptions that remain are deliberately classified and documented.
-5. Gameplay-affecting runtime randomness required for enemy/session determinism uses the authoritative RNG contract; identical seed + trace replay now includes relevant enemy AI/spawn outcomes.
-6. Remote players/enemies interpolate authoritative snapshots; local joining-player locomotion uses bounded prediction/reconciliation under non-zero latency while the server remains authority.
-7. NET-004 is no longer merely the W22 prototype: entity state is delta/baseline driven with correct spawn/removal/resync semantics, region delivery is prioritized/bounded/configurable, and empty/full-snapshot spam is materially reduced.
-8. Two-to-four-player shared-world scenarios converge correctly under simultaneous actions, separated interest, one slow client, disconnect and rejoin.
-9. No queue, consumer, detached identity, mirror entity, or prediction history leaks across world/session teardown.
-10. New network surfaces remain strict/fail-closed under malformed/oversize/wrong-direction/spoofed/stale payloads.
-11. Single-player behavior, save compatibility, registry identity, localization contract, world determinism, runtime scheduling, and WorldRegions consumer independence remain intact.
-12. Required new headless, browser, replay, soak/fuzz, and benchmark evidence exists and is documented.
-13. `npm run validate` passes on the final intended head. Relevant new network suites are also repeated enough to demonstrate stability without retries masking flakes.
-14. No known Critical/High regression remains. Any lower-severity limitation is explicitly documented with rationale and follow-up.
-15. Final GitHub Actions for the pushed W23 head is green, or an external CI outage/blocker is demonstrated with local full-gate evidence and exact run/status details.
+1. LIQ-006 has functional inlet/outlet pumps wired into the canonical mechanism system.
+2. A powered connected component discovers/processes pump endpoints once, deterministically, within explicit caps.
+3. Pump transfers preserve exact liquid volume/type except canonical water/lava reaction consumption, with no duplication/transmutation exploits.
+4. Pump mutations use `TC.Liquids`; no parallel liquid store/simulator exists.
+5. Protocol is explicitly revised to v3 for liquid-region truth, with clean v1/v2/unknown rejection.
+6. Initial snapshot, incremental region delta, interest entry, reconnect and resync all carry correct liquid type+amount.
+7. Joined clients mirror authoritative liquid state and do not independently mutate it through settlement/pumps/reactions.
+8. Bucket, natural settling, reaction and pump changes converge on two real clients.
+9. Pressure plates, door safety and trap/player contact operate on the correct registered player set; non-primary players are proven.
+10. Existing single-player wiring/liquid behavior remains green.
+11. Existing stable content IDs are unchanged; pump IDs are additive; identity fixture/fingerprint is intentionally updated with proof.
+12. Pre-W24 saves load; pump content and relevant liquid/wiring state round-trip correctly.
+13. New user-visible text is localized and pseudo-locale/fallback rules remain intact.
+14. Hostile protocol inputs fail closed and mutate nothing.
+15. Deterministic pump replay and conservation matrices pass.
+16. W24 stress tests show bounded work/queues and no whole-world-per-tick/pulse regression.
+17. Multiplayer benchmark shows no idle liquid spam and bounded liquid-churn/pump bandwidth under existing byte budgets.
+18. Browser Journey O passes over the real WebSocket host and proves non-primary mechanism activation + liquid convergence + rejoin truth.
+19. Full `npm run validate` passes on the final implementation head with no known Critical/High regressions.
+20. Documentation/task board/AGENTS/README are truth-synced and W24 handoff records real evidence, not planned claims.
+21. Working tree is clean, `main` is reconciled with `origin/main`, all W24 commits are pushed, and the pushed final head's GitHub Actions result is checked. If CI fails, root-cause and repair before marking COMPLETED unless a genuine external blocker is documented.
 
-## Completion gate / Git requirements
+## Completion gate / stopping rule
 
-Repository policy for this campaign is **main-only at completion**.
+- **COMPLETED:** every acceptance criterion above is proven. Mark this prompt COMPLETED, write the W24 handoff, commit/push final truth-sync, then stop. Do **not** automatically begin MOD-001 or another campaign.
+- **BLOCKED:** only for a genuine external blocker that cannot be solved in-repo. Record exact blocker, evidence, partial work, and the first resumable action; commit/push safe partial state if repository policy permits.
+- **ACTIVE:** if any material acceptance criterion remains, continue autonomously from the first genuinely incomplete requirement. Do not stop after “core pumps work” while replication, multiplayer mechanisms, save compatibility, benchmarks, Journey O, or the final gate remain open.
 
-1. Before editing, fetch/prune and reconcile with `origin/main` without destructive history rewriting.
-2. Preserve unrelated user changes; never reset/checkout them away.
-3. Use logical commits during implementation when helpful. Commit messages should explain root cause/contracts/tests, not just filenames.
-4. Before final push:
-   - inspect the full diff from the reconciled base;
-   - remove scratch probes/artifacts not intentionally tracked;
-   - run the full validation gate;
-   - ensure documentation and handoff are truthful to what was actually run.
-5. Re-fetch/reconcile `origin/main`; resolve concurrent upstream changes safely. Never force-push.
-6. End on local `main` with all intended W23 commits pushed to `origin/main`.
-7. Verify `HEAD` equals `origin/main` and the worktree is clean.
-8. Verify the remote commit SHA and inspect the corresponding GitHub Actions result. If CI fails, root-cause from logs/artifacts/annotations and repair material campaign-related failures before claiming completion.
-9. Do not auto-merge unrelated PRs or close unrelated issues as cleanup.
+## Git / integration requirements
 
-## Final handoff must report
+1. Work on `main` as repository policy/history currently does; reconcile remote changes before each push.
+2. Keep commits coherent by workstream (pump core, liquid replication/protocol, mechanism multiplayer parity, tests/benchmarks, docs/handoff) rather than one opaque mega-commit where practical.
+3. Never force-push.
+4. Never discard unrelated user work.
+5. If concurrent agents contribute, integration owner must rebase/reconcile intentionally and rerun affected tests after each merge/cherry-pick.
+6. Final commit message/handoff must include the full campaign evidence summary: root causes, behavior added, protocol/identity changes, validation counts, benchmark/soak results, remaining known limitations, and final SHA.
 
-The durable W23 handoff and final commit message must include:
+## Executor final report
 
-- starting SHA and final SHA;
-- reconciliation findings, including anything already landed after `Planned-From`;
-- exact root causes and fixes for newly discovered defects;
-- protocol/authority changes and compatibility/version behavior;
-- command capability matrix outcome (including craft/shop/container disposition);
-- multiplayer targeting policy and deliberate primary-player-only exceptions;
-- RNG contract and replay-determinism evidence;
-- prediction/interpolation design, correction thresholds/buffer policy, and latency-test evidence;
-- entity/region replication design and before/after bandwidth/tick-time table;
-- 2/4-player, slow-client, reconnect, and soak/fuzz evidence;
-- save/registry/localization compatibility evidence;
-- tests actually run and exact results;
-- browser E2E evidence;
-- GitHub Actions run/result;
-- known limitations / deliberately deferred work;
-- final clean-worktree and `main == origin/main` verification.
+When done, report succinctly:
 
-## Stop condition
-
-Only mark this campaign `COMPLETED` when the acceptance criteria and completion gate are satisfied. If a genuine external prerequisite makes completion impossible, mark `BLOCKED` with exact evidence, preserve all validated progress, push a truthful handoff, and stop. Otherwise continue from the first incomplete requirement.
+- start SHA → final SHA and pushed branch;
+- W24 commits/workstreams landed;
+- pump semantics and liquid-conservation proof;
+- protocol v3/liquid-replication design and multiplayer convergence proof;
+- wiring multiplayer authority fixes;
+- old→new registry fingerprint/count and save compatibility result;
+- exact test/Playwright counts and `npm run validate` result;
+- benchmark/soak numbers and any justified regressions;
+- GitHub Actions result;
+- remaining deferred work and the best candidate for the next planner campaign.
