@@ -329,6 +329,9 @@
   const drops = [];
   let clock = 0;                 // animation time for bobbing
 
+  // ---- drops ----
+  let dropSeq = 0;              // W23: stable per-session drop identity
+
   function solidPx(x, y) {
     const w = TC.world;
     return !!(w && typeof w.solidAtPixel === 'function' && w.solidAtPixel(x, y));
@@ -339,6 +342,7 @@
     // what, and when): ride the seeded 'misc' stream so replays converge.
     const R = TC.GameRng.stream('misc');
     const d = {
+      did: ++dropSeq,
       x: x, y: y,
       vx: (R.float() - 0.5) * (scatter ? 120 : 36),
       vy: scatter ? -(60 + R.float() * 80) : -(30 + R.float() * 40),

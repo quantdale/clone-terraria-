@@ -136,7 +136,7 @@
     input: ['btn', 'aimX', 'aimY', 'use', 'slot'],
     cmd: ['name', 'ctx'],
     cmdres: ['ref', 'ok', 'error', 'result'],
-    worldupd: ['regions', 'players', 'enemies', 'drops', 'inv', 'chest'],
+    worldupd: ['regions', 'players', 'enemies', 'drops', 'inv', 'chest', 'rm'],
     ack: ['upto', 'regions'],
     resync: ['reason'],
     bye: ['reason']
@@ -150,6 +150,7 @@
   }
 
   // A replicated entity/player snapshot line: bounded primitives only.
+  // Full form (snapshot msgs / first send): all numeric fields required.
   function validSnap(o, withName) {
     if (!isObj(o)) return false;
     if (!str(o.id, MAX_STR)) return false;
@@ -158,6 +159,27 @@
     if (!uint(o.hp, 1e6) || !uint(o.maxHp, 1e6)) return false;
     if (withName && !str(o.name, MAX_NAME)) return false;
     if (o.face !== undefined && o.face !== -1 && o.face !== 1) return false;
+    if (o.type !== undefined && !str(o.type, MAX_STR)) return false;
+    if (o.count !== undefined && !uint(o.count, 999999)) return false;
+    return true;
+  }
+
+  // W23 delta line: id required; every other field optional-but-bounded so a
+  // baselined update can carry only what changed. Unknown keys already fail
+  // via PAYLOAD_KEYS at the envelope level; per-key bounds hold here.
+  function validSnapDelta(o) {
+    if (!isObj(o)) return false;
+    if (!str(o.id, MAX_STR)) return false;
+    if ((o.x !== undefined && !num(o.x, -1e7, 1e7)) ||
+        (o.y !== undefined && !num(o.y, -1e7, 1e7))) return false;
+    if ((o.vx !== undefined && !num(o.vx, -1e5, 1e5)) ||
+        (o.vy !== undefined && !num(o.vy, -1e5, 1e5))) return false;
+    if (o.hp !== undefined && !uint(o.hp, 1e6)) return false;
+    if (o.maxHp !== undefined && !uint(o.maxHp, 1e6)) return false;
+    if (o.face !== undefined && o.face !== -1 && o.face !== 1) return false;
+    if (o.type !== undefined && !str(o.type, MAX_STR)) return false;
+    if (o.name !== undefined && !str(o.name, MAX_NAME)) return false;
+    if (o.count !== undefined && !uint(o.count, 999999)) return false;
     return true;
   }
 
@@ -191,6 +213,22 @@
   function validSnaps(a, maxN, withName) {
     if (!Array.isArray(a) || a.length > maxN) return false;
     for (let i = 0; i < a.length; i++) if (!validSnap(a[i], withName)) return false;
+    return true;
+  }
+
+  function validSnapDeltas(a, maxN) {
+    if (!Array.isArray(a) || a.length > maxN) return false;
+    for (let i = 0; i < a.length; i++) if (!validSnapDelta(a[i])) return false;
+    return true;
+  }
+
+  // W23 explicit removals/tombstones: {p:[ids], e:[ids], d:[ids]} bounded.
+  function validRm(rm) {
+    if (!isObj(rm)) return false;
+    for (const k in rm) {
+      if (!(k === 'p' || k === 'e' || k === 'd')) return false;
+      if (!strArr(rm[k], 256, MAX_STR)) return false;
+    }
     return true;
   }
 
@@ -255,7 +293,8 @@
       if (!isObj(p.you) || !str(p.you.pid, MAX_STR)) return 'bad you';
       if (!validRegions(p.regions, 4096)) return 'bad regions';
       if (!validSnaps(p.players, 8, true)) return 'bad players';
-      if (!validSnaps(p.enemies, 256)) return 'bad enemies';
+      if (!validSnapDeltas(p.enemies, 256)) return 'bad enemies';
+      if (!validSnapDeltas(p.drops, 256)) return 'bad drops';
       return null;
     },
     input(p) {
@@ -282,10 +321,12 @@
     },
     worldupd(p) {
       if (!validRegions(p.regions, 64)) return 'bad regions';
-      if (!validSnaps(p.players, 8)) return 'bad players';
-      if (!validSnaps(p.enemies, 128)) return 'bad enemies';
+      if (!validSnapDeltas(p.players, 8)) return 'bad players';
+      if (!validSnapDeltas(p.enemies, 128)) return 'bad enemies';
+      if (!validSnapDeltas(p.drops, 160)) return 'bad drops';
       if (p.inv !== undefined && !validSlots(p.inv)) return 'bad inv';
       if (p.chest !== undefined && !validChest(p.chest)) return 'bad chest';
+      if (p.rm !== undefined && !validRm(p.rm)) return 'bad rm';
       return null;
     },
     ack(p) {

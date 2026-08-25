@@ -47,7 +47,7 @@
     this.tickCount = 0;
     this.pendingAcks = [];
     this.enemyMirror = new Map();  // eid string -> {enemy, lastSeen}
-    this.dropMirror = [];
+    this.dropMirror = new Map();   // 'd<did>' string -> {drop, lastSeen}
     this.status = null;            // last human-readable status line key
     this.stats = {
       msgsIn: 0, msgsOut: 0, bytesIn: 0, bytesOut: 0,
@@ -118,6 +118,7 @@
       if (rec.remote) TC.Players.remove(rec.id);
     }
     this.enemyMirror.clear();
+    this.dropMirror.clear();
     if (TC.Enemies && TC.Enemies.clear) TC.Enemies.clear();
     if (TC.Items && TC.Items.clearDrops) TC.Items.clearDrops();
   };
@@ -291,28 +292,102 @@
 
   NetClient.prototype._applyEntitySnap = function (snap) {
     if (snap.id.charAt(0) === 'e') { this._applyEnemySnap(snap); return; }
-    // player mirror
+    if (snap.id.charAt(0) === 'd') { this._applyDropSnap(snap); return; }
+    // player mirror — presence-based merge: a baselined delta may carry only
+    // the fields that changed since the last acknowledged state.
     if (this.pid && snap.id === this.pid) {
       const p = TC.player;
       if (p) {
-        p.x = snap.x; p.y = snap.y; p.vx = snap.vx; p.vy = snap.vy;
-        p.hp = snap.hp; p.maxHp = snap.maxHp;
+        if (snap.x !== undefined) p.x = snap.x;
+        if (snap.y !== undefined) p.y = snap.y;
+        if (snap.vx !== undefined) p.vx = snap.vx;
+        if (snap.vy !== undefined) p.vy = snap.vy;
+        if (snap.hp !== undefined) p.hp = snap.hp;
+        if (snap.maxHp !== undefined) p.maxHp = snap.maxHp;
         if (typeof snap.face === 'number') p.facing = snap.face;
       }
       return;
     }
     let rec = TC.Players.entry(snap.id);
     if (!rec) {
+      // first sight requires a usable position; otherwise ignore until the
+      // next keyframe carries the full line
+      if (snap.x === undefined || snap.y === undefined) return;
       const proxy = new TC.Player(snap.x, snap.y);
       proxy.remote = true;
-      proxy.hp = snap.hp; proxy.maxHp = snap.maxHp;
+      if (snap.hp !== undefined) proxy.hp = snap.hp;
+      if (snap.maxHp !== undefined) proxy.maxHp = snap.maxHp;
       rec = TC.Players.create(proxy, { id: snap.id, remote: true, name: snap.name });
       if (!rec) return;
     }
     const pl = rec.player;
-    pl.x = snap.x; pl.y = snap.y; pl.vx = snap.vx; pl.vy = snap.vy;
-    pl.hp = snap.hp; pl.maxHp = snap.maxHp;
+    if (snap.x !== undefined) pl.x = snap.x;
+    if (snap.y !== undefined) pl.y = snap.y;
+    if (snap.vx !== undefined) pl.vx = snap.vx;
+    if (snap.vy !== undefined) pl.vy = snap.vy;
+    if (snap.hp !== undefined) pl.hp = snap.hp;
+    if (snap.maxHp !== undefined) pl.maxHp = snap.maxHp;
     if (typeof snap.face === 'number') pl.facing = snap.face;
+  };
+
+  // W23 explicit removals/tombstones: mirrors die immediately instead of
+  // waiting out the linger timer.
+  NetClient.prototype._applyRm = function (rm) {
+    if (!rm) return;
+    const ids = (k) => (Array.isArray(rm[k]) ? rm[k] : []);
+    for (const id of ids('e')) {
+      const m = this.enemyMirror.get(id);
+      if (m) {
+        const list = TC.Enemies && TC.Enemies.list;
+        if (list) {
+          const i = list.indexOf(m.enemy);
+          if (i >= 0) list.splice(i, 1);
+        }
+        this.enemyMirror.delete(id);
+      }
+    }
+    for (const id of ids('d')) this._removeDropMirror(id);
+    for (const id of ids('p')) {
+      if (id === this.pid) continue;            // never remove self
+      if (TC.Players.entry(id)) TC.Players.remove(id);
+    }
+  };
+
+  NetClient.prototype._removeDropMirror = function (id) {
+    const m = this.dropMirror.get(id);
+    if (!m) return;
+    const drops = (TC.Items && TC.Items.drops) || null;
+    if (drops) {
+      const i = drops.indexOf(m.drop);
+      if (i >= 0) drops.splice(i, 1);
+    }
+    this.dropMirror.delete(id);
+  };
+
+  NetClient.prototype._applyDropSnap = function (snap) {
+    if (!TC.Items || !Array.isArray(TC.Items.drops)) return;
+    let m = this.dropMirror.get(snap.id);
+    if (!m) {
+      if (snap.x === undefined || snap.item === undefined) return;
+      const d = {
+        did: parseInt(snap.id.slice(1), 10) | 0,
+        x: snap.x, y: snap.y,
+        vx: 0, vy: 0,
+        id: snap.item,
+        count: snap.count != null ? snap.count : 1,
+        age: 0, phase: 0,
+        pickupDelay: 0.35, onGround: false,
+        mirror: true
+      };
+      m = { drop: d, lastSeen: this.tickCount };
+      this.dropMirror.set(snap.id, m);
+      TC.Items.drops.push(d);
+    }
+    const d = m.drop;
+    if (snap.x !== undefined) d.x = snap.x;
+    if (snap.y !== undefined) d.y = snap.y;
+    if (snap.count !== undefined) d.count = snap.count;
+    m.lastSeen = this.tickCount;
   };
 
   NetClient.prototype._applyEnemySnap = function (snap) {
@@ -349,13 +424,19 @@
         this.enemyMirror.delete(key);
       }
     }
+    // safety net alongside explicit tombstones
+    for (const [key, m] of Array.from(this.dropMirror.entries())) {
+      if (this.tickCount - m.lastSeen > this.opts.enemyLingerTicks) {
+        this._removeDropMirror(key);
+      }
+    }
   };
 
   NetClient.prototype._onSnapshot = function (m) {
     if (!this._ensureMirrorWorld()) return;
     this._ensureOwnPlayer();
     for (let i = 0; i < m.p.regions.length; i++) this._applyRegionLine(m.p.regions[i]);
-    const lines = m.p.players.concat(m.p.enemies);
+    const lines = m.p.players.concat(m.p.enemies).concat(m.p.drops || []);
     for (let i = 0; i < lines.length; i++) this._applyEntitySnap(lines[i]);
     this.stats.snapshotsApplied++;
     this._flushAcks(true);
@@ -372,7 +453,9 @@
   NetClient.prototype._onWorldUpd = function (m) {
     if (!TC.world) return;
     for (let i = 0; i < m.p.regions.length; i++) this._applyRegionLine(m.p.regions[i]);
-    const lines = m.p.players.concat(m.p.enemies);
+    // removals first so a respawning id re-creates cleanly
+    this._applyRm(m.p.rm);
+    const lines = m.p.players.concat(m.p.enemies).concat(m.p.drops);
     for (let i = 0; i < lines.length; i++) this._applyEntitySnap(lines[i]);
     // authoritative self-inventory refresh: the client UI reads its own
     // slots, so the mirror must track server truth for hotbar/crafting

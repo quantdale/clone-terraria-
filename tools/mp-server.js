@@ -1,10 +1,19 @@
-/* tools/mp-server.js — headless authoritative multiplayer host (W22).
+/* tools/mp-server.js — headless authoritative multiplayer host (W22/W23).
    Boots the REAL game scripts headless (same VM loader as the test/bench
-   harnesses), creates one authoritative world, and serves the W22 protocol
+   harnesses), creates one authoritative world, and serves the W23 protocol
    over a dependency-free WebSocket endpoint.
 
    Usage:
      node tools/mp-server.js [--seed 1337] [--port 7777]
+          [--interest 56] [--budget 4] [--rate 2] [--keyframe 600]
+          [--detach-grace 300] [--max-out-kb 128]
+
+     interest      region interest radius in tiles around each player
+     budget        changed regions replicated per tick per connection
+     rate          presentation replication cadence (worldupd every N ticks)
+     keyframe      ticks between entity baseline resets (recovery)
+     detach-grace  seconds a detached identity survives for reconnect
+     max-out-kb    per-tick outbound byte budget per connection
 
    Clients: browser title screen -> "Join Local Server" (ws://localhost:PORT),
    or any TC.NetTransport.websocket(). The simulation advances on a wall-clock
@@ -24,6 +33,12 @@ function arg(name, dflt) {
 
 const SEED = parseInt(arg("seed", "1337"), 10) | 0;
 const PORT = parseInt(arg("port", "7777"), 10) | 0;
+const INTEREST = parseInt(arg("interest", "56"), 10) | 0;
+const BUDGET = parseInt(arg("budget", "4"), 10) | 0;
+const RATE = parseInt(arg("rate", "2"), 10) | 0;
+const KEYFRAME = parseInt(arg("keyframe", "600"), 10) | 0;
+const DETACH_GRACE_S = parseFloat(arg("detach-grace", "300"));
+const MAX_OUT_KB = parseFloat(arg("max-out-kb", "128"));
 
 // ---- boot the real game headless ----
 const game = loadGame({ hash: "" });
@@ -34,7 +49,15 @@ if (!TC.NetServer || !TC.Runtime) {
   process.exit(1);
 }
 
-const server = TC.NetServer.create({ seed: SEED });
+const server = TC.NetServer.create({
+  seed: SEED,
+  interestRadius: INTEREST,
+  budgetRegionsPerTick: BUDGET,
+  replicateEveryTicks: RATE,
+  keyframeEveryTicks: KEYFRAME,
+  detachGraceTicks: Math.max(1, Math.round(DETACH_GRACE_S * 60)),
+  maxOutBytesPerTick: Math.max(8192, Math.round(MAX_OUT_KB * 1024))
+});
 const started = server.start();
 if (!started.ok) {
   console.error("[mp-server] start failed:", started.error);
