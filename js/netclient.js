@@ -103,6 +103,10 @@
   NetClient.prototype._teardown = function (statusKey) {
     this.phase = 'closed';
     this.status = statusKey || null;
+    // A dropped session invalidates container authority cleanly.
+    if (TC.UI && typeof TC.UI.closeChest === 'function') {
+      try { TC.UI.closeChest(); } catch (e) {}
+    }
     this._clearMirrors();
     if (activeInstance === this) activeInstance = null;
   };
@@ -177,6 +181,19 @@
         } else {
           this.stats.cmdResultsFailed++;
           this.lastCmdError = String((m.p && m.p.error) || 'rejected').slice(0, 64);
+        }
+        // W23: authoritative post-command bundle — refresh the local mirror
+        // immediately, and open the production chest panel when the server
+        // confirmed a canonical InteractTile chest action.
+        if (m.p.ok && m.p.result) {
+          const rb = m.p.result;
+          if (rb.inv) this._applyInvLines(rb.inv);
+          if (rb.chest) {
+            this._applyChestPayload(rb.chest);
+            if (rb.action === 'chest' && TC.UI && typeof TC.UI.openChest === 'function') {
+              try { TC.UI.openChest(rb.chest.tx, rb.chest.ty); } catch (e) {}
+            }
+          }
         }
         break;
       case 'bye':
@@ -359,20 +376,41 @@
     for (let i = 0; i < lines.length; i++) this._applyEntitySnap(lines[i]);
     // authoritative self-inventory refresh: the client UI reads its own
     // slots, so the mirror must track server truth for hotbar/crafting
-    if (Array.isArray(m.p.inv) && TC.player && TC.player.inventory) {
-      const inv = TC.player.inventory;
-      for (let i = 0; i < m.p.inv.length && i < inv.slots.length; i++) {
-        const line = m.p.inv[i];
-        const cur = inv.get(i);
-        const want = line ? { id: line[0], count: line[1] } : null;
-        if ((cur == null) !== (want == null) ||
-            (cur && want && (cur.id !== want.id || cur.count !== want.count))) {
-          inv.slots[i] = want;
-        }
-      }
-    }
+    if (Array.isArray(m.p.inv)) this._applyInvLines(m.p.inv);
+    // W23: authoritative container sync into the LOCAL chest map so the
+    // production chest panel reads server truth untouched.
+    if (m.p.chest) this._applyChestPayload(m.p.chest);
     this._decayEnemyMirrors();
     this._flushAcks(false);
+  };
+
+  NetClient.prototype._applyInvLines = function (lines) {
+    if (!TC.player || !TC.player.inventory) return;
+    const inv = TC.player.inventory;
+    for (let i = 0; i < lines.length && i < inv.slots.length; i++) {
+      const line = lines[i];
+      const cur = inv.get(i);
+      const want = line ? { id: line[0], count: line[1] } : null;
+      if ((cur == null) !== (want == null) ||
+          (cur && want && (cur.id !== want.id || cur.count !== want.count))) {
+        inv.slots[i] = want;
+      }
+    }
+  };
+
+  NetClient.prototype._applyChestPayload = function (cp) {
+    if (!cp || !TC.Chests || typeof TC.Chests.get !== 'function') return;
+    const slots = TC.Chests.get(cp.tx | 0, cp.ty | 0);
+    if (!Array.isArray(slots)) return;
+    for (let i = 0; i < slots.length; i++) {
+      const line = (i < cp.slots.length) ? cp.slots[i] : null;
+      const want = line ? { id: line[0], count: line[1] } : null;
+      const cur = slots[i];
+      if ((cur == null) !== (want == null) ||
+          (cur && want && (cur.id !== want.id || cur.count !== want.count))) {
+        slots[i] = want;
+      }
+    }
   };
 
   NetClient.prototype._flushAcks = function (force) {
@@ -438,13 +476,11 @@
     const tx = Math.floor(inp.mouse.worldX / TC.CONST.TS);
     const ty = Math.floor(inp.mouse.worldY / TC.CONST.TS);
     if (d.kind === 'pick' || d.kind === 'axe') {
-      this.sendCmd(d.kind === 'pick' ? 'MineTile' : 'MineTile', {
-        tx: tx, ty: ty, toolPower: d.power || 1, tool: d.kind, dt: STEP
-      });
+      this.sendCmd('MineTile', { tx: tx, ty: ty });
     } else if (d.tile != null) {
       this.sendCmd('PlaceTile', { tx: tx, ty: ty, item: sel.id, slot: p.hotbarIndex });
     } else {
-      this.sendCmd('UseItem', { slot: p.hotbarIndex, aimX: inp.mouse.worldX, aimY: inp.mouse.worldY, dt: STEP });
+      this.sendCmd('UseItem', { slot: p.hotbarIndex, aimX: inp.mouse.worldX, aimY: inp.mouse.worldY });
     }
   };
 
@@ -500,6 +536,13 @@
     // Static tick entry used by main.js's frame loop (routes to the active
     // instance; see drivesTick).
     frame: function (dt) { if (activeInstance) activeInstance.frame(dt); },
+    // W23 intent router: canonical UI transactions propose over the network
+    // while joined; returns null when no session is active (caller falls
+    // back to the local transaction path).
+    intent: function (name, ctx) {
+      const c = activeInstance;
+      return (c && c.isActive()) ? c.sendIntent(name, ctx) : null;
+    },
     // True while this realm must NOT run its local simulation: from the
     // moment a join attempt starts (handshake) until it ends, fixed steps
     // belong to TC.NetClient.frame (input sampling + mirror application).

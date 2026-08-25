@@ -29,7 +29,7 @@
 (function () {
   const TC = window.TC = window.TC || {};
 
-  const VERSION = 1;
+  const VERSION = 2;
 
   // Maximum serialized message size accepted by decode() (bytes of JSON).
   // Region snapshots are the largest legitimate messages by far; a full
@@ -52,12 +52,57 @@
     bye: 'bye'                // both  orderly disconnect {reason}
   });
 
-  // Network-callable commands (NET-002 whitelist). Anything else is rejected
-  // before it can reach TC.Commands.
+  // Network-callable commands (NET-002 whitelist; W23 adds craft/shop/
+  // container transactions). Anything else is rejected before it can reach
+  // TC.Commands.
   const COMMAND_WHITELIST = Object.freeze([
     'MineTile', 'MineWall', 'PlaceTile', 'PlaceWall',
-    'UseItem', 'MoveItem', 'EquipItem', 'InteractTile'
+    'UseItem', 'MoveItem', 'EquipItem', 'InteractTile',
+    'CraftRecipe', 'ShopBuy', 'ShopSell', 'ContainerMove'
   ]);
+
+  // Bounded per-command intent schemas (W23). Only these primitive keys are
+  // accepted inside a 'cmd' payload's ctx object — anything else rejects
+  // before reaching transaction validation. Endpoints for ContainerMove:
+  // 0 = chest container, 1 = acting player's inventory.
+  const CTX_SCHEMAS = {
+    MineTile: { tx: 'u21', ty: 'u21' },
+    MineWall: { tx: 'u21', ty: 'u21' },
+    PlaceTile: { tx: 'u21', ty: 'u21', item: 's64', slot: 'slot' },
+    PlaceWall: { tx: 'u21', ty: 'u21', item: 's64', slot: 'slot' },
+    UseItem: { slot: 'slot', aimX: 'f', aimY: 'f' },
+    MoveItem: { fromSlot: 'slot', toSlot: 'slot', count: 'u21' },
+    EquipItem: { item: 's64', slot: 'slot' },
+    InteractTile: { tx: 'u21', ty: 'u21' },
+    CraftRecipe: { recipeId: 's64' },
+    ShopBuy: { npcType: 's32', itemId: 's64' },
+    ShopSell: { npcType: 's32', slot: 'slot', count: 'u21' },
+    ContainerMove: {
+      tx: 'u21', ty: 'u21', from: 'endpoint', to: 'endpoint',
+      fromSlot: 'slot', toSlot: 'slot', count: 'u21'
+    }
+  };
+
+  function validCtx(name, ctx) {
+    const sch = CTX_SCHEMAS[name];
+    if (!sch) return false;
+    for (const k in ctx) {
+      const kind = sch[k];
+      if (!kind) return false;                    // unknown field: fail closed
+      const v = ctx[k];
+      if (kind === 'u21') { if (!uint(v, 0x200000)) return false; }
+      else if (kind === 'slot') {
+        if (v === undefined) continue;
+        if (!uint(v, 255)) return false;
+      } else if (kind === 'f') {
+        if (!num(v, -1e7, 1e7)) return false;
+      } else if (kind === 's32') { if (!str(v, 32)) return false; }
+      else if (kind === 's64') { if (!str(v, MAX_STR)) return false; }
+      else if (kind === 'endpoint') { if (v !== 0 && v !== 1) return false; }
+      else return false;
+    }
+    return true;
+  }
 
   // ---- primitive validators ----
   function isObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
@@ -90,8 +135,8 @@
     snapshot: ['reason', 'seed', 'you', 'regions', 'players', 'enemies', 'drops'],
     input: ['btn', 'aimX', 'aimY', 'use', 'slot'],
     cmd: ['name', 'ctx'],
-    cmdres: ['ref', 'ok', 'error'],
-    worldupd: ['regions', 'players', 'enemies', 'drops', 'inv'],
+    cmdres: ['ref', 'ok', 'error', 'result'],
+    worldupd: ['regions', 'players', 'enemies', 'drops', 'inv', 'chest'],
     ack: ['upto', 'regions'],
     resync: ['reason'],
     bye: ['reason']
@@ -154,6 +199,39 @@
       (Array.isArray(p[key]) && p[key].length === 0);
   }
 
+  // Inventory slot list: array of null | [id(<=64), count] — bounded.
+  function validSlots(a, maxN) {
+    if (!Array.isArray(a) || a.length > (maxN || 64)) return false;
+    for (let i = 0; i < a.length; i++) {
+      const line = a[i];
+      if (line === null) continue;
+      if (!Array.isArray(line) || line.length !== 2 ||
+          !str(line[0], MAX_STR) || !uint(line[1], 999999)) return false;
+    }
+    return true;
+  }
+
+  // Authoritative container sync: {tx, ty, slots:[null|[id,count]] x<=20}.
+  function validChest(c) {
+    if (!isObj(c)) return false;
+    if (!uint(c.tx, 0x200000) || !uint(c.ty, 0x200000)) return false;
+    if (!Array.isArray(c.slots) || c.slots.length > 20) return false;
+    return validSlots(c.slots, 20);
+  }
+
+  // Bounded command-result bundle riding cmdres: an action tag plus optional
+  // authoritative inventory/container mirrors.
+  function validResult(r) {
+    if (!isObj(r)) return false;
+    for (const k in r) {
+      if (!(k === 'action' || k === 'inv' || k === 'chest')) return false;
+    }
+    if (r.action !== undefined && !str(r.action, 16)) return false;
+    if (r.inv !== undefined && !validSlots(r.inv)) return false;
+    if (r.chest !== undefined && !validChest(r.chest)) return false;
+    return true;
+  }
+
   const SCHEMA = {
     hello(p) {
       if (p.name !== undefined && !str(p.name, MAX_NAME)) return 'bad name';
@@ -192,28 +270,22 @@
         return 'unknown command';
       }
       if (!isObj(p.ctx)) return 'bad ctx';
+      if (!validCtx(p.name, p.ctx)) return 'bad ctx fields';
       return null;
     },
     cmdres(p) {
       if (!uint(p.ref, 0xffffffff)) return 'bad ref';
       if (typeof p.ok !== 'boolean') return 'bad ok';
       if (p.error !== undefined && !str(p.error, 128)) return 'bad error';
+      if (p.result !== undefined && !validResult(p.result)) return 'bad result';
       return null;
     },
     worldupd(p) {
       if (!validRegions(p.regions, 64)) return 'bad regions';
       if (!validSnaps(p.players, 8)) return 'bad players';
       if (!validSnaps(p.enemies, 128)) return 'bad enemies';
-      if (p.inv !== undefined) {
-        // per-client inventory refresh: array of null | [id, count]
-        if (!Array.isArray(p.inv) || p.inv.length > 64) return 'bad inv';
-        for (let i = 0; i < p.inv.length; i++) {
-          const line = p.inv[i];
-          if (line === null) continue;
-          if (!Array.isArray(line) || line.length !== 2 ||
-              !str(line[0], 64) || !uint(line[1], 999999)) return 'bad inv line';
-        }
-      }
+      if (p.inv !== undefined && !validSlots(p.inv)) return 'bad inv';
+      if (p.chest !== undefined && !validChest(p.chest)) return 'bad chest';
       return null;
     },
     ack(p) {
@@ -390,4 +462,5 @@
   };
 
   TC.NetProto = NetProto;
+  NetProto.CTX_SCHEMAS = CTX_SCHEMAS;
 })();

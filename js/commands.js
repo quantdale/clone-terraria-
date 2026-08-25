@@ -578,6 +578,104 @@
   }
 
   // ======================================================================
+  // ContainerMove — W23 canonical player<->chest transaction. One authority
+  // for every container transfer: local UI drag/quick-move AND networked
+  // intents both land here, so conservation rules cannot fork.
+  //   ctx {player, tx, ty, from:'inv'|'chest', to:'inv'|'chest',
+  //        fromSlot, toSlot?, count?}
+  // Omitted toSlot = authoritative auto-placement (merge then first empty).
+  // ======================================================================
+
+  function chestAt(tx, ty) {
+    if (!TC.Chests || typeof TC.Chests.get !== 'function') return null;
+    const slots = TC.Chests.get(tx, ty);
+    if (!Array.isArray(slots)) return null;
+    return { slots: slots, get: function (i) { return slots[i]; } };
+  }
+
+  function validateContainerMove(c) {
+    const w = getWorld();
+    if (!w || typeof w.get !== 'function') return 'no-world';
+    if (!posIn(w, c)) return 'bad-target';
+    if (!inReach(c.player, c.tx, c.ty)) return 'out-of-reach';
+    if (!TC.TILE || w.get(c.tx, c.ty) !== TC.TILE.CHEST) return 'not-a-chest';
+    const inv = c.player && c.player.inventory;
+    if (!inv || !Array.isArray(inv.slots)) return 'no-player';
+    const chest = chestAt(c.tx, c.ty);
+    if (!chest) return 'no-container';
+    if (c.from !== 'inv' && c.from !== 'chest') return 'bad-endpoint';
+    if (c.to !== 'inv' && c.to !== 'chest') return 'bad-endpoint';
+    if (c.from === c.to) return 'same-endpoint';
+    c._fromInv = (c.from === 'inv') ? inv : chest;
+    c._toInv = (c.to === 'inv') ? inv : chest;
+    c._auto = (c.toSlot == null);
+    if (!c._auto) {
+      return planMove({ fromInv: c._fromInv, toInv: c._toInv,
+        fromSlot: c.fromSlot, toSlot: c.toSlot, count: c.count }).error || true;
+    }
+    // auto mode validation: source stack exists, count sane, SOMETHING fits.
+    const fi = c._fromInv;
+    const fs = slotIn(fi, c.fromSlot);
+    if (fs < 0) return 'bad-slot';
+    const src = fi.get(fs);
+    if (!src || !(src.count > 0)) return 'empty-source-slot';
+    let take = src.count;
+    if (c.count != null) {
+      take = (typeof c.count === 'number' && isFinite(c.count)) ? Math.floor(c.count) : 0;
+      if (take < 1) return 'bad-count';
+      if (take > src.count) return 'count-exceeds-stack';
+    }
+    c._take = take;
+    const max = maxStack(src.id);
+    const ti = c._toInv;
+    let room = 0;
+    for (let j = 0; j < ti.slots.length && room < take; j++) {
+      const t = ti.slots[j];
+      if (!t) room += max;
+      else if (t.id === src.id && t !== src) room += max - t.count;
+    }
+    if (room <= 0) return 'dest-full';
+    return true;
+  }
+
+  function applyContainerMove(c) {
+    const fi = c._fromInv, ti = c._toInv;
+    const fs = slotIn(fi, c.fromSlot);
+    const src = fi.get(fs);
+    let take = (c._auto) ? c._take : Math.min(
+      (c.count != null) ? c.count : src.count, src.count);
+    const id = src.id;
+    const max = maxStack(id);
+    let moved = 0;
+    if (c._auto) {
+      for (let j = 0; j < ti.slots.length && take > 0; j++) {   // merge first
+        const t = ti.slots[j];
+        if (t && t.id === id && t !== src && t.count < max) {
+          const m = Math.min(max - t.count, take);
+          t.count += m; take -= m; moved += m;
+        }
+      }
+      for (let j = 0; j < ti.slots.length && take > 0; j++) {   // then empty
+        if (!ti.slots[j]) {
+          const m = Math.min(max, take);
+          ti.slots[j] = { id: id, count: m };
+          take -= m; moved += m;
+        }
+      }
+      if (moved >= src.count) fi.slots[fs] = null;
+      else src.count -= moved;
+    } else {
+      const r = applyMoveItem({ fromInv: fi, toInv: ti,
+        fromSlot: c.fromSlot, toSlot: c.toSlot, count: c.count });
+      emit('InventoryChanged', { id: id, count: r.moved, from: fs, to: c.toSlot });
+      return r;
+    }
+    if (!(moved > 0)) throw new Error('container-move-nothing-fit');
+    emit('InventoryChanged', { id: id, count: moved, from: fs, to: 'auto' });
+    return { moved: moved, id: id };
+  }
+
+  // ======================================================================
   // CraftRecipe — delegates to TC.Crafting (station set optional)
   // ======================================================================
 
@@ -1021,6 +1119,7 @@
   register('InteractTile', { validate: validateInteractTile, apply: applyInteractTile });
   register('ShopBuy', { validate: validateShopBuy, apply: applyShopBuy });
   register('ShopSell', { validate: validateShopSell, apply: applyShopSell });
+  register('ContainerMove', { validate: validateContainerMove, apply: applyContainerMove });
 
   TC.Commands = { register, unregister, has, names, submit,
                   enqueue, drain, pending: pendingCount, clearQueue, stats: queueStats };

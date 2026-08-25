@@ -1411,18 +1411,35 @@
 
   // Transactional purchase through TC.Commands.ShopBuy (W2): stock, price,
   // purse and capacity validate before anything mutates; failure reports a
-  // reason toast and changes nothing.
+  // reason toast and changes nothing. W23: while joined, the same intent
+  // proposes over the network and the authoritative result bundle corrects
+  // this client's mirror.
+  function txSubmit(name, ctx) {
+    const routed = (TC.NetClient && typeof TC.NetClient.intent === 'function')
+      ? TC.NetClient.intent(name, ctx) : null;
+    if (routed) return routed;                    // {ok:true, pending:true}
+    return (TC.Commands && typeof TC.Commands.submit === 'function')
+      ? TC.Commands.submit(name, ctx)
+      : { ok: false, error: 'no-commands' };
+  }
+
   function buyItem(entry) {
     if (!entry || typeof entry.itemId !== 'string') return;
     const p = TC.player;
     if (!p) return;
     // Resolve which shopkeeper this panel belongs to for stock validation.
     const npcType = shopNpcType();
-    const r = (TC.Commands && typeof TC.Commands.submit === 'function')
-      ? TC.Commands.submit('ShopBuy', {
-          player: p, npcType: npcType, itemId: entry.itemId
-        })
-      : { ok: false, error: 'no-commands' };
+    const r = txSubmit('ShopBuy', {
+        player: p, npcType: npcType, itemId: entry.itemId
+      });
+    if (r.ok && r.pending) {
+      // authoritative inventory arrives with the server's result bundle
+      if (TC.Audio && typeof TC.Audio.play === 'function') {
+        try { TC.Audio.play('pickup'); } catch (e) {}
+      }
+      toast(t('ui.shop.bought', { item: itemName(entry.itemId) }));
+      return;
+    }
     if (!r.ok) {
       const price = Math.max(1, Math.floor(entry.price) || 1);
       if (r.error === 'too-poor') {
@@ -1446,11 +1463,16 @@
     const p = TC.player;
     if (!p || !lastShop) return;
     const npcType = shopNpcType();
-    const r = (TC.Commands && typeof TC.Commands.submit === 'function')
-      ? TC.Commands.submit('ShopSell', {
-          player: p, npcType: npcType, slot: slot, count: count
-        })
-      : { ok: false, error: 'no-commands' };
+    const r = txSubmit('ShopSell', {
+        player: p, npcType: npcType, slot: slot, count: count
+      });
+    if (r.ok && r.pending) {
+      // authoritative proceeds arrive with the server's result bundle
+      if (TC.Audio && typeof TC.Audio.play === 'function') {
+        try { TC.Audio.play('pickup'); } catch (e) {}
+      }
+      return;
+    }
     if (!r.ok) {
       if (r.error === 'not-sellable' || r.error === 'cannot-sell-currency') {
         toast(t('ui.shop.not_buyable'));
@@ -1688,8 +1710,18 @@
       // with a chest open, shift moves between bag and chest; otherwise
       // it shuttles between the hotbar row and the bag rows
       const cs = UI.chest ? chestSlots() : null;
-      if (cs) quickMoveRange(inv.slots, i, cs, 0, CHEST_N);
-      else quickMove(inv, i);
+      if (cs) {
+        if (joinedActive()) {
+          txSubmit('ContainerMove', {
+            tx: UI.chest.tx, ty: UI.chest.ty,
+            from: 'inv', to: 'chest', fromSlot: i
+          });
+          return;
+        }
+        quickMoveRange(inv.slots, i, cs, 0, CHEST_N);
+        return;
+      }
+      quickMove(inv, i);
       return;
     }
     slotTransfer(inv.slots, i, rightClick);
@@ -1773,18 +1805,18 @@
 
     // crafting rows — through the canonical CraftRecipe transaction (same
     // validate-then-apply authority as every other mutation; no UI-side
-    // duplicate of crafting rules).
+    // duplicate of crafting rules). W23: joined clients propose the recipe's
+    // STABLE id over the network; the server re-resolves stations/progression.
     if (!rightClick && L.craftCtx) {
       for (let i = 0; i < L.craftRects.length; i++) {
         if (inRect(mx, my, L.craftRects[i])) {
           let ok = false;
-          const ctx2 = { recipe: L.craftList[i], inv: L.craftCtx.inv, stations: L.craftCtx.stations };
-          if (TC.Commands && typeof TC.Commands.submit === 'function') {
-            ok = TC.Commands.submit('CraftRecipe', ctx2).ok;
-          } else {
-            try { ok = TC.Crafting.craft(L.craftList[i], L.craftCtx.inv, L.craftCtx.stations); }
-            catch (e) { ok = false; }
-          }
+          const routed = txSubmit('CraftRecipe', {
+            recipe: L.craftList[i],
+            inv: L.craftCtx.inv,
+            stations: L.craftCtx.stations
+          });
+          ok = !!(routed && routed.ok);
           if (ok && TC.Audio) TC.Audio.play('craft');
           return;
         }
@@ -1800,13 +1832,23 @@
     const es = hitEquip(L, mx, my);
     if (es) { equipClick(inv, es, rightClick); return; }
 
-    // chest grid (shift+LMB sends stacks to the player inventory)
+    // chest grid — W23: joined clients transfer through the authoritative
+    // ContainerMove transaction (auto-placement), never local mirror edits.
     const cs = UI.chest ? chestSlots() : null;
     if (cs) {
       for (let i = 0; i < L.chestRects.length; i++) {
         const r = L.chestRects[i];
         if (!inRect(mx, my, r)) continue;
         const s = liveSlot(cs, r.index);
+        if (joinedActive()) {
+          if ((shiftHeld() || !rightClick) && !cursorStack && s) {
+            txSubmit('ContainerMove', {
+              tx: UI.chest.tx, ty: UI.chest.ty,
+              from: 'chest', to: 'inv', fromSlot: r.index
+            });
+          }
+          return;
+        }
         if (!rightClick && shiftHeld() && !cursorStack && s) {
           quickMoveRange(cs, r.index, inv.slots, 0, INV_N);
           return;

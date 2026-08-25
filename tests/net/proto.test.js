@@ -34,7 +34,7 @@ test("proto: unknown/absent fields and wrong types fail closed", () => {
   rejects("not an object", null);
   rejects("array envelope", []);
   rejects("unknown top-level field", Object.assign(msg("hello", {}), { zzz: 1 }));
-  rejects("missing type", { v: 1, p: {}, cseq: 0, sseq: 0, tick: 0 });
+  rejects("missing type", { v: TC.NetProto.VERSION, p: {}, cseq: 0, sseq: 0, tick: 0 });
   rejects("unknown type", msg("rootkit", {}));
   rejects("bad version", Object.assign(msg("hello", {}), { v: 999 }));
   rejects("float version", Object.assign(msg("hello", {}), { v: 1.5 }));

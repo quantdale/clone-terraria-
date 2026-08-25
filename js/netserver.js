@@ -251,6 +251,8 @@
       input: { x: 0, jump: 0, down: 0, use: 0, aimX: 0, aimY: 0, slot: -1 },
       lastInputTick: 0,
       pendingCmds: [],
+      container: null,          // W23: bound chest session {tx,ty} | null
+      lastChestKey: null,
       consumerName: null, consumer: null,
       interest: new Set(),
       snapQueue: [],
@@ -488,12 +490,46 @@
       while (conn.pendingCmds.length && n++ < 8) {
         const job = conn.pendingCmds.shift();
         const res = this._execCommand(conn, job);
+        const bundle = this._resultBundle(conn, res);
         this._send(conn, 'cmdres', {
           ref: job.seq, ok: !!res.ok,
-          error: res.ok ? undefined : String(res.error || 'rejected').slice(0, 128)
+          error: res.ok ? undefined : String(res.error || 'rejected').slice(0, 128),
+          result: bundle
         });
       }
     }
+  };
+
+  // Authoritative post-command mirrors: the acting client's own inventory
+  // plus its open container (if any). Immediate truthful feedback — UI does
+  // not wait for a periodic refresh.
+  NetServer.prototype._resultBundle = function (conn, res) {
+    if (!conn || !conn.player) return undefined;
+    const out = {};
+    if (res && res.ok && res.result && res.result.action != null) {
+      out.action = String(res.result.action).slice(0, 16);
+    }
+    out.inv = this._invOf(conn.player);
+    if (conn.container) {
+      const chest = this._chestPayload(conn.container.tx, conn.container.ty);
+      if (chest) out.chest = chest;
+    }
+    return out;
+  };
+
+  // Compact authoritative container snapshot for the wire (or null when the
+  // module is unavailable).
+  NetServer.prototype._chestPayload = function (tx, ty) {
+    if (!TC.Chests || typeof TC.Chests.get !== 'function') return null;
+    let slots;
+    try { slots = TC.Chests.get(tx, ty); } catch (e) { return null; }
+    if (!Array.isArray(slots)) return null;
+    const arr = [];
+    for (let i = 0; i < slots.length && i < 20; i++) {
+      const s = slots[i];
+      arr.push(s ? [String(s.id).slice(0, 64), s.count | 0] : null);
+    }
+    return { tx: tx | 0, ty: ty | 0, slots: arr };
   };
 
   NetServer.prototype._execCommand = function (conn, job) {
@@ -543,6 +579,62 @@
         c.tx = ctxP.tx | 0; c.ty = ctxP.ty | 0;
         break;
       }
+      case 'CraftRecipe': {
+        // Server resolves the recipe from the client's STABLE id only: the
+        // network intent never carries recipe bodies, station truth or
+        // progression state. Stations re-scan around the ACTING player.
+        const rid = String(ctxP.recipeId || '');
+        let idx = null;
+        if (TC.Registry && typeof TC.Registry.stableToIndex === 'function') {
+          try { idx = TC.Registry.stableToIndex('recipe', rid); } catch (e) { idx = null; }
+        }
+        if (idx == null || !(idx >= 0) || !Array.isArray(TC.RECIPES) ||
+            idx >= TC.RECIPES.length) {
+          this.stats.rejected.unknownCmd++;
+          return { ok: false, error: 'unknown-recipe' };
+        }
+        c.recipe = TC.RECIPES[idx];
+        c.inv = player.inventory;
+        c.stations = (TC.Crafting && typeof TC.Crafting.stationsNearby === 'function')
+          ? TC.Crafting.stationsNearby(player.x + player.w / 2, player.y + player.h / 2)
+          : undefined;
+        break;
+      }
+      case 'ShopBuy':
+      case 'ShopSell': {
+        // Eligibility gate BEFORE the transaction: an NPC of this type must
+        // actually be within interaction reach of the acting player.
+        const npcType = String(ctxP.npcType || '').slice(0, 32);
+        if (!this._shopEligible(player, npcType)) {
+          return { ok: false, error: 'no-shop-nearby' };
+        }
+        if (job.name === 'ShopBuy') {
+          c.npcType = npcType;
+          c.itemId = String(ctxP.itemId || '').slice(0, 64);
+        } else {
+          c.npcType = npcType;
+          c.slot = ctxP.slot | 0;
+          if (ctxP.count !== undefined) c.count = ctxP.count | 0;
+        }
+        break;
+      }
+      case 'ContainerMove': {
+        // Authorization rides the SERVER-BOUND container session (opened via
+        // a canonical InteractTile on a chest): clients cannot name arbitrary
+        // containers, only move within the session they opened in reach.
+        const tx = ctxP.tx | 0, ty = ctxP.ty | 0;
+        if (!conn.container || conn.container.tx !== tx || conn.container.ty !== ty) {
+          return { ok: false, error: 'no-container-session' };
+        }
+        c.tx = tx; c.ty = ty;
+        c.from = (ctxP.from === 1) ? 'inv' : 'chest';
+        c.to = (ctxP.to === 1) ? 'inv' : 'chest';
+        c.fromSlot = ctxP.fromSlot | 0;
+        // omitted toSlot => authoritative auto-placement (merge then empty)
+        if (ctxP.toSlot !== undefined) c.toSlot = ctxP.toSlot | 0;
+        if (ctxP.count !== undefined) c.count = ctxP.count | 0;
+        break;
+      }
       case 'UseItem': {
         c.slot = (ctxP.slot !== undefined) ? ctxP.slot | 0 : player.hotbarIndex;
         c.aimX = +ctxP.aimX || 0;
@@ -556,9 +648,34 @@
     }
 
     const r = TC.Commands.submit(job.name, c);
-    if (r && r.ok) this.stats.cmdsAccepted++;
-    else this.stats.cmdsRejected++;
+    if (r && r.ok) {
+      this.stats.cmdsAccepted++;
+      // Opening a chest through the canonical interaction binds THIS
+      // connection's container session (one at a time).
+      if (job.name === 'InteractTile' && r.result && r.result.action === 'chest') {
+        conn.container = { tx: c.tx, ty: c.ty };
+        conn.lastChestKey = null;   // force immediate content sync
+      }
+    } else this.stats.cmdsRejected++;
     return r || { ok: false, error: 'no-result' };
+  };
+
+  // Shop eligibility: an NPC whose kind matches npcType must exist within
+  // interaction reach of the acting player. Fail closed.
+  NetServer.prototype._shopEligible = function (player, npcType) {
+    if (!npcType || !TC.NPCs || !Array.isArray(TC.NPCs.list) || !player ||
+        typeof player.inReach !== 'function') return false;
+    for (let i = 0; i < TC.NPCs.list.length; i++) {
+      const n = TC.NPCs.list[i];
+      if (!n || n.dead) continue;
+      const kindDef = (typeof TC.NPCs.kindDef === 'function') ? TC.NPCs.kindDef(n.type) : null;
+      const isKind = n.type === npcType || (kindDef && kindDef.kind === npcType);
+      if (!isKind) continue;
+      const ntx = Math.floor((n.x + (n.w || 16) / 2) / TC.CONST.TS);
+      const nty = Math.floor((n.y + (n.h || 16) / 2) / TC.CONST.TS);
+      if (player.inReach(ntx, nty)) return true;
+    }
+    return false;
   };
 
   NetServer.prototype._heldToolOf = function (player) {
@@ -761,6 +878,21 @@
     }
     for (const conn of Array.from(this.conns.values())) {
       if (!conn.connected || !conn.player) continue;
+      // W23: expire container sessions that lost their chest tile or reach.
+      if (conn.container) {
+        const w = TC.world;
+        const stillChest = !!(w && w.get && TC.TILE &&
+          w.get(conn.container.tx, conn.container.ty) === TC.TILE.CHEST);
+        const cpx = Math.floor((conn.player.x + conn.player.w / 2) / TC.CONST.TS);
+        const cpy = Math.floor((conn.player.y + conn.player.h) / TC.CONST.TS);
+        const inReach = stillChest && typeof conn.player.inReach === 'function' &&
+          !!conn.player.inReach(conn.container.tx, conn.container.ty);
+        void cpx; void cpy;
+        if (!stillChest || !inReach) {
+          conn.container = null;
+          conn.lastChestKey = null;
+        }
+      }
       // 1. finish any pending initial/resync snapshot stream first
       if (this._snapshotStep(conn)) continue;
       // 2. refresh the interest set around the player's current position
@@ -791,11 +923,25 @@
         regions.push(line);
         this.stats.regionsSentDelta++;
       }
+      // W23: authoritative container sync rides worldupd only while a
+      // session is open AND its serialized contents changed (near-zero cost).
+      let chestLine;
+      if (conn.container) {
+        const cp = this._chestPayload(conn.container.tx, conn.container.ty);
+        if (cp) {
+          const key = JSON.stringify(cp);
+          if (key !== conn.lastChestKey) {
+            conn.lastChestKey = key;
+            chestLine = cp;
+          }
+        }
+      }
       this._send(conn, 'worldupd', {
         regions: regions,
         players: this._playerSnaps(),
         enemies: this._enemySnaps(conn),
         drops: this._dropSnaps(conn),
+        chest: chestLine,
         // periodic authoritative inventory refresh keeps the client's own
         // UI (hotbar/crafting) truthful without trusting client claims
         inv: (this._tick() % 30 === 0) ? this._invOf(conn.player) : undefined
