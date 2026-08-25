@@ -174,6 +174,15 @@
     const keep = [];
     if (this.localPid) keep.push(this.localPid);
     TC.Players.retainOnly(keep);
+    // Parked reconnect identities die with the session too (players + their
+    // private WorldRegions consumers) — nothing may outlive stop().
+    for (const [pid, conn] of Array.from(this.detached.entries())) {
+      TC.Players.remove(pid);
+      if (conn.consumerName && TC.WorldRegions && TC.WorldRegions.forget) {
+        try { TC.WorldRegions.forget(conn.consumerName); } catch (e) {}
+      }
+    }
+    this.detached.clear();
     this.conns.clear();
     this.running = false;
   };
