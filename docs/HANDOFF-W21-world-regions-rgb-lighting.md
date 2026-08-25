@@ -343,6 +343,21 @@ Per-journey standalone greens recorded during this session include Journey L
 (first pass plus three repeat-each greens), Journey B (post-hardening, 3/3
 repeat greens), and journeys D/E/F/G/H/I/J/K/A/C across earlier suites.
 
+### GitHub CI record
+
+The push triggered the repository's ci workflow (ubuntu-latest, Node 22,
+same validate gate). Run 32812683255 on b2ca7dd completed FAILURE at the
+combined Validate step; the failure-diagnostics artifact and job logs could
+not be retrieved from this session (gh token invalid; api/artifact endpoints
+401/403 plus intermittent network resets), so the failing assertions on CI
+are unidentified. Given local evidence - identical failures on the pristine
+baseline worktree under load, full-suite green with retries, and stable
+headless suites - the working hypothesis is the same host-independent
+wall-clock sensitivity affecting a rotating subset of journeys, but this is
+UNVERIFIED for the Linux runner. Follow-up: re-run via workflow_dispatch
+after gh auth login, or download the failure-diagnostics artifact (retention
+7 days), and fix whatever concrete assertion fails.
+
 ## Known limitations / deferred
 
 - PERF-003, save-diff index: deferred with evidence above.
