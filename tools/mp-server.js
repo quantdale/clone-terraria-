@@ -81,8 +81,18 @@ const httpServer = http.createServer((req, res) => {
     for (const rec of TC.Players.entries()) {
       players.push({ id: rec.id, x: Math.round(rec.player.x), y: Math.round(rec.player.y), hp: rec.player.hp });
     }
+    // W23: authoritative target attribution for observability (journey N
+    // proves enemies legitimately target non-primary players).
+    const enemies = (TC.Enemies && TC.Enemies.list || []).slice(0, 40).map((e) => ({
+      eid: e.eid, type: e.type,
+      x: Math.round(e.x), y: Math.round(e.y),
+      targetPid: (TC.Targets && TC.Targets.of) ? (() => {
+        const t = TC.Targets.of(e);
+        return t ? (TC.Players.idOf ? TC.Players.idOf(t) : null) : null;
+      })() : null,
+    }));
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ sid: started.sid, tick: server.summary().tick, players, drops }, null, 1));
+    res.end(JSON.stringify({ sid: started.sid, tick: server.summary().tick, players, enemies, drops }, null, 1));
     return;
   }
   res.writeHead(200, { "Content-Type": "text/plain" });

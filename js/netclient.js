@@ -688,7 +688,48 @@
       v: P.VERSION, t: 'cmd', sid: this.sid, pid: this.pid,
       cseq: ++this.cseqCmd, sseq: 0, tick: this.tickCount,
       p: { name: name, ctx: safe }
-    }) ? { ok: true } : { ok: false, error: 'encode-failed' };
+    }) ? { ok: true, pending: true } : { ok: false, error: 'encode-failed' };
+  };
+
+  // W23 intent router for canonical UI transactions while joined: maps a
+  // LOCAL transaction shape onto its bounded network form and returns
+  // {ok:true,pending:true} when proposed. The server's authoritative result
+  // bundle corrects the mirror within one round trip.
+  NetClient.prototype.sendIntent = function (name, ctx) {
+    const c = ctx || {};
+    switch (name) {
+      case 'CraftRecipe': {
+        let rid = null;
+        const idx = (TC.RECIPES && c.recipe) ? TC.RECIPES.indexOf(c.recipe) : -1;
+        if (idx >= 0 && TC.Registry && typeof TC.Registry.legacyToStable === 'function') {
+          try { rid = TC.Registry.legacyToStable('recipe', idx); } catch (e) { rid = null; }
+        }
+        if (!rid) return { ok: false, error: 'no-recipe-id' };
+        return this.sendCmd('CraftRecipe', { recipeId: String(rid).slice(0, 64) });
+      }
+      case 'ShopBuy':
+        return this.sendCmd('ShopBuy', {
+          npcType: String(c.npcType || '').slice(0, 32),
+          itemId: String(c.itemId || '').slice(0, 64)
+        });
+      case 'ShopSell':
+        return this.sendCmd('ShopSell', {
+          npcType: String(c.npcType || '').slice(0, 32),
+          slot: c.slot | 0,
+          count: (c.count == null) ? undefined : (c.count | 0)
+        });
+      case 'ContainerMove':
+        return this.sendCmd('ContainerMove', {
+          tx: c.tx | 0, ty: c.ty | 0,
+          from: c.from === 'inv' ? 1 : 0,
+          to: c.to === 'inv' ? 1 : 0,
+          fromSlot: c.fromSlot | 0,
+          toSlot: (c.toSlot == null) ? undefined : (c.toSlot | 0),
+          count: (c.count == null) ? undefined : (c.count | 0)
+        });
+      default:
+        return this.sendCmd(name, c);
+    }
   };
 
   // Real-input convenience intents (used by the developer join flow): mine /

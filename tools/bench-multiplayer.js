@@ -178,6 +178,121 @@ function main() {
     server.stop();
   }
 
+  // ---- scene: four idle clients ----
+  {
+    const server = freshSession(9006);
+    for (const nm of ["I1", "I2", "I3", "I4"]) joinDriver(server, nm);
+    timedRun(server, WARMUP, null);
+    const times = timedRun(server, TICKS, null);
+    const st = server.summary().stats;
+    reportScene("idle-4p", times, st.msgsOut / TICKS, st.bytesOut / (TICKS / 60));
+    server.stop();
+  }
+
+  // ---- scene: four clients moving continuously ----
+  {
+    const server = freshSession(9007);
+    const cs = ["M1", "M2", "M3", "M4"].map((nm) => joinDriver(server, nm));
+    timedRun(server, WARMUP, null);
+    let seq = 10;
+    const times = timedRun(server, TICKS, (i) => {
+      seq++;
+      cs.forEach((c, k) => {
+        c.drv.ep.feed({
+          v: P.VERSION, t: "input", sid: server.sid, pid: c.pid,
+          cseq: seq * 8 + k, sseq: 0, tick: i,
+          p: { btn: [(i + k * 10) % 60 < 30 ? 1 : -1, 0, 0], aimX: 0, aimY: 0 }
+        });
+      });
+    });
+    const st = server.summary().stats;
+    reportScene("move-4p", times, st.msgsOut / TICKS, st.bytesOut / (TICKS / 60));
+    server.stop();
+  }
+
+  // ---- scene: separated-interest exploration (4 players far apart) ----
+  {
+    const server = freshSession(9008);
+    const cs = ["E1", "E2", "E3", "E4"].map((nm) => joinDriver(server, nm));
+    // park each player ~150 tiles apart so interest sets are disjoint
+    cs.forEach((c, k) => {
+      const p = TC.Players.get(c.pid);
+      p.x += k * 150 * TS;
+    });
+    timedRun(server, WARMUP, null);
+    let seq = 10;
+    const times = timedRun(server, TICKS, (i) => {
+      seq++;
+      cs.forEach((c, k) => {
+        c.drv.ep.feed({
+          v: P.VERSION, t: "input", sid: server.sid, pid: c.pid,
+          cseq: seq * 8 + k, sseq: 0, tick: i,
+          p: { btn: [k % 2 ? 1 : -1, 0, 0], aimX: 0, aimY: 0 }
+        });
+      });
+    });
+    const st = server.summary().stats;
+    reportScene("separated-explore-4p", times, st.msgsOut / TICKS, st.bytesOut / (TICKS / 60));
+    server.stop();
+  }
+
+  // ---- scene: combat with multi-target AI ----
+  {
+    const server = freshSession(9009);
+    const a = joinDriver(server, "F1");
+    const b = joinDriver(server, "F2");
+    const pa = TC.Players.get(a.pid);
+    const pb = TC.Players.get(b.pid);
+    for (let k = 0; k < 12; k++) {
+      TC.Enemies.spawnEnemy("green_slime", pa.x - 80 + k * 14, pa.y - 40);
+      TC.Enemies.spawnEnemy("blue_slime", pb.x - 60 + k * 12, pb.y - 40);
+    }
+    timedRun(server, WARMUP, null);
+    let seq = 10;
+    const times = timedRun(server, TICKS, (i) => {
+      seq++;
+      a.drv.ep.feed({ v: P.VERSION, t: "input", sid: server.sid, pid: a.pid,
+        cseq: seq * 8, sseq: 0, tick: i,
+        p: { btn: [1, 0, 0], aimX: pa.x + 60, aimY: pa.y } });
+      b.drv.ep.feed({ v: P.VERSION, t: "input", sid: server.sid, pid: b.pid,
+        cseq: seq * 8 + 1, sseq: 0, tick: i,
+        p: { btn: [-1, 0, 0], aimX: pb.x - 60, aimY: pb.y } });
+    });
+    const st = server.summary().stats;
+    reportScene("combat-multi-2p", times, st.msgsOut / TICKS, st.bytesOut / (TICKS / 60));
+    server.stop();
+  }
+
+  // ---- scene: craft/shop transaction burst ----
+  {
+    const server = freshSession(9010);
+    const a = joinDriver(server, "Tx1");
+    timedRun(server, WARMUP, null);
+    let cmdSeq = 100;
+    let rid = null;
+    if (TC.Registry && TC.Registry.legacyToStable) {
+      try { rid = TC.Registry.legacyToStable("recipe", 0); } catch (e) { rid = null; }
+    }
+    const times = timedRun(server, TICKS, (i) => {
+      if (i % 3 === 0 && rid) {
+        a.drv.ep.feed({ v: P.VERSION, t: "cmd", sid: server.sid, pid: a.pid,
+          cseq: cmdSeq++, sseq: 0, tick: i,
+          p: { name: "CraftRecipe", ctx: { recipeId: rid } } });
+      } else if (i % 3 === 1) {
+        a.drv.ep.feed({ v: P.VERSION, t: "cmd", sid: server.sid, pid: a.pid,
+          cseq: cmdSeq++, sseq: 0, tick: i,
+          p: { name: "ShopBuy", ctx: { npcType: "merchant", itemId: "torch" } } });
+      } else {
+        a.drv.ep.feed({ v: P.VERSION, t: "cmd", sid: server.sid, pid: a.pid,
+          cseq: cmdSeq++, sseq: 0, tick: i,
+          p: { name: "MoveItem", ctx: { fromSlot: 0, toSlot: 20 } } });
+      }
+    });
+    const st = server.summary().stats;
+    reportScene("tx-burst-craft-shop", times, st.msgsOut / TICKS, st.bytesOut / (TICKS / 60));
+    server.stop();
+  }
+
   // ---- one-client vs two-client comparison ----
   function avgTickMedian(clientCount) {
     const server = freshSession(9005 + clientCount);
@@ -195,5 +310,10 @@ function main() {
     (((two - one) / Math.max(one, 1e-9)) * 100).toFixed(0) + "%)"
   );
 }
+
+  console.log(
+    'W22 baseline (same machine class): idle-2p 86.0 KiB/s | move-2p 85.8 | ' +
+    'mine-burst 47.9 | resync-churn 25.9 KiB/s'
+  );
 
 main();
