@@ -816,3 +816,89 @@ persistence of locale AND world, fallback return).
 - Coin purse notation (`1g 23s 45c`) remains a compact unit format rather
   than a word-order-sensitive template.
 - Translator workflow/export tooling does not exist yet.
+
+---
+
+## 25. Campaign contracts (W21 — World Regions, RGB Lighting, Performance)
+
+### Canonical region invalidation authority (worldregions.js, W21 / PERF-004)
+
+TC.WorldRegions is THE single authority for world-region invalidation.
+Geometry: 32x32-tile regions (CHUNK), index = cy*chunksX+cx. Monotonic
+per-region revisions + per-consumer delivery queues + per-region last-seen
+arrays give the multi-consumer invariant: no consumer can steal or clear
+another's invalidation; an entry stays queued for its owner until that owner
+observes it. Marks carry a reason ('tile'|'wall'|'shape'|'paint'|'liquid'|
+'bulk'|'world'); pendingKinds(idx) exposes the pending bitmask (cleared when
+the last consumer observes). Marks are O(consumers); sweeps scan only the
+consumer's own queue with a reused scratch buffer; constant-time fast path
+when nothing was marked since its last clean sweep. Headless and Canvas-free.
+Stable identity + monotonic revisions are the documented substrate for
+future NET-004 replication/ack work (not implemented).
+
+Mutation seams (authoritative paths report here): World.set/setRaw/setWall/
+setRawWall/setShape/setPaint/rawSetTile and Liquids' change notes; world
+build runs init() then markAll('world'); unload runs reset().
+TileChanged/LiquidChanged events remain unchanged.
+
+### Renderer on the shared authority (world.js, W21 / VIS-002)
+
+The chunk renderer is consumer 'renderer': bounded (3/frame) camera-nearest
+rebuilds of stale regions; legacy border fan-out lives in
+WorldRegions.markTile. Instrumentation: World.regionStats().
+
+### RGB lighting (lighting.js, W21 / LGT-001)
+
+Three Float32 channels per window cell: propagated field (sky ambient +
+colored emissive tiles, 4-dir BFS decaying by opacity) and display layer
+(field + dynamic sources). Authored colors: warm-day/moon-blue sky mix,
+per-emitter tints keyed by frozen def.name (torch/furnace/lava/gleamstone/
+gleam crystal/life crystal), neutral-white fallback. Queries: lightAt =
+Rec.709 luminance (legacy-compatible), lightRgbAt additive. INVALIDATION:
+region-driven partial recomputes of halo-expanded rects (HALO =
+ceil(1/decayAir)+2 >= max propagation distance makes rect-local BFS exact);
+full reseeds only on window movement (8-tile aligned), daylight quantum
+(2%), world swap/init or missing infrastructure. Deterministic BFS. Dynamic
+sources: 64-slot pool, optional '#rrggbb' color (5-arg form stays neutral
+white), max-blend stamping with union reset and static-layout skip. Quality
+profiles low|medium|high scale ONLY overlay raster step (3/2/1) and dynamic-
+merge cadence (15/30/60 Hz); queried values are identical across profiles;
+selection via TC.Lighting.setQuality, persisted in tc_settings_v1
+('lightingQuality'), default from CONST.LIGHT_QUALITY. Counters:
+TC.Lighting.counters().
+
+### Minimap on regions (minimap.js, W21)
+
+Consumer 'minimap': hidden means zero paints and frozen cursor (catch-up at
+<=24 regions/frame on reveal); terrain/wall/liquid marks repaint only their
+regions; world swap forces fresh full paint. Underworld depth cutoff uses
+TC.Biomes.underworldTopPx(); ocean margin uses new pure
+TC.Biomes.oceanEdge(). Localized label unchanged (W20).
+
+### Benchmarks (tools/bench-scenarios.js, W21 / PERF-002)
+
+Ten named scenes through the real VM loader with warmup + medians:
+exploration, construction, combat-dense, projectiles, lighting-stress,
+dynamic-lights, liquids, minimap, save-diff, worldgen. Stub-context
+(simulation/dispatch) numbers — explicitly NOT browser raster. Measured-and-
+deferred with evidence: PERF-003 spatial broad phase (~3-5us/enemy linear;
+production cap 8) and save-diff incremental indexing (~2ms once per 30s
+autosave).
+
+### Save impact
+
+None to formats/providers/atomicity; round-trip proven byte-exact under hot
+presentation state. Lighting quality persists via tc_settings_v1 (W20
+settings envelope), never inside saves. Registry fingerprint unchanged
+(bdad6cfa, 368 ids).
+
+### Test coverage added
+
+- tests/core/worldregions.test.js — authority invariants incl. drain-race.
+- tests/core/lighting-rgb.test.js — RGB model, compat, profiles, determinism.
+- tests/world/minimap-regions.test.js — region-driven refresh contract.
+- tests/core/w21-integration.test.js — seam fan-out, no-steal, cascades,
+  determinism under presentation churn, hot-state save round-trip.
+- tests/browser/journey-l-regions-lighting.spec.js — real-browser journey
+  (day/night rendering, torch field, violet dynamic source, minimap
+  locality, quality persistence, reload fingerprint equality).

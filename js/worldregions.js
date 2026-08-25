@@ -9,31 +9,29 @@
 
    MULTI-CONSUMER INVARIANT (the reason this module exists):
    Consumers can NEVER steal invalidations from each other. There is no
-   shared dirty Set to drain. Instead every region carries a monotonic
-   revision counter; each registered consumer remembers the revision it last
-   observed PER REGION. A region modified once stays observably dirty to
-   every consumer until THAT consumer accounts for it:
+   shared dirty Set to drain. Each region carries a monotonic revision
+   counter; each registered consumer keeps its OWN delivery queue and a
+   per-region last-seen revision. A region modified once is queued for
+   EVERY consumer and stays queued until THAT consumer observes it:
 
-     rev[i]++ on mark            (coalescing: repeated marks before an
-                                  observation collapse into one bump)
-     consumer.seen[i] == rev[i]  -> consumer is current for region i
-     consumer.observe(i)         -> seen[i] = rev[i]  (only this consumer)
+     mark -> rev[i]++ ; queue push per consumer (deduped by flag)
+     observe(i) by one consumer never touches another's queue
+
+   Repeated marks before an observation coalesce into a single delivered
+   entry; an entry an observer skips stays queued (its owner re-scans its
+   whole queue cheaply and filters by seen[]).
 
    Change classification: marks carry a reason ('tile'|'wall'|'shape'|
    'paint'|'liquid'|'bulk'|'world'); the pending kind-bitmask per region is
    readable while the region is stale for at least one consumer and clears
    automatically once everyone caught up. Per-reason totals feed stats().
 
-   Networking readiness (NET-004 prerequisites, documented not implemented):
-   stable region identity (cx,cy,index geometry), monotonic per-region
-   revisions suitable for ack/replication cursors, deterministic reason
-   classification, zero Canvas/DOM dependency, headless-safe.
-
-   Border fan-out: markTile reproduces the legacy renderer rule — a cell on
-   a region border also invalidates the neighbouring region because tile
-   edge framing reads across the boundary. markCell marks strictly one
-   region (liquids/minimap-style consumers use this through their own
-   halos). */
+   Cost model: marks are O(consumers); sweeps are O(consumer's own queue);
+   queues compact lazily when scanned length dwarfs real backlog. Zero
+   Canvas/DOM dependency; headless-safe. Networking readiness (NET-004
+   prerequisites, documented not implemented): stable region identity,
+   monotonic revisions suitable for ack/replication cursors, deterministic
+   reason classification. */
 'use strict';
 (function () {
   const TC = window.TC = window.TC || {};
@@ -53,9 +51,7 @@
     bumps: 0,           // total mark operations accepted
     sweeps: 0,          // consumer dirty-scans served
     marksByReason: {},  // reason -> lifetime count
-    consumers: new Map(),// name -> consumer record
-    touched: [],        // unique region indices bumped since last compaction
-    _touchedFlag: null  // Uint8Array(count) membership dedupe for touched[]
+    consumers: new Map()// name -> consumer record
   };
   for (const k of REASONS) R.marksByReason[k] = 0;
 
@@ -79,8 +75,6 @@
     R.rev = new Uint32Array(R.count);
     R.kinds = new Uint8Array(R.count);
     R.outstanding = new Uint16Array(R.count);
-    R._touchedFlag = new Uint8Array(R.count);
-    R.touched.length = 0;
     for (const rec of R.consumers.values()) allocConsumer(rec);
     R.markAll('world');
     return true;
@@ -92,7 +86,6 @@
     R.world = null;
     R.chunksX = 0; R.chunksY = 0; R.count = 0;
     R.rev = null; R.kinds = null; R.outstanding = null;
-    R.touched.length = 0; R._touchedFlag = null;
   };
 
   // ---- mapping ----
@@ -110,44 +103,20 @@
   };
 
   // ---- marking ----
-  function pushTouched(idx) {
-    if (R._touchedFlag[idx]) return;
-    R._touchedFlag[idx] = 1;
-    R.touched.push(idx);
-  }
-  // Rebuild touched[] from still-outstanding regions (those at least one
-  // consumer has not observed yet). Everything else drops out and its flag
-  // clears so a future mark re-registers it. Consumer cursors reset to 0:
-  // kept entries may be redelivered, and the per-consumer seen[] filter
-  // makes redelivery harmless.
-  function compactTouched() {
-    R.touched.length = 0;
-    R._touchedFlag.fill(0);
-    let n = 0;
-    for (let i = 0; i < R.count; i++) {
-      if (R.outstanding[i] > 0) { R._touchedFlag[i] = 1; R.touched.push(i); n++; }
-    }
-    for (const rec of R.consumers.values()) rec._cursor = 0;
-    return n;
-  }
   function bump(idx, bit) {
-    // Which consumers were CURRENT before the revision moves? Exactly they
-    // become stale now — their pending counters grow by one. Already-stale
-    // consumers keep their single outstanding entry (coalescing).
-    const wasCurrent = [];
-    for (const rec of R.consumers.values()) {
-      wasCurrent.push(rec.seen[idx] === R.rev[idx]);
-    }
-    R.rev[idx]++;
+    // Consumers whose seen[] equals the PREVIOUS revision were current and
+    // become stale now: their pending counter grows by one and the region
+    // joins their personal delivery queue (unless already queued there).
+    // Already-stale consumers keep their single queued entry (coalescing).
+    const old = R.rev[idx];
+    R.rev[idx] = old + 1;
     R.bumps++;
     R.outstanding[idx] = R.consumers.size;
     R.kinds[idx] |= bit;
-    let k = 0;
     for (const rec of R.consumers.values()) {
-      if (wasCurrent[k]) rec.pending++;
-      k++;
+      if (!rec.qFlag[idx]) { rec.qFlag[idx] = 1; rec.queue.push(idx); }
+      if (rec.seen[idx] === old) rec.pending++;
     }
-    if (R._touchedFlag) pushTouched(idx);
   }
   function markIdx(idx, reason) {
     if (idx < 0 || !R.rev) return;
@@ -180,8 +149,7 @@
 
   // Inclusive tile rectangle, clamped to the world.
   R.markRect = function (x0, y0, x1, y1, reason) {
-    if (!R.rev) return 0;
-    if (!R.world) return 0;
+    if (!R.rev || !R.world) return 0;
     x0 = Math.max(0, x0 | 0); y0 = Math.max(0, y0 | 0);
     x1 = Math.min(R.world.width - 1, x1 | 0);
     y1 = Math.min(R.world.height - 1, y1 | 0);
@@ -219,83 +187,80 @@
 
   // ---- consumers ----
   function allocConsumer(rec) {
-    // Fresh cursors start at revision zero: every region whose rev has moved
+    // Fresh seen[] starts at revision zero: every region whose rev has moved
     // is stale for THIS consumer. Reconcile the shared bookkeeping here so
     // consumers registering after a world build (init's markAll runs with
-    // zero consumers) still make their stale regions outstanding and
-    // visible to incremental delivery.
+    // zero consumers) still make their stale regions outstanding and queued
+    // in their OWN delivery queue.
     rec.seen = new Uint32Array(R.count);
     rec.pending = 0;
+    rec.queue = [];
+    rec.qFlag = new Uint8Array(R.count);
+    rec._buf = [];
     const rev = R.rev;
     for (let i = 0; i < R.count; i++) {
       if (rec.seen[i] !== rev[i]) {
         rec.pending++;
         R.outstanding[i]++;
-        pushTouched(i);
+        rec.qFlag[i] = 1;
+        rec.queue.push(i);
       }
     }
-    rec._bumpAtLastSweep = -1;
     rec._clean = false;
-    rec._fullScan = true;                // first sweep reads every region
-    rec._cursor = 0;                     // incremental position in touched[]
+    rec._bumpAtLastSweep = -1;
   }
 
   // Register a named consumer. Re-registering a name returns the existing
-  // handle (idempotent). Handles are plain objects exposing the observation
-  // API; they hold no reference that leaks world data beyond the cursor.
+  // handle (idempotent).
   R.consume = function (name) {
     let rec = R.consumers.get(name);
     if (rec) return rec.api;
-    rec = { name: name, seen: null, pending: 0, lastSweepBumps: -1 };
+    rec = { name: name, seen: null, pending: 0 };
     if (R.rev) allocConsumer(rec);
     R.consumers.set(name, rec);
     rec.api = {
       name: name,
       isDirty: function (idx) {
-        return !!(R.rev && R.outstanding && R.outstanding[idx] > 0 &&
-                  rec.seen && rec.seen[idx] !== R.rev[idx]);
+        return !!(rec.seen && R.rev && rec.seen[idx] !== R.rev[idx]);
       },
       pendingCount: function () { return rec.pending; },
       revision: function () { return R.revision; },
-      // Indices of stale regions for THIS consumer, ascending.
-      //
-      // Incremental delivery: each consumer keeps a cursor into the shared
-      // touched[] list, so a sweep costs O(newly-touched regions), not
-      // O(all regions). Entries delivered but deliberately not observed
-      // (lighting regions outside its window) are handled by the rare
-      // staleAll() full rescan on window moves — they are never lost.
-      // Fast path: nothing marked since this consumer's last clean sweep
-      // costs constant time.
+      // Indices of stale regions for THIS consumer, ascending, from this
+      // consumer's personal queue. The returned array is a reused scratch
+      // buffer owned by the handle: valid until the next dirtyRegions()/
+      // staleAll() call on it. Entries the consumer does not observe stay
+      // queued — nothing is ever lost by under-processing a delivery.
       dirtyRegions: function () {
         if (!R.rev || !rec.seen) return [];
         if (rec._clean && rec._bumpAtLastSweep === R.bumps) return [];
         R.sweeps++;
-        const out = [];
-        const seen = rec.seen, rev = R.rev;
-        if (rec._fullScan || R.touched.length >= R.count) {
-          for (let i = 0; i < R.count; i++) {
-            if (seen[i] !== rev[i]) out.push(i);
-          }
-          rec._fullScan = false;
-          rec._cursor = R.touched.length;
-          if (R.touched.length >= R.count) compactTouched();
-        } else {
-          const t = R.touched;
-          let k = rec._cursor;
-          if (k > t.length) k = t.length;
-          for (; k < t.length; k++) {
-            const i = t[k];
-            if (seen[i] !== rev[i]) out.push(i);
-          }
-          rec._cursor = t.length;
+        const buf = rec._buf || (rec._buf = []);
+        buf.length = 0;
+        const q = rec.queue, seen = rec.seen, rev = R.rev;
+        let live = 0;
+        for (let k = 0; k < q.length; k++) {
+          const i = q[k];
+          if (seen[i] !== rev[i]) { buf.push(i); live++; }
         }
-        rec._clean = out.length === 0;
+        // Lazy compaction: when fully-observed junk dwarfs real backlog,
+        // drop observed entries and release their queue slots so future
+        // marks re-register them.
+        if (q.length > 64 && live * 2 <= q.length) {
+          const kept = [];
+          for (let k = 0; k < q.length; k++) {
+            const i = q[k];
+            if (seen[i] !== rev[i]) kept.push(i);
+            else rec.qFlag[i] = 0;
+          }
+          rec.queue = kept;
+        }
+        rec._clean = buf.length === 0;
         rec._bumpAtLastSweep = R.bumps;
-        return out;
+        return buf;
       },
-      // Direct O(regions) scan ignoring the cursor — for rare structural
+      // Direct O(regions) scan ignoring the queue — for rare structural
       // paths (light-window moves, world swaps) that must see every stale
-      // region regardless of delivery history. Does not advance anything.
+      // region regardless of queue history.
       staleAll: function () {
         if (!R.rev || !rec.seen) return [];
         const out = [];
@@ -305,7 +270,9 @@
         }
         return out;
       },
-      // Observe one region: only THIS consumer's cursor moves.
+      // Observe one region: only THIS consumer's slot bookkeeping moves.
+      // The queue entry stays parked (flag stays set) so future marks of
+      // the same region coalesce into the existing slot until compaction.
       observe: function (idx) {
         if (!R.rev || !rec.seen) return;
         if (rec.seen[idx] === R.rev[idx]) return;
@@ -319,14 +286,20 @@
       },
       observeAll: function () {
         if (!R.rev || !rec.seen) return;
-        for (let i = 0; i < R.count; i++) rec.seen[i] = R.rev[i];
+        const seen = rec.seen, rev = R.rev;
         for (let i = 0; i < R.count; i++) {
-          if (R.outstanding[i] > 0) {
-            R.outstanding[i]--;
-            if (R.outstanding[i] === 0) R.kinds[i] = 0;
+          if (seen[i] !== rev[i]) {
+            seen[i] = rev[i];
+            rec.pending = Math.max(0, rec.pending - 1);
+            if (R.outstanding[i] > 0) {
+              R.outstanding[i]--;
+              if (R.outstanding[i] === 0) R.kinds[i] = 0;
+            }
           }
         }
         rec.pending = 0;
+        rec._clean = true;
+        rec._bumpAtLastSweep = R.bumps;
       }
     };
     return rec.api;
@@ -339,6 +312,8 @@
     if (R.outstanding) {
       for (let i = 0; i < R.count; i++) if (R.outstanding[i] > 0) stale++;
     }
+    const queues = {};
+    for (const [name, rec] of R.consumers) queues[name] = rec.queue.length;
     return {
       regions: R.count,
       chunksX: R.chunksX, chunksY: R.chunksY,
@@ -346,6 +321,7 @@
       sweeps: R.sweeps,
       staleRegions: stale,
       consumers: [...R.consumers.keys()],
+      queues: queues,
       marksByReason: Object.assign({}, R.marksByReason)
     };
   };

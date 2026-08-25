@@ -460,6 +460,9 @@
   // Structural refresh driven by the shared region authority: expand each
   // stale region intersecting the window by the propagation halo, merge
   // overlapping rects, recompute each once, observe what we consumed.
+  // Entries OUTSIDE the window are observed too, deliberately: they cannot
+  // affect the current field (halo isolation) and any future reveal runs
+  // through a window move, which forces a full reseed of everything shown.
   Lighting.regionRefresh = function () {
     const cons = this._consumer;
     if (!cons) return false;
@@ -475,7 +478,13 @@
       const rx0 = cc.cx * WR.CHUNK, ry0 = cc.cy * WR.CHUNK;
       const rx1 = rx0 + WR.CHUNK - 1, ry1 = ry0 + WR.CHUNK - 1;
       if (rx1 < this.x0 - HALO || rx0 > wx1 + HALO ||
-          ry1 < this.y0 - HALO || ry0 > wy1 + HALO) continue; // outside view+halo
+          ry1 < this.y0 - HALO || ry0 > wy1 + HALO) {
+        // outside view+halo: nothing to recompute now; covered on reveal by
+        // the window-move full reseed. Observe so the queue drains.
+        cons.observe(idx);
+        counters.regionsObserved++;
+        continue;
+      }
       rects.push({
         x0: Math.max(this.x0, rx0 - HALO),
         y0: Math.max(this.y0, ry0 - HALO),

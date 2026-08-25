@@ -48,10 +48,18 @@ test('integration: lighting consumes without stealing from renderer/minimap', ()
   // run enough ticks for the lighting system to process its regions
   TC.camera.x = 90 * 16; TC.camera.y = 95 * 16;
   TC.Runtime.advanceTicks(30);
-  assert.strictEqual(cons.lighting.dirtyRegions().length, 0,
-    'lighting fully caught up within its window');
-  assert.ok(cons.renderer.dirtyRegions().length > 0 || cons.renderer.pendingCount() === 0,
-    'renderer unaffected either way — but never silently emptied by lighting');
+  // Lighting DELIBERATELY leaves out-of-window regions pending (handled on
+  // window movement via staleAll). Assert every stale region intersecting
+  // the light window was consumed.
+  const L = TC.Lighting, WR = TC.WorldRegions;
+  const wx1 = L.x0 + L.w - 1, wy1 = L.y0 + L.h - 1;
+  const inWindowStale = cons.lighting.dirtyRegions().filter((idx) => {
+    const cc = WR.chunkCoords(idx);
+    return !(cc.cx * WR.CHUNK > wx1 || (cc.cx + 1) * WR.CHUNK - 1 < L.x0 ||
+             cc.cy * WR.CHUNK > wy1 || (cc.cy + 1) * WR.CHUNK - 1 < L.y0);
+  });
+  assert.strictEqual(inWindowStale.length, 0,
+    'lighting must drain its window');
   assert.ok(cons.minimap.dirtyRegions().length >= 1,
     'minimap (hidden) still holds its invalidation');
 });

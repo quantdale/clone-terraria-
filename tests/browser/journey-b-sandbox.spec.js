@@ -48,10 +48,22 @@ test.describe("journey B — core sandbox", () => {
     // ---- jump ----
     const groundY = (await H.gameState(page)).playerPos.y;
     await page.keyboard.down("Space");
-    await H.runFrames(page, 12);
+    // Pacing-independent rise check (host-speed robust): poll each frame
+    // for peak height instead of trusting a fixed frame count to land
+    // mid-air — headless rAF cadence varies several-fold across hosts.
+    const minY = await page.evaluate((gY) => new Promise((resolve) => {
+      const p = window.TC.player;
+      let frames = 0;
+      let best = p.y;
+      (function t() {
+        frames++;
+        if (p.y < best) best = p.y;
+        if (frames >= 45 || gY - best > 10) return resolve(best);
+        requestAnimationFrame(t);
+      })();
+    }), groundY);
     await page.keyboard.up("Space");
-    const airY = (await H.gameState(page)).playerPos.y;
-    expect(groundY - airY, "jump must lift the player").toBeGreaterThan(10);
+    expect(groundY - minY, "jump must lift the player").toBeGreaterThan(10);
     await H.runFrames(page, 60); // settle back to ground
 
     // ---- mine the tile underfoot ----

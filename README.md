@@ -48,7 +48,9 @@ npm run validate    # syntax + tests + build + build-verify + browser suite
   water/lava pockets, underworld.
 - Tile shapes: platforms, half-blocks and slopes with hammer reshaping; background wall
   layer (mineable, persisted); flowing water/lava/honey on an independent volume layer
-  with buckets; flood-fill lighting with dynamic light sources.
+  with buckets; RGB lighting — colored emissive tiles (torches, lava, gleam), colored
+  dynamic sources (magic bolts, falling stars, explosions), day/night ambient tint and
+  quality profiles (low/medium/high via `TC.Lighting.setQuality`).
 
 ### Progression & combat
 
@@ -107,10 +109,11 @@ js/systems.js         update-phase scheduler + render layers + boot tasks
 js/savecore.js        versioned save envelope, providers, atomic IO
 js/commands.js        canonical player/system transactions
 js/worldgen.js        deterministic pass-based world generation
-js/world.js           tile/wall storage, chunks, mining damage, support rules
+js/world.js           tile/wall storage, chunk rendering, mining damage, support rules
+js/worldregions.js    canonical world-region invalidation authority (multi-consumer)
 js/tiles.js           procedural tile/wall rendering, shapes, platforms
 js/liquids.js         independent liquid layer (water/lava/honey)
-js/lighting.js        flood-fill light propagation + overlay
+js/lighting.js        RGB light propagation (colored sources) + overlay
 js/sky.js             day/night cycle, celestial bodies, weather visuals
 js/biomes.js          biome detection, tints, spawn overrides
 js/input.js           keyboard/mouse state, cursor

@@ -53,7 +53,7 @@ unless the change is a short-lived, documented migration shim with:
 2. tests proving behavior;
 3. an explicit follow-up task for removal.
 
-New/refactored functionality should use supported contracts such as commands, events, stat providers, persistence providers, content registries, render layers, and explicit system update phases.
+New/refactored functionality should use supported contracts such as commands, events, stat providers, persistence providers, content registries, render layers, world-region invalidation via `TC.WorldRegions` (W21), and explicit system update phases.
 
 ### 4.2 Stable content identity
 

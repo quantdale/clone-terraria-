@@ -44,12 +44,19 @@ localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
 | Inventory/crafting | INV-001/002, CRF-001/002 | DONE (progression-aware recipe conditions included; craft clicks route through CraftRecipe transactions) |
 | NPCs/towns | NPC-001..NPC-004 | DONE (housing, shops, context dialog; condition-gated unlocks/stock) |
 | Localization | LOC-001..LOC-003 | DONE (W20: canonical `TC.Localization` runtime + `TC.Settings` preference store; English fallback catalog covers all displayable content/UI/dialogue; registry identity frozen and regression-guarded; pseudo-locale stress mode; full headless + browser coverage; see ARCHITECTURE.md §24). Actual additional-language catalogs remain TODO (LOC follow-ups below) |
+| World regions / RGB lighting / benchmarks (W21) | PERF-004, VIS-002, LGT-001, LGT-002(re), PERF-002 | DONE (`TC.WorldRegions` canonical multi-consumer invalidation authority; renderer+lighting+minimap are independent consumers; RGB lighting production-integrated with colored emissive + dynamic sources and quality profiles via `TC.Lighting.setQuality`/TC.Settings; minimap region-driven with catch-up; `tools/bench-scenarios.js` ten-scene harness with before/after evidence — see ARCHITECTURE.md §25 and docs/HANDOFF-W21-world-regions-rgb-lighting.md). PERF-003 measured-but-deferred (evidence in handoff); save-diff optimization measured-and-deferred (~2ms/op once per autosave). |
 | Rendering/lighting/audio depth | VIS/LGT/ART/AUD epics | LGT-002 done (dynamic lights); rest TODO/P2 |
 | Performance | PERF-001 | DONE (TC.Debug instrumentation + F3 overlay); PERF-002 partially covered by `tools/bench-runtime.js` fixed-step benchmark; PERF-003..005 TODO |
 | Multiplayer | NET-001..004 | TODO (P2; W18 delivered the NET-001 precondition: headless simulation via TC.Runtime — full runner/networking still TODO) |
 | Extensibility/mods | MOD-001..004 | TODO |
 
-### Newly discovered follow-ups (updated W20)
+### Newly discovered follow-ups (updated W21)
+
+- **W21 perf follow-ups:** browser-measured (real raster) benchmark variant;
+  settings-menu exposure for the lighting quality profile (needs localized
+  labels); chunk-canvas reuse across worlds; NET-004 prototype on top of
+  WorldRegions revisions. Journey wall-clock calibration remains sensitive to
+  host load (see the W21 handoff environment caveat).
 
 - **Localization follow-ups (LOC epic closed, translation work open):**
   authoring real secondary-language catalogs (`js/locales/<id>.js` — the
