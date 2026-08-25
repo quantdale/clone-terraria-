@@ -136,7 +136,7 @@
     input: ['btn', 'aimX', 'aimY', 'use', 'slot'],
     cmd: ['name', 'ctx'],
     cmdres: ['ref', 'ok', 'error', 'result'],
-    worldupd: ['regions', 'players', 'enemies', 'drops', 'inv', 'chest', 'rm'],
+    worldupd: ['regions', 'players', 'enemies', 'drops', 'inv', 'chest', 'rm', 'inSeq'],
     ack: ['upto', 'regions'],
     resync: ['reason'],
     bye: ['reason']
@@ -327,6 +327,7 @@
       if (p.inv !== undefined && !validSlots(p.inv)) return 'bad inv';
       if (p.chest !== undefined && !validChest(p.chest)) return 'bad chest';
       if (p.rm !== undefined && !validRm(p.rm)) return 'bad rm';
+      if (p.inSeq !== undefined && !uint(p.inSeq, 0xffffffff)) return 'bad inSeq';
       return null;
     },
     ack(p) {

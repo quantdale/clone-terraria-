@@ -1122,7 +1122,10 @@
         drops: dLines,
         rm: rmCount > 0 ? ent.rm : undefined,
         chest: chestLine,
-        inv: invLine
+        inv: invLine,
+        // prediction reconciliation: the client trims its input history to
+        // this mark (server-processed input sequence)
+        inSeq: conn.lastInputSeq | 0
       });
       outBytesThisTick += 2048 + regions.length * 1024 + ent.lines.length * 64;
       this.stats.updMsgsSent++;

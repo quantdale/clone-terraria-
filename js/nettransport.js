@@ -131,6 +131,136 @@
     return { a: a, b: b, hop: hop };
   }
 
+  // ---- impaired loopback (W23 latency/jitter harness) ----
+  // Deterministic virtual-time wire: frames depart on send(), arrive when
+  // pump() advances the virtual clock past their scheduled delivery time.
+  // Impairments are driven by a seeded PRNG so failure traces reproduce.
+  //   opts.latencyMs      one-way base delay
+  //   opts.jitterMs       +- uniform jitter
+  //   opts.dropRate       0..1 fraction of frames swallowed
+  //   opts.dupRate        0..1 fraction duplicated
+  //   opts.reorderChance  0..1 chance a frame swaps with its predecessor
+  //   opts.seed           PRNG seed (deterministic traces)
+  // Manual controls: pump(dtMs), stall(ms), resume(), plus per-side
+  // close() honoring the endpoint contract.
+  function mulberry(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function makeImpairedSide(label, q) {
+    const ep = endpointBase('impaired:' + label);
+    ep.open = true;
+    ep._q = q;
+    ep.send = function (s) {
+      if (!ep.open || typeof s !== 'string') return false;
+      q.push(String(s));
+      return true;
+    };
+    ep.close = function () {
+      if (!ep.open) return;
+      ep.open = false;
+      ep.qOut.length = 0;
+      ep._emitStatus('closed');
+    };
+    ep.qOut = [];
+    return ep;
+  }
+
+  function impairedPair(opts) {
+    const o = Object.assign({
+      latencyMs: 60, jitterMs: 15, dropRate: 0,
+      dupRate: 0, reorderChance: 0, seed: 1
+    }, opts || {});
+    const rng = mulberry(o.seed | 0);
+    let now = 0;
+    let stallUntil = -1;
+
+    function mkDir(peerSide) {
+      const flight = [];              // [{at, frame}]
+      let lastSched = -1;             // per-direction FIFO floor (TCP-like)
+      return {
+        peer: peerSide,
+        flight: flight,
+        depart(frame) {
+          if (rng() < o.dropRate) return;            // swallowed
+          const copies = (rng() < o.dupRate) ? 2 : 1;
+          for (let c = 0; c < copies; c++) {
+            let at = now + Math.max(0, o.latencyMs +
+              (o.jitterMs > 0 ? (rng() * 2 - 1) * o.jitterMs : 0));
+            if (copies > 1) at += 8 * (c + 1);       // duplicates trail
+            // reliable-ordered semantics: jitter delays a frame but never
+            // moves it ahead of an older one unless reorderChance says so.
+            if (at < lastSched && !(flight.length && rng() < o.reorderChance)) {
+              at = lastSched;
+            }
+            lastSched = at;
+            flight.push({ at: at, frame: frame });
+          }
+        },
+        deliverDue() {
+          if (!this.peer || !this.peer.open) { flight.length = 0; return 0; }
+          if (now < stallUntil) return 0;
+          let n = 0;
+          let guard = 4096;
+          while (flight.length && guard-- > 0) {
+            let minI = -1, minAt = Infinity;
+            for (let i = 0; i < flight.length; i++) {
+              if (flight[i].at < minAt) { minAt = flight[i].at; minI = i; }
+            }
+            if (minI < 0 || minAt > now) break;
+            const f = flight.splice(minI, 1)[0];
+            this.peer._deliver(f.frame);
+            n++;
+          }
+          return n;
+        }
+      };
+    }
+
+    const aToB = mkDir(null), bToA = mkDir(null);
+    const a = makeImpairedSide('a', null);
+    const b = makeImpairedSide('b', null);
+    aToB.peer = b; bToA.peer = a;
+    a.dir = aToB; b.dir = bToA;
+    // send() routes straight into the wire model
+    a.send = function (s) {
+      if (!a.open || typeof s !== 'string') return false;
+      aToB.depart(String(s));
+      return true;
+    };
+    b.send = function (s) {
+      if (!b.open || typeof s !== 'string') return false;
+      bToA.depart(String(s));
+      return true;
+    };
+    a.close = function () {
+      if (!a.open) return;
+      a.open = false; aToB.flight.length = 0; a._emitStatus('closed');
+    };
+    b.close = function () {
+      if (!b.open) return;
+      b.open = false; bToA.flight.length = 0; b._emitStatus('closed');
+    };
+
+    return {
+      a: a, b: b,
+      time: function () { return now; },
+      inflight: function () { return aToB.flight.length + bToA.flight.length; },
+      pump: function (dtMs) {
+        now += Math.max(0, dtMs | 0);
+        return aToB.deliverDue() + bToA.deliverDue();
+      },
+      stall: function (ms) { stallUntil = now + Math.max(0, ms | 0); },
+      resume: function () { stallUntil = -1; }
+    };
+  }
+
   // ---- WebSocket client ----
   function websocket(url, opts) {
     opts = opts || {};
@@ -187,6 +317,7 @@
 
   TC.NetTransport = {
     loopbackPair: loopbackPair,
+    impairedPair: impairedPair,
     websocket: websocket
   };
 })();

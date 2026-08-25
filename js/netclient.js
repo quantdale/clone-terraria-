@@ -28,7 +28,15 @@
     ackEveryTicks: 15,
     maxAckedPerMsg: 64,
     enemyLingerTicks: 120,     // unreported enemy mirrors fade after ~2s
-    cmdRateLimit: 32           // outbound intents buffered per tick cap
+    cmdRateLimit: 32,          // outbound intents buffered per tick cap
+    // ---- W23 latency masking ----
+    interp: true,              // presentation-only remote interpolation
+    interpDelayTicks: 4,       // render this far behind the newest snapshot
+    interpBufferSize: 10,
+    teleportDistPx: 96,        // larger gaps snap (spawn/teleport/corrections)
+    predict: true,             // local locomotion prediction for SELF
+    predictBlend: 0.22,        // soft reconciliation factor per frame
+    predictHardSnapPx: 72      // divergence beyond this snaps outright
   };
 
   let activeInstance = null;
@@ -46,14 +54,18 @@
     this.inbox = [];
     this.tickCount = 0;
     this.pendingAcks = [];
-    this.enemyMirror = new Map();  // eid string -> {enemy, lastSeen}
+    this.enemyMirror = new Map();  // eid string -> {enemy, lastSeen, buf}
+    this.playerBufs = new Map();   // remote pid -> {player, buf}
     this.dropMirror = new Map();   // 'd<did>' string -> {drop, lastSeen}
+    this.selfCorr = null;          // latest authoritative self state
+    this.inputHist = [];           // recent predicted inputs [{seq, x, jump, down}]
     this.status = null;            // last human-readable status line key
     this.stats = {
       msgsIn: 0, msgsOut: 0, bytesIn: 0, bytesOut: 0,
       regionsApplied: 0, cellsApplied: 0, snapshotsApplied: 0,
       rejectedIn: 0, resyncsRequested: 0, reconnects: 0,
-      cmdResultsOk: 0, cmdResultsFailed: 0
+      cmdResultsOk: 0, cmdResultsFailed: 0,
+      interpTeleports: 0, predSoftCorrections: 0, predHardSnaps: 0
     };
   }
 
@@ -298,13 +310,24 @@
     if (this.pid && snap.id === this.pid) {
       const p = TC.player;
       if (p) {
-        if (snap.x !== undefined) p.x = snap.x;
-        if (snap.y !== undefined) p.y = snap.y;
-        if (snap.vx !== undefined) p.vx = snap.vx;
-        if (snap.vy !== undefined) p.vy = snap.vy;
         if (snap.hp !== undefined) p.hp = snap.hp;
         if (snap.maxHp !== undefined) p.maxHp = snap.maxHp;
         if (typeof snap.face === 'number') p.facing = snap.face;
+        // authoritative pose rides the prediction reconciler (WS4)
+        if (this.opts.predict &&
+            (snap.x !== undefined || snap.y !== undefined)) {
+          this.selfCorr = {
+            x: snap.x !== undefined ? snap.x : p.x,
+            y: snap.y !== undefined ? snap.y : p.y,
+            vx: snap.vx !== undefined ? snap.vx : null,
+            vy: snap.vy !== undefined ? snap.vy : null
+          };
+        } else {
+          if (snap.x !== undefined) p.x = snap.x;
+          if (snap.y !== undefined) p.y = snap.y;
+          if (snap.vx !== undefined) p.vx = snap.vx;
+          if (snap.vy !== undefined) p.vy = snap.vy;
+        }
       }
       return;
     }
@@ -321,13 +344,31 @@
       if (!rec) return;
     }
     const pl = rec.player;
-    if (snap.x !== undefined) pl.x = snap.x;
-    if (snap.y !== undefined) pl.y = snap.y;
-    if (snap.vx !== undefined) pl.vx = snap.vx;
-    if (snap.vy !== undefined) pl.vy = snap.vy;
+    let bufRec = this.playerBufs.get(snap.id);
+    if (!bufRec) {
+      bufRec = { player: pl, buf: [] };
+      this.playerBufs.set(snap.id, bufRec);
+    }
+    // hp/maxHp apply immediately; POSE goes through the interp buffer
     if (snap.hp !== undefined) pl.hp = snap.hp;
     if (snap.maxHp !== undefined) pl.maxHp = snap.maxHp;
     if (typeof snap.face === 'number') pl.facing = snap.face;
+    if (!this.opts.interp) {
+      if (snap.x !== undefined) pl.x = snap.x;
+      if (snap.y !== undefined) pl.y = snap.y;
+      if (snap.vx !== undefined) pl.vx = snap.vx;
+      if (snap.vy !== undefined) pl.vy = snap.vy;
+      return;
+    }
+    if (snap.x !== undefined || snap.y !== undefined ||
+        snap.vx !== undefined || snap.vy !== undefined) {
+      this._bufPush(bufRec.buf, {
+        x: snap.x !== undefined ? snap.x : pl.x,
+        y: snap.y !== undefined ? snap.y : pl.y,
+        vx: snap.vx || 0, vy: snap.vy || 0,
+        t: this.tickCount
+      });
+    }
   };
 
   // W23 explicit removals/tombstones: mirrors die immediately instead of
@@ -350,6 +391,7 @@
     for (const id of ids('p')) {
       if (id === this.pid) continue;            // never remove self
       if (TC.Players.entry(id)) TC.Players.remove(id);
+      this.playerBufs.delete(id);
     }
   };
 
@@ -398,19 +440,122 @@
       const e = {
         eid: snap.id.slice(1) | 0,
         type: snap.type, def: def,
-        x: snap.x, y: snap.y, w: def.w, h: def.h,
-        vx: snap.vx, vy: snap.vy, hp: snap.hp, maxHp: snap.maxHp,
+        x: snap.x !== undefined ? snap.x : 0,
+        y: snap.y !== undefined ? snap.y : 0,
+        w: def.w, h: def.h,
+        vx: snap.vx || 0, vy: snap.vy || 0,
+        hp: snap.hp != null ? snap.hp : def.hp,
+        maxHp: snap.maxHp != null ? snap.maxHp : def.hp,
         facing: snap.face || 1, mirror: true, flashTimer: 0
       };
-      m = { enemy: e, lastSeen: this.tickCount };
+      m = { enemy: e, lastSeen: this.tickCount, buf: [] };
       this.enemyMirror.set(snap.id, m);
       if (TC.Enemies && Array.isArray(TC.Enemies.list)) TC.Enemies.list.push(e);
     }
     const e = m.enemy;
-    e.x = snap.x; e.y = snap.y; e.vx = snap.vx; e.vy = snap.vy;
-    e.hp = snap.hp; e.maxHp = snap.maxHp;
-    e.facing = snap.face || 1;
+    if (snap.hp !== undefined) e.hp = snap.hp;
+    if (snap.maxHp !== undefined) e.maxHp = snap.maxHp;
+    if (typeof snap.face === 'number') e.facing = snap.face;
     m.lastSeen = this.tickCount;
+    if (!this.opts.interp) {
+      if (snap.x !== undefined) e.x = snap.x;
+      if (snap.y !== undefined) e.y = snap.y;
+      if (snap.vx !== undefined) e.vx = snap.vx;
+      if (snap.vy !== undefined) e.vy = snap.vy;
+      return;
+    }
+    if (snap.x !== undefined || snap.y !== undefined ||
+        snap.vx !== undefined || snap.vy !== undefined) {
+      this._bufPush(m.buf, {
+        x: snap.x !== undefined ? snap.x : e.x,
+        y: snap.y !== undefined ? snap.y : e.y,
+        vx: snap.vx || 0, vy: snap.vy || 0,
+        t: this.tickCount
+      });
+    }
+  };
+
+  NetClient.prototype._bufPush = function (buf, pose) {
+    buf.push(pose);
+    if (buf.length > this.opts.interpBufferSize) buf.shift();
+  };
+
+  // Presentation interpolation: render every mirrored entity DELAY ticks
+  // behind the newest snapshot. Purely visual — never feeds collision,
+  // combat, inventory or world mutation (joined clients do not simulate).
+  NetClient.prototype._interpolate = function () {
+    if (!this.opts.interp) return;
+    const delay = Math.max(1, this.opts.interpDelayTicks | 0);
+    const targetT = this.tickCount - delay;
+    const maxGap = this.opts.teleportDistPx;
+    const step = (rec) => {
+      const buf = rec.buf;
+      const ent = rec.player || rec.enemy;
+      if (!ent || !buf.length) return;
+      let older = null, newer = null;
+      for (let i = buf.length - 1; i >= 0; i--) {
+        if (buf[i].t <= targetT) { older = buf[i]; newer = buf[i + 1] || null; break; }
+      }
+      if (!older && buf.length) older = buf[0];           // hold on spawn
+      let px, py;
+      if (newer && older.t <= targetT) {
+        const span = newer.t - older.t;
+        const k = span > 0 ? Math.min(1, Math.max(0, (targetT - older.t) / span)) : 1;
+        px = older.x + (newer.x - older.x) * k;
+        py = older.y + (newer.y - older.y) * k;
+      } else {
+        px = older.x; py = older.y;                        // no extrapolation
+      }
+      if (Math.abs(ent.x - px) > maxGap || Math.abs(ent.y - py) > maxGap) {
+        this.stats.interpTeleports++;                      // snap, don't glide
+      }
+      ent.x = px; ent.y = py;
+      ent.vx = newer ? newer.vx : older.vx;
+      ent.vy = newer ? newer.vy : older.vy;
+    };
+    for (const [, rec] of this.playerBufs) step(rec);
+    for (const [, m] of this.enemyMirror) step(m);
+  };
+
+  // Local locomotion prediction + bounded reconciliation (SELF only).
+  // Reuses the canonical Player.update movement/collision semantics — no
+  // second physics engine. Never predicts mining, loot, damage, inventory or
+  // world mutation: those are server truth arriving via commands/snapshots.
+  NetClient.prototype._predictSelf = function () {
+    const p = TC.player;
+    if (!p || typeof p.update !== 'function' || !TC.Input) return;
+    const seq = ++this.cseqInput;
+    void seq;
+    const axis = TC.Input.axis ? TC.Input.axis() : { x: 0, jump: false };
+    this.inputHist.push({ x: axis.x | 0, jump: axis.jump ? 1 : 0 });
+    if (this.inputHist.length > 48) this.inputHist.shift();
+    p.update(STEP);
+  };
+
+  NetClient.prototype._reconcileSelf = function () {
+    const corr = this.selfCorr;
+    if (!corr) return;
+    this.selfCorr = null;
+    const p = TC.player;
+    if (!p) return;
+    const dx = corr.x - p.x, dy = corr.y - p.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > this.opts.predictHardSnapPx * this.opts.predictHardSnapPx) {
+      p.x = corr.x; p.y = corr.y;                     // divergent: snap
+      if (corr.vx != null) p.vx = corr.vx;
+      if (corr.vy != null) p.vy = corr.vy;
+      this.inputHist.length = 0;
+      this.stats.predHardSnaps++;
+      return;
+    }
+    if (d2 > 0.0001) {
+      // soft error: converge smoothly over the next frames
+      const b = this.opts.predictBlend;
+      p.x += dx * b; p.y += dy * b;
+      if (corr.vx != null) p.vx += (corr.vx - p.vx) * b;
+      if (corr.vy != null) p.vy += (corr.vy - p.vy) * b;
+      this.stats.predSoftCorrections++;
+    }
   };
 
   NetClient.prototype._decayEnemyMirrors = function () {
@@ -576,6 +721,13 @@
     if (this.phase !== 'playing') return;
     if (this.tickCount % 3 === 0) this.sendCursorIntents();
 
+    // W23 latency masking: predict SELF locally, then reconcile against the
+    // latest authoritative state that arrived during pump().
+    if (this.opts.predict) {
+      this._predictSelf();
+      this._reconcileSelf();
+    }
+
     // presentation-only advancement of the mirror
     if (TC.Sky) TC.Sky.update(dt);
     if (TC.Biomes) TC.Biomes.update(dt);
@@ -600,6 +752,9 @@
       cam.x += (tx - cam.x) * 0.18;
       cam.y += (ty - cam.y) * 0.18;
     }
+
+    // remote mirrors render DELAY ticks behind newest snapshots (WS4)
+    this._interpolate();
 
     if (TC.Events && TC.Events.flush) TC.Events.flush();
   };
