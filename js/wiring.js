@@ -87,6 +87,8 @@
       T.PRESSURE_PLATE = n++;
       T.TIMER = n++;
       T.DART_TRAP = n++;
+      T.INLET_PUMP = n++;
+      T.OUTLET_PUMP = n++;
       defs.push(
         /* WIRE           */ mkDef("wire", {
           hardness: 0.05,
@@ -152,6 +154,25 @@
           needsSupport: "any",
           colors: ["#3d3d3d", "#6a6a74"],
         }),
+        /* INLET_PUMP     */ mkDef("inlet pump", {
+          // Non-solid BY CONTRACT: the authoritative liquid layer must be able
+          // to occupy the pump's own cell so the inlet reads / outlet writes
+          // at that exact coordinate (no liquid is encoded in the tile id).
+          hardness: 0.4,
+          tool: "any",
+          drop: "inlet_pump",
+          pattern: "pumpin",
+          needsSupport: "any",
+          colors: ["#35507a", "#c0c0cc"],
+        }),
+        /* OUTLET_PUMP    */ mkDef("outlet pump", {
+          hardness: 0.4,
+          tool: "any",
+          drop: "outlet_pump",
+          pattern: "pumpout",
+          needsSupport: "any",
+          colors: ["#7a4a2e", "#c0c0cc"],
+        }),
       );
     }
     if (TC.ITEM_DEFS && !TC.ITEM_DEFS.wire) {
@@ -165,6 +186,10 @@
       });
       TC.ITEM_DEFS.timer = I("Timer", "block", { tile: T.TIMER });
       TC.ITEM_DEFS.dart_trap = I("Dart Trap", "block", { tile: T.DART_TRAP });
+      // W24 LIQ-006: wire-powered liquid endpoints. Inlet reads from the
+      // authoritative liquid layer at its own cell; outlet writes to it.
+      TC.ITEM_DEFS.inlet_pump = I("Inlet Pump", "block", { tile: T.INLET_PUMP });
+      TC.ITEM_DEFS.outlet_pump = I("Outlet Pump", "block", { tile: T.OUTLET_PUMP });
       // Actuators attach onto existing solid blocks (metadata layer), so the
       // item has no tile of its own; placement routes through attachActuatorAt.
       TC.ITEM_DEFS.actuator = I("Actuator", "block", { tile: null });
@@ -208,6 +233,18 @@
           station: "workbench",
           cost: { iron_bar: 1, wire: 5 },
         },
+        {
+          out: "inlet_pump",
+          n: 1,
+          station: "anvil",
+          cost: { iron_bar: 4, wire: 3 },
+        },
+        {
+          out: "outlet_pump",
+          n: 1,
+          station: "anvil",
+          cost: { iron_bar: 4, glass: 2, wire: 3 },
+        },
       );
     }
   }
@@ -228,6 +265,11 @@
   const DART_LIFE = 3; // seconds before despawn (fallback only)
   const DART_DMG_ENEMY = 14;
   const DART_DMG_PLAYER = 18;
+  // W24 pumps: bounded per pulse. Endpoints beyond the cap stay unprocessed
+  // (counted as cap hits) so a pump farm can never blow up tick work or
+  // transfer volume; per-endpoint units are clamped by source/capacity too.
+  const PUMP_ENDPOINT_CAP = 64;
+  const PUMP_TRANSFER = 48; // max units moved through one endpoint per pulse
 
   const C = {
     wire: "#b3261e",
@@ -266,6 +308,23 @@
     ghosts = new Set();
     flashes = new Map();
     darts.length = 0;
+    pumpStatsReset();
+  }
+
+  // W24 observability for pump batches (tests + benchmarks + F3 consumers).
+  const pumpStats = {
+    pulses: 0, // powered components that reached processPumps
+    endpoints: 0, // inlet+outlet cells discovered (deduped)
+    unitsMoved: 0, // liquid volume actually transferred
+    rejected: 0, // endpoints that could not move anything this pulse
+    capHits: 0, // pulses where endpoints exceeded PUMP_ENDPOINT_CAP
+  };
+  function pumpStatsReset() {
+    pumpStats.pulses = 0;
+    pumpStats.endpoints = 0;
+    pumpStats.unitsMoved = 0;
+    pumpStats.rejected = 0;
+    pumpStats.capHits = 0;
   }
 
   // Fresh-world entry point: clear run-state, then rebuild contact
@@ -410,13 +469,18 @@
   }
 
   // Signal-actuated doors mirror player.interact's rule: never shut a door
-  // into the player hitbox. Enemies may be crushed.
+  // into ANY live registered player's hitbox (W24). Enemies may be crushed.
   function toggleDoor(x, y, id) {
     const world = TC.world;
     const next = id === T.DOOR_CLOSED ? T.DOOR_OPEN : T.DOOR_CLOSED;
-    if (next === T.DOOR_CLOSED && TC.player && !TC.player.dead) {
-      const p = TC.player;
-      if (aabb(p.x, p.y, p.w, p.h, x * TS, y * TS, TS, TS)) return;
+    if (next === T.DOOR_CLOSED) {
+      const buf = [];
+      const players = registeredPlayers(buf);
+      for (let k = 0; k < players.length; k++) {
+        const p = players[k];
+        if (p.dead) continue;
+        if (aabb(p.x, p.y, p.w, p.h, x * TS, y * TS, TS, TS)) return;
+      }
     }
     try {
       world.set(x, y, next);
@@ -465,8 +529,10 @@
     else if (id === T.DART_TRAP) fireDart(x, y);
   }
 
-  // Emit a signal from device cell (sx, sy): flood adjacent wire, then fire
-  // every receiver / actuator touching any powered cell (or the source).
+  // Emit a signal from device cell (sx, sy): flood adjacent wire, fire every
+  // receiver / actuator touching any powered cell (or the source), then
+  // process pump endpoints reached by the SAME bounded pulse as one
+  // deterministic batch (W24 LIQ-006).
   function pulse(sx, sy) {
     const world = TC.world;
     if (!world || typeof world.get !== "function") return 0;
@@ -474,7 +540,11 @@
     const seen = new Set();
     const q = [];
     const triggered = new Set();
+    const pumps = new Set(); // pump endpoint cell idx, deduped per pulse
     let fired = 0;
+
+    const isPumpId = (id) =>
+      id === T.INLET_PUMP || id === T.OUTLET_PUMP;
 
     const triggerAround = (x, y) => {
       for (let k = 0; k < 4; k++) {
@@ -493,6 +563,11 @@
           fired++;
           flashes.set(ni, FLASH_TIME);
           toggleGhost(ni);
+        } else if (isPumpId(id)) {
+          // Collected only; processed once after full receiver discovery so
+          // a pulse's inlets/outlets always see the same pre-transfer state.
+          triggered.add(ni);
+          pumps.add(ni);
         }
       }
     };
@@ -520,7 +595,121 @@
       visit(x, y + 1);
       visit(x, y - 1);
     }
+    if (pumps.size) fired += processPumps(pumps);
     return fired;
+  }
+
+  // ======================================================================
+  // Pumps — deterministic batched liquid transfer over one powered component
+  // ========================================================================
+  // Contract (W24): an inlet READS the authoritative liquid layer at its own
+  // tile coordinate; an outlet WRITES to its own. Only endpoints reached by
+  // the same pulse may exchange volume. Volume is exactly conserved except
+  // where TC.Liquids' canonical water+lava reaction consumes it downstream.
+  // Ordering is ascending world cell index — never Set/insertion accident.
+  //
+  // Two phases per batch:
+  //   measure — compute per-endpoint supply/demand WITHOUT mutating;
+  //   apply   — walk inlet→outlet pairs deterministically, then commit via
+  //             TC.Liquids.set() so wakeups/reactions/events/regions/paint
+  //             stay on the canonical authority path.
+  function processPumps(pumpSet) {
+    const L = TC.Liquids;
+    if (!L || typeof L.set !== "function" || typeof L.queryAt !== "function") {
+      return 0;
+    }
+    const world = TC.world;
+    if (!world) return 0;
+
+    // Ascending index order: deterministic regardless of discovery path,
+    // loops, or duplicate wire paths (the Set already dedupes cells).
+    const eps = Array.from(pumpSet).sort((a, b) => a - b);
+    let count = eps.length;
+    pumpStats.pulses++;
+    pumpStats.endpoints += Math.min(count, PUMP_ENDPOINT_CAP);
+    if (count > PUMP_ENDPOINT_CAP) {
+      pumpStats.capHits++;
+      eps.length = PUMP_ENDPOINT_CAP; // bounded work; excess stays untouched
+      count = PUMP_ENDPOINT_CAP;
+    }
+    if (!count) return 0;
+
+    const W = world.width;
+    const inlets = [];
+    const outlets = [];
+    for (let k = 0; k < count; k++) {
+      const i = eps[k];
+      const q = L.queryAt(i % W, (i / W) | 0); // {type, amount} snapshot
+      if (world.tiles[i] === T.INLET_PUMP) {
+        inlets.push({ idx: i, type: q.type, amount: q.amount });
+      } else if (world.tiles[i] === T.OUTLET_PUMP) {
+        outlets.push({ idx: i, type: q.type, amount: q.amount });
+      }
+    }
+    if (!inlets.length || !outlets.length) {
+      pumpStats.rejected += count;
+      return 0;
+    }
+
+    // Phase 1 — measure exact movable volume per pair without mutation.
+    // give[a][b]: units inlet a hands outlet b this pulse. An outlet that is
+    // empty AND unassigned accepts any ONE type (the first offered fixes it);
+    // a partially filled outlet accepts ONLY its own type. Incompatible
+    // liquids never convert or overwrite each other — they just don't match.
+    // assigned[b] is the CUMULATIVE per-outlet budget: every inlet draws from
+    // the same pool so a cell can never be promised more than its cap.
+    const give = [];
+    const assigned = new Array(outlets.length).fill(0);
+    const assignedType = new Array(outlets.length).fill(0);
+    let movedTotal = 0;
+    for (let a = 0; a < inlets.length; a++) {
+      const inl = inlets[a];
+      let avail = Math.min(inl.amount, PUMP_TRANSFER);
+      const row = new Array(outlets.length).fill(0);
+      give.push(row); // always align rows with inlets for phase 2
+      if (avail <= 0 || !inl.type) continue;
+      for (let b = 0; b < outlets.length && avail > 0; b++) {
+        const out = outlets[b];
+        const effType = out.amount > 0 ? out.type : assignedType[b];
+        if (effType && effType !== inl.type) continue; // incompatible: fail closed
+        const cellCap = out.amount > 0 ? 255 - out.amount : 255;
+        const cap = Math.min(PUMP_TRANSFER - assigned[b], cellCap);
+        if (cap <= 0) continue;
+        const g = Math.min(avail, cap);
+        row[b] += g;
+        assigned[b] += g;
+        assignedType[b] = inl.type;
+        avail -= g;
+        movedTotal += g;
+      }
+    }
+
+    // Phase 2 — commit through TC.Liquids.set(): conservation is exact here
+    // because every unit removed from an inlet is deposited at an outlet.
+    for (let a = 0; a < inlets.length; a++) {
+      if (!give[a]) continue;
+      let taken = 0;
+      for (let b = 0; b < outlets.length; b++) taken += give[a][b];
+      if (!taken) continue;
+      const inl = inlets[a];
+      L.set(inl.idx % W, (inl.idx / W) | 0, inl.type, inl.amount - taken);
+    }
+    for (let b = 0; b < outlets.length; b++) {
+      let put = 0;
+      for (let a = 0; a < inlets.length; a++) put += give[a] ? give[a][b] : 0;
+      if (!put) continue;
+      const out = outlets[b];
+      L.set(
+        out.idx % W,
+        (out.idx / W) | 0,
+        out.amount > 0 ? out.type : assignedType[b],
+        out.amount + put,
+      );
+    }
+
+    pumpStats.unitsMoved += movedTotal;
+    if (!movedTotal) pumpStats.rejected += count;
+    return movedTotal > 0 ? 1 : 0;
   }
 
   // ======================================================================
@@ -588,10 +777,37 @@
     });
   }
 
+  // W24 multiplayer authority: mechanism semantics must see EVERY registered
+  // live player, not just the primary singleton. Falls back to TC.player when
+  // the registry is absent (legacy embeds / headless partials).
+  function registeredPlayers(out) {
+    out.length = 0;
+    const P = TC.Players;
+    if (P && typeof P.all === "function" && P.count()) {
+      const all = P.all();
+      for (let i = 0; i < all.length; i++) if (all[i]) out.push(all[i]);
+      if (out.length) return out;
+    }
+    if (TC.player) out.push(TC.player);
+    return out;
+  }
+
   function collectEntities(out) {
     out.length = 0;
-    const p = TC.player;
-    if (p && !p.dead && typeof p.x === "number") out.push(p);
+    registeredPlayers(out);
+    for (let i = 0; i < out.length; i++) {
+      const e = out[i];
+      if (
+        !e ||
+        e.dead ||
+        typeof e.x !== "number" ||
+        typeof e.y !== "number" ||
+        !(e.w > 0) ||
+        !(e.h > 0)
+      ) {
+        out.splice(i--, 1);
+      }
+    }
     const add = (list) => {
       if (!list || !list.length) return;
       for (let i = 0; i < list.length; i++) {
@@ -708,34 +924,48 @@
     return false;
   }
 
+  // W24: trap darts damage the ACTUAL victim among ALL registered players —
+  // a remote player standing in the line of fire takes the hit itself and can
+  // never redirect it onto the host/primary pawn. hurtPlayer receives the
+  // victim explicitly ({target}) so defense/iframes resolve against them.
   function hitPlayer(d, di) {
-    const p = TC.player;
-    if (!p || p.dead || p.iframes > 0) return;
     if (!TC.Combat || typeof TC.Combat.hurtPlayer !== "function") return;
-    if (!aabb(d.x - 2, d.y - 2, 4, 4, p.x, p.y, p.w, p.h)) return;
-    try {
-      TC.Combat.hurtPlayer(DART_DMG_PLAYER, d.vx >= 0 ? 3 : -3, -1.5, "trap");
-    } catch (e) {}
-    darts.splice(di, 1);
+    const buf = [];
+    const players = registeredPlayers(buf);
+    for (let k = 0; k < players.length; k++) {
+      const p = players[k];
+      if (p.dead || p.iframes > 0) continue;
+      if (!aabb(d.x - 2, d.y - 2, 4, 4, p.x, p.y, p.w, p.h)) continue;
+      try {
+        TC.Combat.hurtPlayer(DART_DMG_PLAYER, d.vx >= 0 ? 3 : -3, -1.5, "trap", { target: p });
+      } catch (e) {}
+      darts.splice(di, 1);
+      return;
+    }
   }
 
   // Player contact for pooled trap darts (owner null). Expire the dart via
   // its own age so the pool's bookkeeping stays authoritative.
   function pooledDartPlayerHits() {
     if (!TC.Projectiles || typeof TC.Projectiles.viewOf !== "function") return;
-    const p = TC.player;
-    if (!p || p.dead || p.iframes > 0) return;
     if (!TC.Combat || typeof TC.Combat.hurtPlayer !== "function") return;
+    const buf = [];
+    const players = registeredPlayers(buf);
+    if (!players.length) return;
     const view = TC.Projectiles.viewOf("wire_dart"); // scratch: read now
     for (let k = 0; k < view.length; k++) {
       const d = view[k];
       if (!d.active || d.owner != null) continue; // trap darts only
-      if (!aabb(d.x - 2, d.y - 2, 4, 4, p.x, p.y, p.w, p.h)) continue;
-      try {
-        TC.Combat.hurtPlayer(DART_DMG_PLAYER, d.vx >= 0 ? 3 : -3, -1.5, "trap");
-      } catch (e) {}
-      d.age = (d.def && d.def.maxAge ? d.def.maxAge : 1) + 1; // expire next tick
-      break;
+      for (let pi = 0; pi < players.length; pi++) {
+        const p = players[pi];
+        if (p.dead || p.iframes > 0) continue;
+        if (!aabb(d.x - 2, d.y - 2, 4, 4, p.x, p.y, p.w, p.h)) continue;
+        try {
+          TC.Combat.hurtPlayer(DART_DMG_PLAYER, d.vx >= 0 ? 3 : -3, -1.5, "trap", { target: p });
+        } catch (e) {}
+        d.age = (d.def && d.def.maxAge ? d.def.maxAge : 1) + 1; // expire next tick
+        return; // one dart damages exactly one victim per tick
+      }
     }
   }
 
@@ -1045,6 +1275,32 @@
     ctx.fillRect(px + 12, py + 2, 3, 3); // run LED
   }
 
+  // W24 pumps — inlet shows a blue-grilled intake; outlet a copper nozzle.
+  // Purely procedural, matching the mechanism look.
+  function drawPump(ctx, px, py, inlet) {
+    const body = inlet ? "#35507a" : "#7a4a2e";
+    ctx.fillStyle = body;
+    ctx.fillRect(px + 1, py + 3, TS - 2, TS - 6);
+    ctx.fillStyle = C.metal;
+    ctx.fillRect(px + 1, py + 3, TS - 2, 2);
+    ctx.fillStyle = "#23232a";
+    if (inlet) {
+      // intake grille on top face
+      ctx.fillRect(px + 3, py + 6, TS - 6, 5);
+      ctx.fillStyle = C.metal;
+      for (let k = 0; k < 3; k++) ctx.fillRect(px + 3, py + 6 + k * 2, TS - 6, 1);
+      ctx.fillStyle = "#57b8e8";
+      ctx.fillRect(px + 7, py + 12, 2, 2);
+    } else {
+      // outflow nozzle on bottom face
+      ctx.fillRect(px + 5, py + 9, 6, 4);
+      ctx.fillStyle = "#d18a1f";
+      ctx.fillRect(px + 6, py + 10, 4, 2);
+      ctx.fillStyle = C.metalDark;
+      ctx.fillRect(px + 6, py + 13, 4, 2);
+    }
+  }
+
   function drawTrap(ctx, world, tx, ty, px, py) {
     ctx.fillStyle = C.iron;
     ctx.fillRect(px + 1, py + 4, 14, 8); // body
@@ -1150,6 +1406,8 @@
         } else if (id === T.TIMER)
           drawTimer(ctx, px, py, timers.get(ty * W + tx));
         else if (id === T.DART_TRAP) drawTrap(ctx, world, tx, ty, px, py);
+        else if (id === T.INLET_PUMP) drawPump(ctx, px, py, true);
+        else if (id === T.OUTLET_PUMP) drawPump(ctx, px, py, false);
       }
     }
     if (actuated.size) {
@@ -1256,6 +1514,28 @@
       g.fillStyle = C.metal;
       g.fillRect(6, 6, 4, 4);
     },
+    inlet_pump(g) {
+      // blue-bodied intake: open grille facing up, pipe stub down-left
+      g.fillStyle = "#35507a";
+      g.fillRect(3, 4, 10, 9);
+      g.fillStyle = "#23232a";
+      g.fillRect(5, 6, 6, 5);
+      g.fillStyle = C.metal; // grille bars
+      for (let k = 0; k < 3; k++) g.fillRect(5, 6 + k * 2, 6, 1);
+      g.fillStyle = "#57b8e8"; // droplet
+      g.fillRect(7, 11, 2, 2);
+    },
+    outlet_pump(g) {
+      // copper-bodied outflow: nozzle facing down, amber window
+      g.fillStyle = "#7a4a2e";
+      g.fillRect(3, 4, 10, 8);
+      g.fillStyle = "#d18a1f";
+      g.fillRect(5, 6, 6, 4);
+      g.fillStyle = C.metalDark;
+      g.fillRect(6, 12, 4, 3);
+      g.fillStyle = C.metal;
+      g.fillRect(3, 4, 10, 1);
+    },
   };
 
   const iconCache = new Map();
@@ -1319,6 +1599,8 @@
       tileRef("PRESSURE_PLATE", "wiring:pressure_plate");
       tileRef("TIMER", "wiring:timer");
       tileRef("DART_TRAP", "wiring:dart_trap");
+      tileRef("INLET_PUMP", "wiring:inlet_pump");
+      tileRef("OUTLET_PUMP", "wiring:outlet_pump");
     }
     const items = TC.ITEM_DEFS;
     if (items) {
@@ -1329,6 +1611,8 @@
       safeItem("timer", "wiring:timer");
       safeItem("dart_trap", "wiring:dart_trap");
       safeItem("actuator", "wiring:actuator");
+      safeItem("inlet_pump", "wiring:inlet_pump");
+      safeItem("outlet_pump", "wiring:outlet_pump");
     }
   }
 
@@ -1430,5 +1714,17 @@
     load,
     reset,
     resetForNewWorld,
+
+    // W24: bounded pump batch observability (tests/benchmarks/F3 consumers).
+    // Copy-out so callers cannot mutate live counters.
+    pumpStats: () => ({
+      pulses: pumpStats.pulses,
+      endpoints: pumpStats.endpoints,
+      unitsMoved: pumpStats.unitsMoved,
+      rejected: pumpStats.rejected,
+      capHits: pumpStats.capHits,
+    }),
+    PUMP_ENDPOINT_CAP,
+    PUMP_TRANSFER,
   };
 })();

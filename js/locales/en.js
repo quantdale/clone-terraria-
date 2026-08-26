@@ -281,6 +281,8 @@
         pressure_plate: { name: 'Pressure Plate' },
         timer: { name: 'Timer' },
         dart_trap: { name: 'Dart Trap' },
+        inlet_pump: { name: 'Inlet Pump' },
+        outlet_pump: { name: 'Outlet Pump' },
       },
     },
 
@@ -468,6 +470,8 @@
         timer: { name: 'Timer', description: 'Pulses on a steady rhythm while running.' },
         dart_trap: { name: 'Dart Trap', description: 'Fires a dart when pulsed. Aim away from face.' },
         actuator: { name: 'Actuator', description: 'Wired attachment that toggles a block intangible.' },
+        inlet_pump: { name: 'Inlet Pump', description: 'Wired intake that draws liquid from its own cell on each pulse.' },
+        outlet_pump: { name: 'Outlet Pump', description: 'Wired outflow that deposits pulsed liquid into its own cell.' },
       },
     },
 

@@ -573,8 +573,97 @@
     }
     liquidType[i] = t && a ? t : TYPE.NONE;
     liquidAmount[i] = t && a ? a : 0;
+    // W24 defect fix: the direct-write authority seam MUST report to the
+    // shared invalidation authority like every other mutation path (buckets
+    // and settling already do). Without this, pump/spigot writes were
+    // invisible to region consumers — including multiplayer replication.
+    noteChange(i);
     wake(tx, ty);
     return true;
+  }
+
+  // W24 read-only region snapshot seam for replication: copies authoritative
+  // type+amount layers for a CHUNK×CHUNK tile area into fresh (or provided)
+  // buffers. Never exposes the live arrays. Out-of-bounds cells read as empty.
+  function snapshotRegion(baseX, baseY, size, outType, outAmt) {
+    const w = worldRef;
+    const t = outType || new Uint8Array(size * size);
+    const a = outAmt || new Uint8Array(size * size);
+    if (!ready || !w || !liquidType) return { type: t, amount: a };
+    for (let y = 0; y < size; y++) {
+      const wy = baseY + y;
+      if (wy >= w.height) break;
+      for (let x = 0; x < size; x++) {
+        const wx = baseX + x;
+        if (wx >= w.width) break;
+        const o = y * size + x;
+        const i = wy * w.width + wx;
+        t[o] = liquidType[i];
+        a[o] = liquidAmount[i];
+      }
+    }
+    return { type: t, amount: a };
+  }
+
+  // W24 presentation-only mirror writer for JOINED CLIENTS: writes replicated
+  // truth straight into the local layer without waking the settle sim,
+  // queueing LiquidChanged events, or touching gameplay state elsewhere.
+  // Marks WorldRegions ('liquid') so local renderer/minimap/lighting repaint.
+  // The HOST must never call this; it is not an authority mutation path.
+  function applyMirrorRegion(baseX, baseY, size, srcType, srcAmt) {
+    const w = worldRef;
+    if (!ready || !w || !liquidType) return false;
+    if (!srcType || !srcAmt || srcType.length < size * size || srcAmt.length < size * size) {
+      return false;
+    }
+    let changed = -1;
+    for (let y = 0; y < size && changed < 0; y++) {
+      const wy = baseY + y;
+      if (wy >= w.height) break;
+      for (let x = 0; x < size; x++) {
+        const wx = baseX + x;
+        if (wx >= w.width) break;
+        const o = y * size + x;
+        const i = wy * w.width + wx;
+        if (liquidType[i] !== srcType[o]) { changed = i; break; }
+        if (liquidAmount[i] !== srcAmt[o]) { changed = i; break; }
+      }
+    }
+    if (changed < 0) return true; // idempotent re-apply, nothing to paint
+    for (let y = 0; y < size; y++) {
+      const wy = baseY + y;
+      if (wy >= w.height) break;
+      for (let x = 0; x < size; x++) {
+        const wx = baseX + x;
+        if (wx >= w.width) break;
+        const o = y * size + x;
+        const i = wy * w.width + wx;
+        const nt = clampType(srcType[o]);
+        const na = nt ? clampAmt(srcAmt[o]) : 0;
+        if (liquidType[i] === nt && liquidAmount[i] === na) continue;
+        liquidType[i] = nt;
+        liquidAmount[i] = na;
+        if (TC.WorldRegions && typeof TC.WorldRegions.markCell === "function") {
+          TC.WorldRegions.markCell(wx, wy, "liquid");
+        }
+      }
+    }
+    return true;
+  }
+
+  // Deterministic FNV-1a over the full authoritative liquid layers. Used by
+  // replay/convergence tests to prove identical type+amount state.
+  function digest() {
+    if (!ready || !liquidType) return 0;
+    let h = 0x811c9dc5;
+    const mix = (v) => {
+      h ^= v & 0xff; h = (h * 0x01000193) >>> 0;
+    };
+    for (let i = 0; i < liquidType.length; i++) {
+      mix(liquidType[i]);
+      mix(liquidAmount[i]);
+    }
+    return h >>> 0;
   }
 
   // Debug snapshot: nonzero cell count + active-set size (O(n) scan).
@@ -774,6 +863,12 @@
     averageColumnSurface: averageColumnSurface,
     importFromWorld: importFromWorld,
     stats: stats,
+
+    // W24 replication seams: read-only region snapshot (host side),
+    // presentation mirror application (joined-client side), state digest.
+    snapshotRegion: snapshotRegion,
+    applyMirrorRegion: applyMirrorRegion,
+    digest: digest,
 
     // Authority mode of the current world's liquid. Runtime worlds are
     // imported into the layer at build time, so this reads 'layer' during
