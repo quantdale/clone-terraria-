@@ -132,18 +132,48 @@ test("proto: region codec round-trips and diffs deterministically (v3 liquid lay
   assert.deepEqual(out.lamt, cur.lamt, "delta applies liquid amounts");
 });
 
-test("proto: stale protocol versions are rejected cleanly (v3 gate)", () => {
-  for (const v of [1, 2, 4, 99]) {
+test("proto: stale protocol versions are rejected cleanly (v4 gate)", () => {
+  for (const v of [1, 2, 3, 5, 99]) {
     const m = msg("hello", { name: "A" });
     m.v = v;
     rejects("v" + v + " rejected", m);
   }
   // the rejection names the expected version so old clients get a clean signal
   const bad = msg("hello", { name: "A" });
-  bad.v = 2;
+  bad.v = 3; // the W24 wire
   const res = P.validate(bad);
-  assert.ok(!res.ok && /expected 3/.test(res.error || ""),
-    "v2 rejection states expected version");
+  assert.ok(!res.ok && /expected 4/.test(res.error || ""),
+    "v3 rejection states expected version");
+});
+
+test("proto: hello/welcome REQUIRE pack-set identity (W25 v4 gate)", () => {
+  // absent packs meta fails closed
+  const noPacks = msg("hello", { name: "A" });
+  delete noPacks.p.packs;
+  let res = P.validate(noPacks);
+  assert.ok(!res.ok && /bad packs/.test(res.error || ""), "hello without packs rejected");
+  const noWelcome = msg("welcome", { tick: 1, seed: 1, you: { pid: 'p' } });
+  delete noWelcome.p.packs;
+  res = P.validate(noWelcome);
+  assert.ok(!res.ok && /bad packs/.test(res.error || ""), "welcome without packs rejected");
+  // malformed shapes fail closed
+  for (const badPacks of [
+    { fp: 'zzzz', list: [] },            // non-hex fp
+    { fp: '' },                          // missing list
+    { fp: '', list: 'x' },               // list not an array
+    { fp: '', list: ['a'.repeat(64)] },  // oversized entry
+    { fp: '', list: [], extra: 1 },      // unknown field
+    null,                                // not an object at all
+  ]) {
+    const m = msg("hello", { name: "A", packs: badPacks });
+    res = P.validate(m);
+    assert.ok(!res.ok, "malformed packs rejected: " + JSON.stringify(badPacks));
+  }
+  // a valid empty set passes
+  res = P.validate(msg("hello", { name: "A", packs: { fp: '', list: [] } }));
+  assert.ok(res.ok, "empty base set accepted");
+  res = P.validate(msg("hello", { name: "A", packs: { fp: 'deadbeef', list: ['testpack@1.0.0'] } }));
+  assert.ok(res.ok, "populated pack identity accepted");
 });
 
 test("proto: liquid region lines fail closed on malformed shapes (W24)", () => {

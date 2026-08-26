@@ -35,11 +35,17 @@ function makeDriver(label) {
 }
 
 function msg(type, p, extra) {
-  return Object.assign({
-    v: 3, t: type, sid: null, pid: null,
+  const body = Object.assign({
+    v: 4, t: type, sid: null, pid: null,
     cseq: 0, sseq: 0, tick: 0,
     p: p || {}
   }, extra || {});
+  // W25 protocol v4: hello/welcome REQUIRE pack-set identity. Tests that do
+  // not care pass the empty (base) set; negative tests override explicitly.
+  if ((type === 'hello' || type === 'welcome') && body.p && body.p.packs === undefined) {
+    body.p.packs = { fp: '', list: [] };
+  }
+  return body;
 }
 
 // Join flow against a running server: returns {pid, welcome} after pumping.
