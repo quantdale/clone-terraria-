@@ -1186,3 +1186,107 @@ host-authoritative rig): non-primary plate activation through networked input,
 exactly-once transfer via /debug counters, two-client mirror coherence,
 rejoin-current-truth, clean shutdown. Benchmarks: bench-multiplayer scenes
 liquid-churn + pump-burst (bounded deltas, idle suppression retained).
+
+## 29. Campaign contracts (W25 — Safe Extensibility Foundation)
+
+MOD-001/002/003 ship as production systems; MOD-004 remains research-only
+(docs/ADR-MOD-004-sandboxed-mods.md, recommendation: DEFER). The canonical
+authority is **TC.Packs** (js/packs.js); the committed fixture pack lives at
+packs/testpack.js and rides the SAME public seam any third-party declarative
+pack uses.
+
+### Pack lifecycle (binding)
+parse -> structural validation (manifest schema v1) -> semantic/reference
+validation per content family -> dependency/version resolution ->
+deterministic identity -> staged registration -> ATOMIC commit. Every arrow
+fails closed: prototype-pollution keys (__proto__/prototype/constructor),
+functions/symbols, non-finite numbers, oversized strings/arrays/depth,
+unknown manifest fields, unknown schema versions, reserved namespaces
+(core/tc/system), traversal-shaped resource paths, duplicate ids. Packs are
+pure DATA: no eval/new Function/script injection exists anywhere in the
+pipeline, and pack content can never supply callbacks or hooks — enemy ai/
+look, tile patterns and stations must reference BUILT-IN vocabulary resolved
+against the live registries at stage time.
+
+### Supported families (MOD-002 scope)
+tiles / items / enemies / recipes. Walls, NPCs/shops, standalone loot tables,
+projectiles, buffs and biomes are deliberately NOT pack-extensible in W25
+(numeric-identity risk, dialog/shop surface area, or missing strong invariants).
+Enemy drops already give declarative loot; recipes may use the existing W14
+Progression condition grammar; summon items may target pack enemies that
+declare boss:true (routing through built-in encounter machinery only).
+
+### Namespace + identity rules (WS4)
+Content stable ids are always '<packid>:<key>' where namespace == pack id;
+the 'core' namespace is unreachable to packs, so pack content cannot
+masquerade as built-in. Identity model:
+  A. built-in stable identity is untouched (zero packs => registry fingerprint
+     stays 1b1d7c15);
+  B. TC.Packs.digest() fingerprints the active GAMEPLAY set (resource packs
+     excluded by construction), TC.Packs.contentDigest() covers all packs;
+     both are FNV-1a over order-independent canonicalized data;
+  C. dense runtime indices append after built-ins in topological dependency
+     order with ascending-pack-id tie-breaks, so subsets keep their indices
+     stable across sessions;
+  D. commit-time normalization rewrites every stored reference to canonical
+     runtime forms (bare table keys, numeric world ids) — hot paths keep
+     indexing tables exactly as before; there is ZERO per-frame pack awareness.
+
+### Atomic activation (WS5)
+setActive() is a transaction: requested-set closure, session-permanence check
+(committed content cannot be dropped or content-swapped mid-session — dense
+tile indices would shift; re-requesting an identical set is an idempotent
+no-op; violations fail with a restart-required diagnostic), full staging of
+every family (intra-/cross-pack references resolve via a name-reservation
+pass plus deferred summon-target policy checks), then ONE journaled commit:
+Registry.define + alias per entry, TILE_DEFS/RECIPES appends, ITEM_DEFS/
+ENEMY_DEFS key writes, locale fragments via Localization.extend (undoable).
+Any staging/commit failure rolls back to the previous coherent state
+(Registry.forgetLast removes tail entries AND their aliases).
+
+### Boot timing (load-order contract)
+main.js defers boot-time activation + registry sync to DOMContentLoaded when
+available, because sibling modules may APPEND to shared tables at their own
+script-load time (wiring.js loads after main.js). Headless embeds without a
+real document fall through immediately. Production activation surface:
+TC.Settings 'activePacks' persisted by the title-screen Content Packs panel
+(toggle rows -> Apply & Restart); bootActivate applies it fail-closed and
+surfaces failures via TC.Packs.lastError() for the title screen.
+
+### Save compatibility (MOD-003)
+Save envelopes gain top-level 'packs' metadata {v, fp, gfp,
+packs[{id,version,type}]} (+96 bytes for the fixture). Pre-W25 envelopes
+(field absent/null) remain trivially compatible. main.continueGame classifies
+BEFORE any world/character mutation: exact/compatible loads proceed;
+missing-pack and incompatible-version refusals name the pack and both
+versions through UI.showPackProblem and stay on the title with storage byte-
+untouched; malformed metadata fails closed as its own status. Legacy v1 blobs
+are unaffected.
+
+### Multiplayer pack negotiation (WS7, protocol v4)
+NetProto VERSION 3->4: hello/welcome payloads REQUIRE bounded packs meta
+{fp(<=16 hex chars|''), list(<=16 id@version strings)} — the wire change is
+the point, since pack identity must be proven before any world state flows.
+The server gates EVERY hello path (fresh join AND detached rejoin) before
+player binding: mismatch rejects as 'content-mismatch host=<fp> client=<fp>'
+with no entity, snapshot or world mutation leaked. Clients cross-check the
+welcome fingerprint before entering syncing and disconnect cleanly otherwise.
+Resource-only differences cannot change digest(), so they stay compatible BY
+CONSTRUCTION.
+
+### Security boundary summary
+Untrusted-input posture end-to-end; staged transactions; no dynamic code
+execution; presentation overrides (locale fragments) are additive layers over
+registered locales with recorded undo handles — they can never touch machine
+identity, registry fingerprints or authoritative state.
+
+### Test coverage added
+tests/packs/{loader,activation,save-compat,multiplayer}.test.js (23 cases),
+tools/fuzz-packs.js (deterministic seeded fuzzing, 0 escapes across the
+default 400 rounds), tools/bench-packs.js (WS12 evidence), browser journey P
+(tests/browser/journey-p-packs.spec.js): real panel clicks -> Apply &
+Restart (genuine reload) -> active set proven -> craft/place/mine/summon/
+loot through canonical seams -> save/reload/continue coherence -> zero page
+errors. Performance: fixture activation ~1.9 ms one-time (~0.13 ms
+idempotent), save metadata +96 bytes, registry lookup parity at 200k-query
+scale, gameplay scenario medians unchanged (see docs/PERFORMANCE.md).

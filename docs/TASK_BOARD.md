@@ -48,11 +48,21 @@ localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
 | Rendering/lighting/audio depth | VIS/LGT/ART/AUD epics | LGT-002 done (dynamic lights); rest TODO/P2 |
 | Performance | PERF-001 | DONE (TC.Debug instrumentation + F3 overlay); PERF-002 partially covered by `tools/bench-runtime.js` fixed-step benchmark; PERF-003..005 TODO |
 | Multiplayer | NET-001..004 | DONE through W22 foundation + W23 productionization (see rows below; NET-004 productionization closed by W23) |
-| Extensibility/mods | MOD-001..004 | TODO |
+| Extensibility/mods | MOD-001..004 | MOD-001/002/003 DONE (W25: canonical TC.Packs authority — fail-closed manifest/data-pack pipeline, declarative tile/item/enemy/recipe families, atomic activation with session-permanence, pack-aware save classification + continue gating, title-screen packs panel, protocol-v4 handshake identity, fixture pack + journey P; see ARCHITECTURE.md §29). MOD-004 remains RESEARCH ONLY (docs/ADR-MOD-004-sandboxed-mods.md — recommendation DEFER); no executable-mod runtime exists by design |
 
-### Newly discovered follow-ups (updated W23)
+### Newly discovered follow-ups (updated W25)
 
-- **W23 status:** multiplayer productionization LANDED — deterministic
+- **W25 status:** safe extensibility foundation LANDED — declarative data
+  packs (tiles/items/enemies/recipes) + resource locale fragments through a
+  fail-closed staged pipeline with atomic activation, deterministic pack-set
+  identity integrated into saves (MOD-003 classification before mutation)
+  and the multiplayer handshake (protocol v4). Fixture pack
+  (packs/testpack.js) proves the full production chain incl. browser journey
+  P. Remaining future work: more pack families (walls, NPCs/shops, loot
+  tables, projectiles), MOD-004 executable mods stay RESEARCH-DEFERRED
+  (ADR), real secondary-language catalogs, PERF-003/005, >4 player scaling.
+
+- **W23 status (historical):** multiplayer productionization LANDED — deterministic
   GameRng authority (enemy AI now inside replay digests), `TC.Targets`
   multi-player targeting policy, protocol v2 with networked craft/shop/
   container transactions, baselined entity replication with tombstones +
@@ -1050,9 +1060,45 @@ tools/soak-multiplayer.js.
 
 **Priority:** P2  
 **Depends on:** asset registry  
-**Effort:** Medium/High
+**Effort:** Medium/High  
+**Status:** DONE (W25)
 
-No code execution.
+Canonical authority TC.Packs (js/packs.js): manifest schema v1, fail-closed
+structural/semantic validation, deterministic canonical digests, dependency
+topo-resolution, atomic staged activation. Resource packs ship presentation
+locale fragments through Localization.extend (undoable layers). No code
+can ever be executed from a pack — enforced by construction.
+
+---
+
+## MOD-002 — Declarative data-pack schemas
+
+**Priority:** P2  
+**Depends on:** stable content schemas  
+**Effort:** High  
+**Status:** DONE (W25 — tiles/items/enemies/recipes)
+
+Families chosen because their existing definitions are declarative and
+strongly validatable; bounds + built-in-only references (ai/look/pattern/
+station) checked at stage time; commit normalizes refs to canonical runtime
+forms. Fixture: packs/testpack.js (Tempest chain) proven end-to-end incl.
+browser journey P. Walls/NPCs/shops/loot-tables/projectiles/buffs/biomes are
+explicitly OUT of scope for now (documented in ARCHITECTURE.md §29).
+
+---
+
+## MOD-003 — Missing-pack save diagnostics
+
+**Priority:** P2  
+**Depends on:** MOD-002, save registry metadata  
+**Effort:** Medium  
+**Status:** DONE (W25)
+
+Envelopes carry pack-set metadata; continueGame classifies BEFORE mutation
+(legacy-no-packs / compatible / missing-pack / incompatible-version /
+malformed-metadata), refuses incompatible loads with actionable localized
+diagnostics and byte-untouched storage. Proven incl. pre-W25 envelopes and
+the full remove-pack/restart/restore cycle.
 
 ---
 
@@ -1076,9 +1122,14 @@ No code execution.
 
 **Priority:** P3  
 **Depends on:** stable APIs + security design  
-**Effort:** Very High
+**Effort:** Very High  
+**Status:** RESEARCH DONE, IMPLEMENTATION DEFERRED (W25)
 
-Do not expose arbitrary raw `window.TC` mutation as the supported API.
+docs/ADR-MOD-004-sandboxed-mods.md records the repository-specific threat
+model, Worker/iframe feasibility, the intent-through-canonical-commands
+capability sketch, determinism/multiplayer implications and quotas.
+Recommendation: DEFER until a named capability gap proves W25's declarative
+schemas insufficient. Do not expose raw `window.TC` mutation as an API.
 
 ---
 

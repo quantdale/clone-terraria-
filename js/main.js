@@ -513,15 +513,35 @@
   // content joins the same identity pass as built-ins. Failure falls back
   // to the zero-pack base set (fail closed); the reason is surfaced on the
   // title screen via TC.Packs.lastError().
+  //
+  // TIMING: classic scripts execute in order, but sibling modules that
+  // APPEND to the shared tables at their own load time (wiring.js, which
+  // follows this file) must be counted BEFORE pack dense indices are
+  // assigned. DOMContentLoaded fires only after every classic script has
+  // run, so activation waits for it when available; headless embeds without
+  // a real document fall through immediately.
   let packsBootError = null;
-  if (TC.Packs && typeof TC.Packs.bootActivate === "function") {
-    const bootResult = TC.Packs.bootActivate();
-    packsBootError = bootResult.error || null;
-  }
-  if (TC.Registry) {
-    TC.Registry.syncFromTables();
-    try { TC.Registry.validate(); } catch (e) { console.warn('[TC] registry validation:', e.message); }
-  }
+  const bootRegistry = function () {
+    // Activation first (so pack content joins the same identity pass),
+    // then the single registry mirror + validation gate.
+    if (TC.Packs && typeof TC.Packs.bootActivate === "function") {
+      const r = TC.Packs.bootActivate();
+      packsBootError = r.error || null;
+    }
+    if (TC.Registry) {
+      TC.Registry.syncFromTables();
+      try { TC.Registry.validate(); } catch (e) { console.warn('[TC] registry validation:', e.message); }
+    }
+  };
+  void packsBootError; // surfaced via TC.Packs.lastError() on the title screen
+  try {
+    if (typeof document !== "undefined" && document.addEventListener &&
+        document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", bootRegistry, { once: true });
+    } else {
+      bootRegistry();
+    }
+  } catch (e) { bootRegistry(); }
   if (TC.Systems && TC.Systems.runBoot) TC.Systems.runBoot();
   registerSystems();
   registerLayers();

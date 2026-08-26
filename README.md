@@ -18,13 +18,35 @@ python -m http.server 8377
 Development/validation commands (`node` >= 22 (glob-capable `node --test`) + `npm ci` required):
 
 ```
-npm test            # node:test suites (unit/core/save/combat/player/npc/world/net)
+npm test            # node:test suites (unit/core/save/combat/player/npc/world/net/packs)
 npm run test:browser  # Playwright journeys (headless Chromium)
 npm run build       # reproducible dist/ assembly
 npm run validate    # syntax + tests + build + build-verify + browser suite
 ```
 npm run test:net      # multiplayer protocol/session/replication suites
+npm run test:packs    # pack loader/activation/save/multiplayer suites
 ```
+
+## Content packs (W25)
+
+The game ships a safe, declarative extensibility layer. Packs are pure data —
+no scripts, no callbacks, no code execution; everything is validated fail-closed
+before anything is committed atomically to the game.
+
+- **Storm Frontier** (`packs/testpack.js`) ships as the built-in fixture: a small
+  tempest crafting chain (Tempest Brick block, Shard/Bar/Blade items and a Wisp
+  Charm that summons a mini-boss) plus its display strings.
+- Enable it on the title screen via **Content Packs** → toggle → **Apply &
+  Restart**. The choice persists (like the locale); booting without a pack is
+  byte-for-byte the historical game.
+- Saves record which packs were active. Loading a save whose packs are missing
+  or changed refuses cleanly with an actionable message and never touches the
+  stored save.
+- Multiplayer peers prove identical gameplay pack sets during the join handshake
+  before any world state is shared (protocol v4).
+
+See docs/ARCHITECTURE.md §29 for the full contract and docs/ADR-MOD-004-
+sandboxed-mods.md for why executable mods stay research-only.
 
 ## Multiplayer (W23 productionized)
 
@@ -41,8 +63,9 @@ Two ways to play locally:
 The host's world is the save; joined clients never write saves. Movement, mining,
 placement, combat, loot, inventory, crafting, shop trading and chest transfers are
 simulated only by the authority and replicated through baselined per-client region
-and entity streams (protocol v3 — region lines carry authoritative liquid
-type+amount; see docs/ARCHITECTURE.md §26–§28). Latency masking is client-presentation-only: remote entities render through
+and entity streams (protocol v4 — v3 added authoritative liquid type+amount
+layers; v4 added pack-set identity to hello/welcome; see
+docs/ARCHITECTURE.md §26–§29). Latency masking is client-presentation-only: remote entities render through
 interpolated snapshot buffers and the local pawn predicts locomotion through the
 canonical movement code, reconciled against server truth (small errors blend,
 large divergences snap). Determinism: gameplay randomness runs on seeded named
