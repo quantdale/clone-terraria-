@@ -85,6 +85,15 @@
     return false;
   }
 
+  // Roll a registered standalone loot table by stable id (pack-owned tables
+  // live in the registry 'lootTable' kind). Returns [{id,count}] pure data.
+  function rollById(sid, opts) {
+    const t = (TC.Registry && typeof TC.Registry.get === 'function')
+      ? TC.Registry.get('lootTable', sid) : null;
+    if (!t || !Array.isArray(t.entries)) return [];
+    return roll(t.entries, opts);
+  }
+
   // Scatter an ENEMY_DEFS-style def (drops[] + coins[]) into the world at
   // (cx, cy). The single entry point Enemies.rollDrops delegates to.
   function rollEntity(def, cx, cy, opts) {
@@ -97,6 +106,19 @@
         TC.Items.spawnDrop(cx, cy, r.id, r.count, true);
       }
       rolled.push(r);
+    }
+    // Pack-owned standalone loot table referenced by stable id (W26). The
+    // same canonical evaluator + GameRng 'loot' stream is reused — no second
+    // pack-specific roller.
+    if (def.lootTable) {
+      const tblResults = rollById(def.lootTable, opts);
+      for (let i = 0; i < tblResults.length; i++) {
+        const r = tblResults[i];
+        if (TC.Items && typeof TC.Items.spawnDrop === 'function') {
+          TC.Items.spawnDrop(cx, cy, r.id, r.count, true);
+        }
+        rolled.push(r);
+      }
     }
     const amount = rollCoins(def.coins, opts);
     if (amount > 0 && TC.Economy && typeof TC.Economy.dropCoins === 'function') {
@@ -196,6 +218,7 @@
   TC.LootTables = {
     roll,
     rollCoins,
+    rollById,
     rollEntity,
     validate,
     validateRange,

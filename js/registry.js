@@ -50,6 +50,7 @@
     "projectileType",
     "biome",
     "station",
+    "lootTable",
   ]);
   const CORE = "core";
   const ID_RE = /^[a-z0-9_]+:[a-z0-9_]+$/; // 'namespace:name'

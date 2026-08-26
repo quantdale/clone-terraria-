@@ -9,9 +9,10 @@
   "npc": 1,
   "buff": 7,
   "projectileType": 7,
-  "biome": 7,
-  "station": 3
- },
+   "biome": 7,
+   "station": 3,
+   "lootTable": 0
+  },
  "stable": {
   "tile:0": "core:air",
   "tile:1": "core:dirt",

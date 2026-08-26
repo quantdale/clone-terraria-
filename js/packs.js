@@ -80,6 +80,8 @@
     items: 256,
     enemies: 128,
     recipes: 256,
+    walls: 64,
+    lootTables: 64,
   };
   const MAX_DEPS = 16;
   const MAX_PACKS_ACTIVE = 16;
@@ -459,7 +461,7 @@
     if (m.content !== undefined) {
       if (!isObj(m.content)) errs.push("content must be an object");
       else {
-        const knownFam = { tiles: 1, items: 1, enemies: 1, recipes: 1 };
+        const knownFam = { tiles: 1, items: 1, enemies: 1, recipes: 1, walls: 1, lootTables: 1 };
         for (const k in m.content) {
           if (!knownFam[k]) {
             errs.push("unknown content family '" + k + "'");
@@ -798,6 +800,8 @@
       ["tiles", "tile", "stagedTiles", "stagedTileKeys"],
       ["items", "item", "stagedItems", "stagedItemKeys"],
       ["enemies", "enemy", "stagedEnemies", "stagedEnemyKeys"],
+      ["walls", "wall", "stagedWalls", "stagedWallKeys"],
+      ["lootTables", "lootTable", "stagedLootTables", "stagedLootTableKeys"],
     ];
     for (const [fam, , sidMapName, keyMapName] of fams) {
       const arr = content[fam];
@@ -825,7 +829,9 @@
         m[key] = sid;
         if (fam === "tiles") ctx.stagedMapsTiles.push(m);
         else if (fam === "items") ctx.stagedMapsItems.push(m);
-        else ctx.stagedMapsEnemies.push(m);
+        else if (fam === "enemies") ctx.stagedMapsEnemies.push(m);
+        else if (fam === "walls") ctx.stagedMapsWalls.push(m);
+        else ctx.stagedMapsLootTables.push(m);
         if (hasOwn(ctx[keyMapName], key)) {
           P.push(who + ": duplicate key '" + key + "'");
           continue;
@@ -839,7 +845,7 @@
   // family plus updated staged maps. PURE — throws PackError on problems.
   function stageContent(rec, ctx) {
     const content = rec.content;
-    const out = { tiles: [], items: [], enemies: [], recipes: [] };
+    const out = { tiles: [], items: [], enemies: [], recipes: [], walls: [], lootTables: [] };
     if (!content) return out;
     const ns = rec.id;
     const P = [];
@@ -942,7 +948,7 @@
         for (const k in it) {
           if (
             !{
-              key: 1, name: 1, kind: 1, tile: 1, damage: 1, knockback: 1,
+              key: 1, name: 1, kind: 1, tile: 1, wall: 1, damage: 1, knockback: 1,
               useTime: 1, value: 1, maxStack: 1, boss: 1, summon: 1,
               pickPower: 1,
             }[k]
@@ -983,17 +989,29 @@
           }
           def.value = it.value;
         }
+        const hasTileRef = it.tile != null;
+        const hasWallRef = it.wall != null;
         if (kind === "block") {
-          const tileRef = it.tile;
-          if (tileRef == null) {
-            P.push(who + ": block items must reference a tile");
+          if (!hasTileRef && !hasWallRef) {
+            P.push(who + ": block items must reference a tile or wall");
             continue;
           }
-          const tsid = needRef(ctx.resolveTile, "tile", tileRef, who, "tile", P);
-          if (tsid == null) continue;
-          // Numeric world id is attached at COMMIT time (pack tile indices
-          // exist only once TILE_DEFS grows); keep the validated ref until then.
-          def._tileRef = tileRef;
+          // Numeric world id is attached at COMMIT time (pack tile/wall
+          // indices exist only once the dense tables grow); keep the
+          // validated ref until then.
+          if (hasTileRef) {
+            const tsid = needRef(ctx.resolveTile, "tile", it.tile, who, "tile", P);
+            if (tsid == null) continue;
+            def._tileRef = it.tile;
+          }
+          if (hasWallRef) {
+            const wsid = needRef(ctx.resolveWall, "wall", it.wall, who, "wall", P);
+            if (wsid == null) continue;
+            def._wallRef = it.wall;
+          }
+        } else if (hasWallRef) {
+          P.push(who + ": 'wall' reference requires kind 'block'");
+          continue;
         }
         if (kind === "weapon") {
           if (!boundedNum(it.damage == null ? 0 : it.damage, 1, 500)) {
@@ -1081,7 +1099,7 @@
             !{
               key: 1, name: 1, hp: 1, dmg: 1, kbResist: 1, ai: 1, w: 1, h: 1,
               color: 1, speed: 1, jumpVel: 1, look: 1, defense: 1, drops: 1,
-              coins: 1, boss: 1,
+              coins: 1, boss: 1, lootTable: 1,
             }[k]
           ) {
             P.push(who + ": unknown field '" + k + "'");
@@ -1181,6 +1199,11 @@
           }
           def.boss = en.boss;
         }
+        if (en.lootTable != null) {
+          const lsid = needRef(ctx.resolveLootTable, "lootTable", en.lootTable, who, "lootTable", P);
+          if (lsid == null) continue;
+          def.lootTable = en.lootTable;
+        }
         if (en.drops !== undefined) {
           if (!Array.isArray(en.drops) || en.drops.length > 16) {
             P.push(who + ": drops must be an array of at most 16 entries");
@@ -1248,6 +1271,133 @@
         m[e.sid] = e.sid;
         m[e.key] = e.sid;
         ctx.stagedMapsEnemies.push(m);
+      }
+    }
+
+    // ---- walls (append-only dense background defs) -------------------
+    if (Array.isArray(content.walls)) {
+      for (let i = 0; i < content.walls.length; i++) {
+        const wl = content.walls[i];
+        const who = ns + ".walls[" + i + "]";
+        if (!isObj(wl)) {
+          P.push(who + ": entry must be an object");
+          continue;
+        }
+        for (const k in wl) {
+          if (!{ key: 1, name: 1, color: 1, hardness: 1, drop: 1 }[k]) {
+            P.push(who + ": unknown field '" + k + "'");
+          }
+        }
+        const key = typeof wl.key === "string" ? wl.key : snakeCase(wl.name);
+        const sid = ctx.stagedWallKeys[key];
+        if (!KEY_RE.test(key || "") || sid == null) {
+          continue;
+        }
+        const def = {};
+        if (!strBounded(wl.name, 64)) {
+          P.push(who + ": name must be a string of 1..64 chars");
+          continue;
+        }
+        def.name = wl.name;
+        if (typeof wl.color !== "string" || !COLOR_RE.test(wl.color)) {
+          P.push(who + ": color must be a '#rrggbb' string");
+          continue;
+        }
+        def.color = wl.color;
+        if (!boundedNum(wl.hardness == null ? 0.5 : wl.hardness, 0, 10)) {
+          P.push(who + ": hardness must be a number within 0..10");
+          continue;
+        }
+        def.hardness = wl.hardness == null ? 0.5 : wl.hardness;
+        if (wl.drop != null) {
+          const dropId = needRef(ctx.resolveItem, "item", wl.drop, who, "drop", P);
+          if (dropId == null) continue;
+          def.drop = wl.drop;
+        }
+        out.walls.push({ key: key, sid: sid, def: def });
+        ctx.stagedWalls[sid] = sid;
+        ctx.stagedWallKeys[key] = sid;
+      }
+    }
+
+    // ---- standalone loot tables ----------------------------------------
+    if (Array.isArray(content.lootTables)) {
+      for (let i = 0; i < content.lootTables.length; i++) {
+        const lt = content.lootTables[i];
+        const who = ns + ".lootTables[" + i + "]";
+        if (!isObj(lt)) {
+          P.push(who + ": entry must be an object");
+          continue;
+        }
+        for (const k in lt) {
+          if (!{ key: 1, name: 1, entries: 1 }[k]) {
+            P.push(who + ": unknown field '" + k + "'");
+          }
+        }
+        const key = typeof lt.key === "string" ? lt.key : snakeCase(lt.name);
+        const sid = ctx.stagedLootTableKeys[key];
+        if (!KEY_RE.test(key || "") || sid == null) {
+          continue;
+        }
+        if (!strBounded(lt.name || "", 64)) {
+          P.push(who + ": name must be a string of 1..64 chars");
+          continue;
+        }
+        if (!Array.isArray(lt.entries) || lt.entries.length > 64) {
+          P.push(who + ": entries must be an array of at most 64");
+          continue;
+        }
+        const entries = [];
+        let ok = true;
+        for (let e = 0; e < lt.entries.length; e++) {
+          const en = lt.entries[e];
+          const ewho = who + ".entries[" + e + "]";
+          if (!isObj(en)) {
+            P.push(ewho + ": must be an object");
+            ok = false;
+            break;
+          }
+          for (const k in en) {
+            if (!{ id: 1, min: 1, max: 1, chance: 1, requires: 1 }[k]) {
+              P.push(ewho + ": unknown field '" + k + "'");
+            }
+          }
+          const iid = needRef(ctx.resolveItem, "item", en.id, ewho, "id", P);
+          if (iid == null) { ok = false; break; }
+          const mn = en.min == null ? 1 : en.min;
+          const mx = en.max == null ? mn : en.max;
+          if (!boundedInt(mn, 0, 999) || !boundedInt(mx, 0, 999) || mx < mn) {
+            P.push(ewho + ": min/max must be integers 0..999 with max >= min");
+            ok = false;
+            break;
+          }
+          const ch = en.chance == null ? 1 : en.chance;
+          if (!boundedNum(ch, 0.0001, 1)) {
+            P.push(ewho + ": chance must be a number within (0, 1]");
+            ok = false;
+            break;
+          }
+          if (en.requires != null && !validConditionShape(en.requires, ewho + ".requires", P)) {
+            ok = false;
+            break;
+          }
+          entries.push({
+            id: en.id,
+            min: mn,
+            max: mx,
+            chance: ch,
+            requires: en.requires == null ? null : en.requires,
+          });
+        }
+        if (!ok) continue;
+        out.lootTables.push({
+          key: key,
+          sid: sid,
+          def: { name: lt.name || key, entries: entries },
+        });
+        ctx.stagedLootTables[sid] = sid;
+        ctx.stagedLootTableKeys[key] = sid;
+        ctx.stagedMapsLootTables.push({ [sid]: sid, [key]: sid });
       }
     }
 
@@ -1443,6 +1593,9 @@
       if (TC.RECIPES && TC.RECIPES.length > j.recipesLen) {
         TC.RECIPES.length = j.recipesLen;
       }
+      if (TC.WALL_DEFS && TC.WALL_DEFS.length > j.wallLen) {
+        TC.WALL_DEFS.length = j.wallLen;
+      }
       for (const k of j.itemKeys) delete TC.ITEM_DEFS[k];
       for (const k of j.enemyKeys) delete TC.ENEMY_DEFS[k];
       if (TC.Registry && typeof TC.Registry.forgetLast === "function") {
@@ -1500,6 +1653,22 @@
       defineInRegistry("recipe", e.sid, e.def, j);
       TC.Registry.alias("recipe", e.sid, idx);
     }
+    // Walls: append to the dense WALL_DEFS table; numeric alias = appended
+    // index. No <kind>:enum extension is needed — the runtime reads the bare
+    // numeric index exactly like built-in walls.
+    const wallIndexBySid = {};
+    for (const e of staged.walls) {
+      if (!TC.WALL_DEFS) fail("commit", "WALL_DEFS unavailable for wall commit");
+      const idx = TC.WALL_DEFS.length;
+      TC.WALL_DEFS.push(e.def);
+      wallIndexBySid[e.sid] = idx;
+      defineInRegistry("wall", e.sid, e.def, j);
+      TC.Registry.alias("wall", e.sid, idx);
+    }
+    // Loot tables: registered as stable identities only (no dense world id).
+    for (const e of staged.lootTables) {
+      defineInRegistry("lootTable", e.sid, e.def, j);
+    }
 
     // ---- reference normalization (canonical RUNTIME forms) ------------
     // Hot paths index tables by BARE key and worlds by NUMERIC tile ids, so
@@ -1524,6 +1693,18 @@
         e.def.tile = num;
         delete e.def._tileRef;
       }
+      if (e.def._wallRef != null) {
+        const sid = resolveStable("wall", e.def._wallRef, ctx);
+        let num = sid != null ? wallIndexBySid[sid] : undefined;
+        if (num == null && sid != null && TC.Registry) {
+          num = TC.Registry.stableToIndex("wall", sid);
+        }
+        if (num == null || num < 0) {
+          throw PackError("commit", "wall index vanished during commit for '" + e.sid + "'");
+        }
+        e.def.wall = num;
+        delete e.def._wallRef;
+      }
       if (e.def.boss != null) {
         const sid = resolveStable("enemy", e.def.boss, ctx);
         if (sid != null) e.def.boss = canonicalRef("enemy", sid, ctx);
@@ -1535,6 +1716,22 @@
           const sid = resolveStable("item", d.id, ctx);
           if (sid != null) d.id = canonicalRef("item", sid, ctx);
         }
+      }
+      if (e.def.lootTable != null) {
+        const sid = resolveStable("lootTable", e.def.lootTable, ctx);
+        if (sid != null) e.def.lootTable = canonicalRef("lootTable", sid, ctx);
+      }
+    }
+    for (const e of staged.walls) {
+      if (e.def.drop != null) {
+        const sid = resolveStable("item", e.def.drop, ctx);
+        if (sid != null) e.def.drop = canonicalRef("item", sid, ctx);
+      }
+    }
+    for (const e of staged.lootTables) {
+      for (const d of e.def.entries) {
+        const sid = resolveStable("item", d.id, ctx);
+        if (sid != null) d.id = canonicalRef("item", sid, ctx);
       }
     }
     for (const e of staged.recipes) {
@@ -1552,7 +1749,7 @@
     }
     statsCounters.committedEntries +=
       staged.tiles.length + staged.items.length + staged.enemies.length +
-      staged.recipes.length;
+      staged.recipes.length + staged.walls.length + staged.lootTables.length;
   }
 
   // Resolve any validated ref form to its stable id using the SAME union
@@ -1561,7 +1758,9 @@
     if (ref == null) return null;
     const maps = kind === "item" ? ctx.stagedMapsItems
       : kind === "enemy" ? ctx.stagedMapsEnemies
-      : kind === "tile" ? ctx.stagedMapsTiles : [];
+      : kind === "tile" ? ctx.stagedMapsTiles
+      : kind === "wall" ? ctx.stagedMapsWalls
+      : kind === "lootTable" ? ctx.stagedMapsLootTables : [];
     const r = makeResolver(kind, maps)(ref, kind);
     return r && !r.ambiguous ? r : null;
   }
@@ -1643,15 +1842,23 @@
       stagedEnemies: {},
       stagedEnemyKeys: {},
       stagedRecipes: {},
+      stagedWalls: {},
+      stagedWallKeys: {},
+      stagedLootTables: {},
+      stagedLootTableKeys: {},
       stagedMapsItems: [],
       stagedMapsEnemies: [],
       stagedMapsTiles: [],
+      stagedMapsWalls: [],
+      stagedMapsLootTables: [],
       stagedEnemyDefs: {},
       pendingSummonChecks: [],
     };
     ctx.resolveItem = makeResolver("item", ctx.stagedMapsItems);
     ctx.resolveEnemy = makeResolver("enemy", ctx.stagedMapsEnemies);
     ctx.resolveTile = makeResolver("tile", ctx.stagedMapsTiles);
+    ctx.resolveWall = makeResolver("wall", ctx.stagedMapsWalls);
+    ctx.resolveLootTable = makeResolver("lootTable", ctx.stagedMapsLootTables);
 
     const stagedByPack = [];
     try {
@@ -1711,6 +1918,7 @@
     const j = {
       tileLen: TC.TILE_DEFS ? TC.TILE_DEFS.length : 0,
       recipesLen: TC.RECIPES ? TC.RECIPES.length : 0,
+      wallLen: TC.WALL_DEFS ? TC.WALL_DEFS.length : 0,
       itemKeys: [],
       enemyKeys: [],
       regDefs: [],
