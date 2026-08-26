@@ -19,6 +19,11 @@ const fs = require("fs");
 const path = require("path");
 
 const BASELINE = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "..", "tests", "fixtures", "registry-baseline-w24.json"), "utf8")
+);
+// Pre-W24 identity reference: proves content growth is ADDITIVE-ONLY —
+// every id captured at the W20 checkpoint must still sit at its old index.
+const PRE_W24 = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "tests", "fixtures", "registry-baseline-w20.json"), "utf8")
 );
 
@@ -106,13 +111,16 @@ function main() {
   }
 
   // ---- 6. registry identity guard ------------------------------------
+  // W24 policy: new content appends tail entries deliberately; the snapshot
+  // is refreshed ONLY alongside an additive-only proof against pre-W24.
   const fp = TC.Registry.fingerprint();
   if (fp !== BASELINE.fingerprint) {
     fail("registry fingerprint drifted: " + fp + " != baseline " + BASELINE.fingerprint);
-  } else ok("registry fingerprint unchanged: " + fp);
+  } else ok("registry fingerprint matches the W24 baseline: " + fp);
 
   const counts = {};
   let stableTotal = 0;
+  let prevChecked = 0;
   for (const k of TC.Registry.KINDS) {
     counts[k] = TC.Registry.count(k);
     stableTotal += counts[k];
@@ -126,9 +134,20 @@ function main() {
       } else if (BASELINE.stable[k + ":" + i] !== id) {
         fail("stable id moved at " + k + ":" + i + ": " + id + " != baseline " + BASELINE.stable[k + ":" + i]);
       }
+      const prevId = PRE_W24.stable[k + ":" + i];
+      if (prevId !== undefined) {
+        prevChecked++;
+        if (prevId !== id) fail("pre-W24 stable id changed at " + k + ":" + i + ": " + id + " != " + prevId);
+      } else if (PRE_W24.counts[k] !== undefined && i < PRE_W24.counts[k]) {
+        fail("pre-W24 index lost from snapshot: " + k + ":" + i);
+      }
+    }
+    if ((PRE_W24.counts[k] | 0) > counts[k]) {
+      fail("kind '" + k + "' SHRANK versus pre-W24: " + counts[k] + " < " + PRE_W24.counts[k]);
     }
   }
-  ok(stableTotal + " stable ids match the W20 baseline exactly");
+  ok(stableTotal + " stable ids match the W24 baseline exactly");
+  ok(prevChecked + " pre-W24 stable ids verified unchanged (additive-only content growth)");
 
   if (failed > 0) {
     console.error("check-i18n FAILED: " + failed + " error(s)");

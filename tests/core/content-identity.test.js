@@ -183,18 +183,28 @@ test("registry: validate() passes AFTER full script load incl. wiring aliases", 
       `wiring tile alias #${id} unresolved`,
     );
   }
+  // W24 pumps ride the same late-alias path as the original mechanism set.
   assert.strictEqual(
-    TC.Registry.has("item", "wire"),
+    TC.Registry.has("tile", TC.TILE.INLET_PUMP),
     true,
-    "wiring item string-key alias missing",
+    "inlet pump numeric alias unresolved",
   );
+  assert.strictEqual(
+    TC.Registry.has("tile", TC.TILE.OUTLET_PUMP),
+    true,
+    "outlet pump numeric alias unresolved",
+  );
+  assert.strictEqual(TC.Registry.has("item", "inlet_pump"), true,
+    "inlet_pump item key alias missing");
+  assert.strictEqual(TC.Registry.has("item", "outlet_pump"), true,
+    "outlet_pump item key alias missing");
   // Full-boot table length is base(43, incl. W4 micro-biome blocks)
-  // + tiles.js platform set(3) + loot.js pot/crystal(2) + wiring(8) = 56.
-  // If this changes, content was added or reordered somewhere — update
-  // deliberately.
+  // + tiles.js platform set(3) + loot.js pot/crystal(2) + wiring(8)
+  // + W24 inlet/outlet pumps(2) = 58. If this changes, content was added
+  // or reordered somewhere — update deliberately with an additive-only proof.
   assert.strictEqual(
     TC.TILE_DEFS.length,
-    56,
+    58,
     "full-boot TILE_DEFS length drifted",
   );
 });

@@ -67,26 +67,113 @@ test("proto: decode fails closed on garbage and oversize frames", () => {
   rejects("oversize frame", big);
 });
 
-test("proto: region codec round-trips and diffs deterministically", () => {
+test("proto: region codec round-trips and diffs deterministically (v3 liquid layers)", () => {
   const tiles = new Uint8Array(1024);
   const walls = new Uint8Array(1024);
-  for (let i = 0; i < 1024; i++) { tiles[i] = i % 251; walls[i] = (i * 7) % 200; }
-  const full = P.buildFullRegion(17, 42, tiles, walls);
+  const ltype = new Uint8Array(1024);
+  const lamt = new Uint8Array(1024);
+  for (let i = 0; i < 1024; i++) {
+    tiles[i] = i % 251; walls[i] = (i * 7) % 200;
+    ltype[i] = i % 4; lamt[i] = (i * 13) % 256;
+  }
+  const full = P.buildFullRegion(17, 42, tiles, walls, ltype, lamt);
   const decT = new Uint8Array(1024), decW = new Uint8Array(1024);
+  const decLT = new Uint8Array(1024), decLA = new Uint8Array(1024);
   // decode via the same hex path the client uses
   for (let i = 0; i < 1024; i++) {
     decT[i] = parseInt(full.tiles.substr(i * 2, 2), 16);
     decW[i] = parseInt(full.walls.substr(i * 2, 2), 16);
+    decLT[i] = parseInt(full.ltype.substr(i * 2, 2), 16);
+    decLA[i] = parseInt(full.lamt.substr(i * 2, 2), 16);
   }
   assert.deepEqual(decT, tiles, "tile layer round-trip");
   assert.deepEqual(decW, walls, "wall layer round-trip");
+  assert.deepEqual(decLT, ltype, "liquid type layer round-trip");
+  assert.deepEqual(decLA, lamt, "liquid amount layer round-trip");
+  assert.ok(P.validate({ v: P.VERSION, t: "worldupd", sid: null, pid: null,
+    cseq: 0, sseq: 0, tick: 0,
+    p: { regions: [full], players: [], enemies: [], drops: [] } }).ok,
+    "v3 full region line validates");
+  // identical state -> identical encoding (deterministic bytes)
+  const full2 = P.buildFullRegion(17, 42, tiles, walls, ltype, lamt);
+  assert.strictEqual(JSON.stringify(full), JSON.stringify(full2),
+    "identical region state -> identical encoding");
 
-  const curT = tiles.slice(), curW = walls.slice();
-  curT[10] = (tiles[10] + 1) % 250; curW[999] = (walls[999] + 1) % 200;
-  const cells = P.diffRegion(tiles, walls, curT, curW);
-  // cross-realm arrays: compare by value, not prototype
-  assert.strictEqual(JSON.stringify(cells), JSON.stringify([[10, curT[10], walls[10]], [999, curT[999], curW[999]]]),
-    "only changed cells diffed");
+  const cur = { tiles: tiles.slice(), walls: walls.slice(),
+    ltype: ltype.slice(), lamt: lamt.slice() };
+  cur.tiles[10] = (tiles[10] + 1) % 250;
+  cur.walls[999] = (walls[999] + 1) % 200;
+  cur.ltype[500] = 3; cur.lamt[777] = (lamt[777] + 40) % 256;
+  const cells = P.diffRegion({ tiles, walls, ltype, lamt }, cur);
+  // cross-realm arrays: compare by value, not prototype. A changed cell
+  // restates ALL authoritative fields — no ambiguous omission.
+  assert.strictEqual(JSON.stringify(cells),
+    JSON.stringify([
+      [10, cur.tiles[10], walls[10], ltype[10], lamt[10]],
+      [500, tiles[500], walls[500], cur.ltype[500], lamt[500]],
+      [777, tiles[777], walls[777], ltype[777], cur.lamt[777]],
+      [999, tiles[999], cur.walls[999], ltype[999], lamt[999]]]),
+    "only changed cells diffed, each as a full quintuple");
+
+  // applyCells restores all four layers exactly
+  const out = { tiles: tiles.slice(), walls: walls.slice(),
+    ltype: ltype.slice(), lamt: lamt.slice() };
+  out.tiles[10] ^= 0xff; out.lamt[500] = 9;
+  P.applyCells(out.tiles, out.walls, cells, out.ltype, out.lamt);
+  assert.deepEqual(out.tiles, cur.tiles, "delta applies tiles");
+  assert.deepEqual(out.ltype, cur.ltype, "delta applies liquid types");
+  assert.deepEqual(out.lamt, cur.lamt, "delta applies liquid amounts");
+});
+
+test("proto: stale protocol versions are rejected cleanly (v3 gate)", () => {
+  for (const v of [1, 2, 4, 99]) {
+    const m = msg("hello", { name: "A" });
+    m.v = v;
+    rejects("v" + v + " rejected", m);
+  }
+  // the rejection names the expected version so old clients get a clean signal
+  const bad = msg("hello", { name: "A" });
+  bad.v = 2;
+  const res = P.validate(bad);
+  assert.ok(!res.ok && /expected 3/.test(res.error || ""),
+    "v2 rejection states expected version");
+});
+
+test("proto: liquid region lines fail closed on malformed shapes (W24)", () => {
+  const mkFull = () => P.buildFullRegion(0, 1,
+    new Uint8Array(1024), new Uint8Array(1024),
+    new Uint8Array(1024), new Uint8Array(1024));
+  const worldupd = (regions) => ({ v: P.VERSION, t: "worldupd", sid: null,
+    pid: null, cseq: 0, sseq: 0, tick: 0, p: { regions, players: [], enemies: [], drops: [] } });
+
+  // partial layer sets are ambiguous — never validate
+  const missingLamt = mkFull();
+  delete missingLamt.lamt;
+  rejects("full line missing lamt", worldupd([missingLamt]));
+  const missingLT = mkFull();
+  delete missingLT.ltype;
+  rejects("full line missing ltype", worldupd([missingLT]));
+
+  // unequal layer lengths fail closed
+  const shortLayers = mkFull();
+  shortLayers.ltype = "00".repeat(1023);
+  rejects("ltype shorter than tiles", worldupd([shortLayers]));
+
+  // unknown region fields are rejected
+  const extra = mkFull();
+  extra.zorp = 1;
+  rejects("unknown region field", worldupd([extra]));
+
+  // delta cells must be exact quintuples with bounded uint fields
+  const good = { idx: 3, rev: 7, cells: [[5, 0, 0, 0, 0]] };
+  accepts(worldupd([good]));
+  rejects("delta cell triple (v2 shape)", worldupd([{ idx: 3, rev: 7, cells: [[5, 0, 0]] }]));
+  rejects("delta cell quadruple", worldupd([{ idx: 3, rev: 7, cells: [[5, 0, 0, 0]] }]));
+  rejects("delta cell sextuple", worldupd([{ idx: 3, rev: 7, cells: [[5, 0, 0, 0, 0, 9]] }]));
+  rejects("liq type out of range", worldupd([{ idx: 3, rev: 7, cells: [[5, 0, 0, 256, 0]] }]));
+  rejects("liq amount negative", worldupd([{ idx: 3, rev: 7, cells: [[5, 0, 0, -1, 0]] }]));
+  rejects("cell idx over region size", worldupd([{ idx: 3, rev: 7, cells: [[1024, 0, 0, 0, 0]] }]));
+  rejects("float liq amount", worldupd([{ idx: 3, rev: 7, cells: [[5, 0, 0, 1, 1.5]] }]));
 });
 
 test("proto: digests are stable and order-insensitive where required", () => {

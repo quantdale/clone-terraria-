@@ -36,7 +36,7 @@ function makeDriver(label) {
 
 function msg(type, p, extra) {
   return Object.assign({
-    v: 2, t: type, sid: null, pid: null,
+    v: 3, t: type, sid: null, pid: null,
     cseq: 0, sseq: 0, tick: 0,
     p: p || {}
   }, extra || {});
