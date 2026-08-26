@@ -158,6 +158,54 @@
     return r;
   }
 
+  // ---- additive pack fragment merge (W25) ----
+  // Resource packs layer presentation strings ON TOP of a registered locale
+  // without replacing it (register(locale,...,{replace}) would drop built-in
+  // keys). Added and overridden keys are tracked so the returned handle can
+  // undo exactly this fragment — used by atomic pack activation rollback.
+  // Presentation-only: catalog entries never feed registry identity.
+  function extend(locale, fragment, opts) {
+    if (!validLocaleId(locale)) return { ok: false, error: 'invalid-locale-id' };
+    if (!fragment || typeof fragment !== 'object' || Array.isArray(fragment)) {
+      return { ok: false, error: 'fragment must be an object' };
+    }
+    const flat = Object.create(null);
+    const errors = [];
+    flatten('', fragment, flat, errors);
+    if (errors.length) return { ok: false, error: 'invalid-fragment', details: errors };
+    let cat = catalogs[locale];
+    if (!cat) {
+      const r = register(locale, {}, {
+        name: (opts && opts.source) || locale,
+        nativeName: (opts && opts.source) || locale,
+      });
+      if (!r.ok) return { ok: false, error: r.error };
+      cat = catalogs[locale];
+    }
+    const added = [];
+    const overridden = []; // [key, previousValue]
+    for (const k in flat) {
+      if (Object.prototype.hasOwnProperty.call(cat, k) && cat[k] !== null) {
+        overridden.push([k, cat[k]]);
+      } else added.push(k);
+    }
+    for (const k in flat) cat[k] = flat[k];
+    counts.packKeys = (counts.packKeys || 0) + added.length + overridden.length;
+    return {
+      ok: true,
+      added: added.length,
+      overridden: overridden.length,
+      locale: locale,
+      source: (opts && opts.source) || null,
+      undo: function () {
+        const c = catalogs[locale];
+        if (!c) return;
+        for (const k in flat) delete c[k];
+        for (const pair of overridden) c[pair[0]] = pair[1];
+      },
+    };
+  }
+
   // ---- lookup core ----
   function rawEntry(key, locale) {
     const cat = catalogs[locale];
@@ -482,6 +530,7 @@
     stats: stats,
     restore: restore,
     isRegistered: isRegistered,
+    extend: extend,
   };
 
   // Dev/test harness: the synthetic stress locale joins the registry ONLY

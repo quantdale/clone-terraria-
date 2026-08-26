@@ -602,6 +602,40 @@
     syncErrors.push(String((err && err.message) || err));
   }
 
+  // First legacy string key registered for a stable id (the "bare key" form
+  // hot paths read), or null. Pack activation uses this to normalize stored
+  // references onto canonical runtime forms at commit time.
+  function keyOf(kind, id) {
+    checkKind(kind);
+    const b = bucket(kind);
+    const e = typeof id === "string" ? b.byStable[id] : null;
+    if (!e) return null;
+    return e.legacyKeys.length ? e.legacyKeys[0] : null;
+  }
+
+  // Undo support for atomic pack activation (W25): removes an entry ONLY
+  // when it is still the tail of its kind's dense list and the id matches.
+  // Anything else throws — this is a compensating transaction for defines we
+  // just made ourselves, never a general mutation API.
+  function forgetLast(kind, id) {
+    checkKind(kind);
+    const b = bucket(kind);
+    const last = b.list.length - 1;
+    if (last < 0 || b.list[last].id !== id) {
+      fail("cannot forget '" + id + "': not the tail " + kind + " entry");
+    }
+    delete b.byStable[id];
+    // Drop any legacy aliases captured for this id so a rolled-back
+    // activation cannot leave dangling numeric/key mappings behind.
+    for (const k in b.byNum) {
+      if (b.byNum[k] === id) delete b.byNum[k];
+    }
+    for (const k in b.byKey) {
+      if (b.byKey[k] === id) delete b.byKey[k];
+    }
+    b.list.pop();
+  }
+
   TC.Registry = {
     KINDS: KINDS,
     define: define,
@@ -618,5 +652,7 @@
     validate: validate,
     fingerprint: fingerprint,
     syncFromTables: syncFromTables,
+    forgetLast: forgetLast,
+    keyOf: keyOf,
   };
 })();

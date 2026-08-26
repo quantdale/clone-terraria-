@@ -31,7 +31,8 @@
     NpcMovedIn: 'NpcMovedIn',
     WirePulse: 'WirePulse',
     DayChanged: 'DayChanged',
-    LocaleChanged: 'LocaleChanged'   // W20: presentation-only locale switch
+    LocaleChanged: 'LocaleChanged',  // W20: presentation-only locale switch
+PacksChanged: 'PacksChanged'     // W25: active pack set changed (atomic activation)
   });
 
   // Bucket key -> array of entries in registration order (arrays give deterministic order).

@@ -124,6 +124,8 @@ function makeStorage() {
 
 // Script order is DERIVED from index.html (the single source of truth), so a
 // production script added there can never silently miss the headless suites.
+// Local scripts outside js/ (e.g. declarative pack fixtures under packs/)
+// ride along with their repo-relative path.
 const INDEX_HTML = path.join(ROOT, "index.html");
 function scriptOrderFromIndex() {
   const html = fs.readFileSync(INDEX_HTML, "utf8");
@@ -132,7 +134,10 @@ function scriptOrderFromIndex() {
   let m;
   while ((m = re.exec(html)) !== null) {
     const src = m[1];
-    if (/^js\/.+\.js$/.test(src)) names.push(src.slice(3, -3));
+    if (/^js\/.+\.js$/.test(src)) names.push(src); // kept verbatim; loader resolves ROOT-relative
+    else if (/^[a-z0-9_][a-z0-9_.\/-]*\.js$/i.test(src) && !/^https?:/.test(src)) {
+      names.push(src); // repo-relative (e.g. declarative pack fixtures)
+    }
   }
   if (!names.length)
     throw new Error("load-game: no js/<name>.js scripts found in index.html");
@@ -142,7 +147,7 @@ const SCRIPT_ORDER = scriptOrderFromIndex();
 
 function loadGame(opts) {
   opts = opts || {};
-  const storage = makeStorage();
+  const storage = opts.storage || makeStorage();
   const listeners = {};
   let rafCallback = null;
   let simTime = 0; // single synthetic clock (ms)
@@ -225,11 +230,17 @@ function loadGame(opts) {
   sandbox.globalThis = sandbox;
   const ctx = vm.createContext(sandbox);
 
-  const names = opts.scripts || SCRIPT_ORDER;
+  const names = (opts.scripts || SCRIPT_ORDER)
+    .filter((n) => !(opts.omitScripts || []).some((pat) => n === pat || n.indexOf(pat) === 0));
   for (const name of names) {
-    const file = path.join(ROOT, "js", name + ".js");
+    // Bare names are js/<name>.js (test subset syntax); anything containing a
+    // slash is the repo-relative src recorded from index.html verbatim.
+    const rel = name.indexOf("/") >= 0
+      ? name
+      : name.endsWith(".js") ? name : path.join("js", name + ".js");
+    const file = path.join(ROOT, rel);
     vm.runInContext(fs.readFileSync(file, "utf8"), ctx, {
-      filename: "js/" + name + ".js",
+      filename: rel.split(path.sep).join("/"),
     });
   }
 
