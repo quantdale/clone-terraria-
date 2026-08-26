@@ -162,7 +162,7 @@ gameplay chain through canonical transactions.
   multiplayer (3) = **23 cases**, all green repeatedly.
 - tests/net/proto.test.js: +1 case (v4 packs-schema matrix); version-gate
   case updated to pin 'expected 4'. Net suite: 70/70.
-- Full node gate (`npm test`, now including tests/packss): **597 pass /
+- Full node gate (`npm test`, now including tests/packs): **597 pass /
   0 fail** (was 573 pre-campaign +24 net-new cases minus none removed).
   Run twice back-to-back with identical results (deterministic).
 - Browser journeys: **30 passed** (A–O + new P) in the final clean full run;
@@ -204,11 +204,16 @@ Runtime 16.6 s.
 
 ## CI runs
 
-Final pushed-head run: see GitHub Actions on the last commit of
-`git log eda8fdf..HEAD`. (Local full gate = `npm run validate`: syntax 58
-files, check:i18n fingerprint guard, npm test 597, build + verify-dist,
-browser 30.) The campaign is not terminal until the authoritative pushed
-head is green; if reading this and unsure, check Actions for HEAD.
+Final pushed-head run: GitHub Actions on the last commit of
+`git log eda8fdf..HEAD`. Local full gate on the final tree (this exact HEAD)
+= `npm run validate` exit 0 with stage evidence re-captured individually:
+syntax **57 files / 0 failures**; check:i18n green — catalog 554 fallback
+keys, "registry fingerprint matches the W24 baseline: 1b1d7c15", "374 stable
+ids match the W24 baseline exactly", "368 pre-W24 stable ids verified
+unchanged"; npm test **597 pass / 0 fail**; release build + verify-dist exit
+0; browser suite **30 passed**. The campaign is not terminal until the
+authoritative pushed head is green; if reading this and unsure, check
+Actions for HEAD.
 
 ## Remaining limitations
 
