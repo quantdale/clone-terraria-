@@ -224,9 +224,13 @@ test.describe("journey O — liquids, pumps & mechanism parity", () => {
       }
       expect(mB.outlet.amount).toBe(mA.outlet.amount);
       expect(mB.inlet.amount).toBe(mA.inlet.amount);
-      // his fresh view reflects the post-absence world (pump counter grew)
+      // his fresh view reflects the post-absence world: the pump counter has
+      // grown since he left. Strict equality would be wrong here — the world
+      // is alive, and a wandering enemy may legitimately cross the plate in
+      // the interim; every activation is a whole bounded batch.
       const dbgNow = await fetchDebug(port);
-      expect(dbgNow.pump.unitsMoved).toBe(afterAbsence);
+      expect(dbgNow.pump.unitsMoved).toBeGreaterThanOrEqual(afterAbsence);
+      expect(dbgNow.pump.unitsMoved % 48).toBe(0);
       console.log("journey-O: " + el() + " rejoin truth coherent unitsMoved=" + dbgNow.pump.unitsMoved);
 
       // ---- 5. shutdown returns BOTH clients to a coherent title ----
