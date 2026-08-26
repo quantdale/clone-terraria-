@@ -520,10 +520,13 @@
   // assigned. DOMContentLoaded fires only after every classic script has
   // run, so activation waits for it when available; headless embeds without
   // a real document fall through immediately.
+  // Systems boot and layer registration must happen AFTER the registry
+  // mirror, so the entire tail is deferred together.
   let packsBootError = null;
-  const bootRegistry = function () {
-    // Activation first (so pack content joins the same identity pass),
-    // then the single registry mirror + validation gate.
+  let _bootDone = false;
+  const bootAll = function () {
+    if (_bootDone) return;
+    _bootDone = true;
     if (TC.Packs && typeof TC.Packs.bootActivate === "function") {
       const r = TC.Packs.bootActivate();
       packsBootError = r.error || null;
@@ -532,18 +535,19 @@
       TC.Registry.syncFromTables();
       try { TC.Registry.validate(); } catch (e) { console.warn('[TC] registry validation:', e.message); }
     }
+    if (TC.Systems && TC.Systems.runBoot) TC.Systems.runBoot();
+    registerSystems();
+    registerLayers();
+    TC._bootDone = true;
+    void packsBootError;
+    requestAnimationFrame(frame);
   };
-  void packsBootError; // surfaced via TC.Packs.lastError() on the title screen
   try {
     if (typeof document !== "undefined" && document.addEventListener &&
         document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", bootRegistry, { once: true });
+      document.addEventListener("DOMContentLoaded", bootAll, { once: true });
     } else {
-      bootRegistry();
+      bootAll();
     }
-  } catch (e) { bootRegistry(); }
-  if (TC.Systems && TC.Systems.runBoot) TC.Systems.runBoot();
-  registerSystems();
-  registerLayers();
-  requestAnimationFrame(frame);
+  } catch (e) { bootAll(); }
 })();

@@ -30,7 +30,7 @@ async function openGame(page, hash) {
   const errors = trackErrors(page);
   await page.goto("/" + (hash || ""), { waitUntil: "load" });
   await page.waitForFunction(
-    () => !!(window.TC && window.TC.state === "title"),
+    () => !!(window.TC && window.TC.state === "title" && window.TC._bootDone),
   );
   return errors;
 }
