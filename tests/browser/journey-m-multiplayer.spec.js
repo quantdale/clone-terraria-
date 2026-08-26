@@ -343,9 +343,12 @@ test.describe("journey M — multiplayer vertical slice", () => {
       // converges through replication
       const ownerPage = pageB;
       const placeRes = await (async () => {
-        // iteration budget calibrated for CI-class runners (W21 environment
-        // caveat: journey wall-clock is host-load sensitive)
-        for (let i = 0; i < 600; i++) {
+        // CI-runner calibration: the server validates PlaceTile reach
+        // against ITS lagged simulation of Bob, so when the authoritative
+        // position trails prediction the right recovery is to physically
+        // re-approach the cell (what a player does) and re-propose — not
+        // to spin on a client-side reach check alone.
+        for (let i = 0; i < 900; i++) {
           const r = await ownerPage.evaluate(([cell, item]) => {
             const TC = window.TC;
             const TSz = TC.CONST.TS;
@@ -355,6 +358,7 @@ test.describe("journey M — multiplayer vertical slice", () => {
             return window.__mpc.sendCmd("PlaceTile", { tx: cell.tx, ty: cell.ty, item });
           }, [mineCellB, lootId]);
           if (r.ok) return { ok: true };
+          if (i > 0 && i % 60 === 0) await approach(ownerPage, mineCellB);
           await pageB.waitForTimeout(50);
         }
         return { ok: false };
