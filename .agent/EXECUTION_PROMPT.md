@@ -1,9 +1,10 @@
 # W24 — Liquid & Wiring Completion: Pumps, Multiplayer Liquid Replication, Mechanism Authority & Stress Hardening
 
-**Status:** ACTIVE  
+**Status:** COMPLETED  
 **Planned-From:** `b6a14120a5ce3cb0e79775c2780a8913756de3ce`  
 **Planned-At:** 2026-08-26  
-**Target-Branch:** `main`  
+**Completed-At:** 2026-08-26 (see docs/HANDOFF-W24-liquid-wiring-completion.md)  
+**Target-Branch:** `main`
 **Campaign-Type:** major implementation + integration + multiplayer parity + hardening  
 **Execution entrypoint:** repository-native `goal` continuation (`/goal continue`, `continue`, or equivalent supported by the active harness)
 

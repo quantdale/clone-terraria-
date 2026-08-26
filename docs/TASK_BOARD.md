@@ -38,7 +38,7 @@ localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
 | Runtime authority convergence (W18) | scheduler/commands/render cutover + headless boundary | DONE (`TC.Runtime` canonical host; FIFO command queue; RenderLayers pipeline; pause freezes simulation; `tests/core/runtime-authority.test.js`, `tests/core/headless-sim.test.js`, browser `runtime-authority.spec.js`, `tools/bench-runtime.js`) |
 | Advanced-module integration | INT-001..INT-006 | DONE |
 | Tile shapes/traversal/grapple | PHY-001..PHY-005 | DONE |
-| Liquids | LIQ-001..LIQ-005 | DONE (LIQ-006 pumps remains TODO) |
+| Liquids | LIQ-001..LIQ-005 | DONE (LIQ-006 DONE via W24 — wire-powered inlet/outlet pumps over the authoritative layer; see ARCHITECTURE.md §28) |
 | Worldgen platform | WGEN-001..WGEN-005 | DONE (v3 passes incl. deep caves + micro-biomes) |
 | Combat & progression | COM-001..COM-007 | DONE (canonical resolveHit, generic statuses, enemy defs/AI/spawn split, LootTables, Progression conditions+graph, Storm Jelly vertical arc, **W17 Wall of Flesh production gateway**, **W19 underworld spawn truth-sync**: depth-first `zoneOf` classification, shared `TC.Biomes.underworldTopPx/isUnderworldAt` boundary, declarative post-Wall ember_wraith entry) |
 | Inventory/crafting | INV-001/002, CRF-001/002 | DONE (progression-aware recipe conditions included; craft clicks route through CraftRecipe transactions) |
@@ -58,7 +58,7 @@ localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
   container transactions, baselined entity replication with tombstones +
   keyframes (-66% idle-2p outbound vs W22), interpolation/prediction latency
   masking, four-player + soak/fuzz coverage, journey N. Remaining future
-  work: real secondary-language catalogs, LIQ-006 pumps, MOD epic,
+  work: real secondary-language catalogs, MOD epic,
   PERF-003/005, compression of region payloads beyond RLE-free hex deltas
   (measured acceptable at W23 volumes), >4 player scaling.
 - **W21 perf follow-ups:** browser-measured (real raster) benchmark variant;
@@ -606,6 +606,14 @@ No whole-world per-frame scan.
 **Priority:** P2  
 **Depends on:** LIQ-004, INT-006  
 **Effort:** High
+
+**DONE (W24).** Wire-powered inlet/outlet pumps as a deterministic bounded
+batch on the shared pulse path; exact volume/type conservation except the
+canonical water+lava reaction; protocol v3 liquid-region replication with
+client presentation mirror; mechanism multiplayer authority (plates, doors,
+trap attribution); additive registry growth bdad6cfa/368 -> 1b1d7c15/374;
+save round-trip + pre-W24 save compatibility. Evidence:
+docs/HANDOFF-W24-liquid-wiring-completion.md.
 
 ---
 

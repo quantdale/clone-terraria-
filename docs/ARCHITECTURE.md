@@ -1119,3 +1119,66 @@ interpolation buffers, resync, coherent shutdown). Benchmarks: extended
 tools/bench-multiplayer.js scenes (idle-4p, move-4p, separated-explore-4p,
 combat-multi-2p, tx-burst-craft-shop) + tools/soak-multiplayer.js (seeded 20k-tick
 soak/fuzz with durable JSON evidence).
+
+## 28. Campaign contracts (W24 — Liquid & Wiring Completion)
+
+LIQ-006 ships as production gameplay: **inlet/outlet pumps** are wire-powered
+liquid endpoints owned by `TC.Wiring`, mutating ONLY the authoritative
+`TC.Liquids` layer.
+
+Pump contract (v1): an inlet READS the liquid layer at its own tile coordinate;
+an outlet WRITES to its own. Pump tiles are deliberately NON-SOLID so the
+volume layer can occupy their cell; no liquid is ever encoded in tile ids.
+When one wiring pulse floods a component, every pump endpoint reached by that
+SAME pulse is collected into a deduped set and processed ONCE as a
+deterministic batch AFTER receiver discovery — ascending world cell index,
+never Set/insertion order. Two phases per batch: MEASURE (exact per-pair
+transfer matrix against per-outlet cumulative budgets: empty outlets accept
+any ONE type, partially filled accept only their own type; incompatible types
+never convert or overwrite) then APPLY via `TC.Liquids.set()` so wakeups,
+water+lava reaction, LiquidChanged, WorldRegions and persistence stay on the
+canonical path. Volume is exactly conserved except where the canonical
+reaction consumes it into stone. Boundedness: `PUMP_ENDPOINT_CAP = 64`
+endpoints per pulse (excess counted as cap hits, left untouched) and
+`PUMP_TRANSFER = 48` units per endpoint per pulse; observability via
+`TC.Wiring.pumpStats()` ({pulses,endpoints,unitsMoved,rejected,capHits}).
+Content is additive-only: tiles `wiring:inlet_pump`/`wiring:outlet_pump`
+(TILE_DEFS length 56 -> 58), items, anvil recipes, catalog entries; registry
+fingerprint bdad6cfa/368 -> 1b1d7c15/374 with an additive-only proof against
+the retained W20 fixture (`tests/fixtures/registry-baseline-{w20,w24}.json`).
+
+Liquid replication (protocol v3): region lines now carry authoritative liquid
+type+amount alongside tiles/walls. Full lines are four equal-length hex layers;
+delta cells are `[cellIdx, tile, wall, liqType, liqAmt]` quintuples restating
+ALL authoritative fields of a changed cell (no ambiguous omission). v3 rejects
+v1/v2/unknown versions with a clean expected-version error. Host side reads
+layers through the bounded read-only seam `TC.Liquids.snapshotRegion()`;
+baselines (`conn.lastSent`) include liquid so ACK bookkeeping cannot mix stale
+liquid with fresh tiles. Client mirror applies truth through the
+presentation-only `TC.Liquids.applyMirrorRegion()` — direct array writes plus
+local WorldRegions 'liquid' marks for renderer/minimap/lighting repaint; it
+never wakes settling, queues gameplay events, or echoes to the server, and a
+joined client runs no settle/pump/reaction simulation of its own.
+
+Mechanism multiplayer authority: `js/wiring.js` enumerates players through
+`registeredPlayers()` (TC.Players roster, TC.player fallback). Pressure plates
+press on ANY registered live player; door-close safety checks EVERY live
+player's hitbox; trap darts damage the actual victim via
+`Combat.hurtPlayer(..., {target})` so a remote player can never redirect
+damage onto the primary pawn. `TC.Targets` remains AI-only policy.
+
+Defect fixed en route: `TC.Liquids.set()` (the documented spigot/migration
+seam) never reported to WorldRegions — invisible to every region consumer,
+including multiplayer replication. All mutation seams now report uniformly.
+
+Tests: tests/world/pumps.test.js (conservation matrix, mixed types, loops,
+endpoint cap, canonical reaction, replay digests);
+tests/net/proto.test.js v3 codec/version/hostile-liquid cases;
+tests/net/liquid-replication.test.js (driver-level layer checks + cross-realm
+convergence: join/settle/pump/reaction/resync + no-local-sim guard);
+tests/net/mechanisms-multiplayer.test.js; tests/save/pumps-save.test.js.
+Browser journey O over `node tools/mp-server.js --fixture pumps` (opt-in
+host-authoritative rig): non-primary plate activation through networked input,
+exactly-once transfer via /debug counters, two-client mirror coherence,
+rejoin-current-truth, clean shutdown. Benchmarks: bench-multiplayer scenes
+liquid-churn + pump-burst (bounded deltas, idle suppression retained).

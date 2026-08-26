@@ -41,13 +41,23 @@ Two ways to play locally:
 The host's world is the save; joined clients never write saves. Movement, mining,
 placement, combat, loot, inventory, crafting, shop trading and chest transfers are
 simulated only by the authority and replicated through baselined per-client region
-and entity streams (protocol v2 — see docs/ARCHITECTURE.md §26/§27).
-Latency masking is client-presentation-only: remote entities render through
+and entity streams (protocol v3 — region lines carry authoritative liquid
+type+amount; see docs/ARCHITECTURE.md §26–§28). Latency masking is client-presentation-only: remote entities render through
 interpolated snapshot buffers and the local pawn predicts locomotion through the
 canonical movement code, reconciled against server truth (small errors blend,
 large divergences snap). Determinism: gameplay randomness runs on seeded named
 streams (`TC.GameRng`), so same-seed sessions replay identically including enemy
 AI and loot.
+
+## Pumps & wiring liquids (W24)
+
+Craft an **Inlet Pump** / **Outlet Pump** at an anvil (iron bars + wire), place
+them on wire, and pulse the circuit (switch, lever, pressure plate or timer).
+Each pulse moves up to 48 liquid units from every inlet to every outlet on the
+same powered component — exactly conserved, deterministic cell order, water +
+lava still reacts into stone per the canonical rule. In multiplayer the host
+simulates pumps/liquids; joined clients see replicated liquid state in every
+region update.
 
 
 ## Controls
