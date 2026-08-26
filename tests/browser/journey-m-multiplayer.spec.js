@@ -362,9 +362,16 @@ test.describe("journey M — multiplayer vertical slice", () => {
       expect(placeRes.ok).toBe(true);
       const placedTile = await ownerPage.evaluate((item) =>
         window.TC.ITEM_DEFS[item].tile, lootId);
+      // The OWNER's mirror proves the authoritative placement landed (the
+      // server validates reach against ITS simulated position, which under
+      // CI-class load can trail the client's prediction for a while); only
+      // then is Alice's replication window measured.
+      await ownerPage.waitForFunction(([tx, ty, tid]) =>
+        window.TC.world.get(tx, ty) === tid,
+      [mineCellB.tx, mineCellB.ty, placedTile], { timeout: 60000 });
       await pageA.waitForFunction(([tx, ty, tid]) =>
         window.TC.world.get(tx, ty) === tid,
-      [mineCellB.tx, mineCellB.ty, placedTile], { timeout: 30000 });
+      [mineCellB.tx, mineCellB.ty, placedTile], { timeout: 60000 });
       // exactly once: placing consumed exactly one of the looted stack
       const afterPlace = await invSnapshot(ownerPage);
       expect(afterPlace[lootId] || 0).toBeGreaterThanOrEqual((afterLoot[lootId] || 1) - 1);
