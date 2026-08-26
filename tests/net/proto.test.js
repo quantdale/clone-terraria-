@@ -105,15 +105,22 @@ test("proto: region codec round-trips and diffs deterministically (v3 liquid lay
   cur.walls[999] = (walls[999] + 1) % 200;
   cur.ltype[500] = 3; cur.lamt[777] = (lamt[777] + 40) % 256;
   const cells = P.diffRegion({ tiles, walls, ltype, lamt }, cur);
-  // cross-realm arrays: compare by value, not prototype. A changed cell
-  // restates ALL authoritative fields — no ambiguous omission.
-  assert.strictEqual(JSON.stringify(cells),
-    JSON.stringify([
-      [10, cur.tiles[10], walls[10], ltype[10], lamt[10]],
-      [500, tiles[500], walls[500], cur.ltype[500], lamt[500]],
-      [777, tiles[777], walls[777], ltype[777], cur.lamt[777]],
-      [999, tiles[999], cur.walls[999], ltype[999], lamt[999]]]),
-    "only changed cells diffed, each as a full quintuple");
+  // Expected per the v3 compact rule: a changed DRY cell encodes as a
+  // triple [i,t,w] (implying no liquid); a changed WET cell restates all
+  // five authoritative fields.
+  const expected = [];
+  const prevAll = { tiles, walls, ltype, lamt };
+  for (let i = 0; i < 1024; i++) {
+    const ch = prevAll.tiles[i] !== cur.tiles[i] || prevAll.walls[i] !== cur.walls[i] ||
+      prevAll.ltype[i] !== cur.ltype[i] || prevAll.lamt[i] !== cur.lamt[i];
+    if (!ch) continue;
+    if (cur.ltype[i] === 0 && cur.lamt[i] === 0) expected.push([i, cur.tiles[i], cur.walls[i]]);
+    else expected.push([i, cur.tiles[i], cur.walls[i], cur.ltype[i], cur.lamt[i]]);
+  }
+  assert.strictEqual(JSON.stringify(cells), JSON.stringify(expected),
+    "diff matches the compact-dry/wet-quintuple rule exactly");
+  assert.ok(cells.every((c) => [10, 500, 777, 999].includes(c[0])),
+    "only the four genuinely changed cells appear");
 
   // applyCells restores all four layers exactly
   const out = { tiles: tiles.slice(), walls: walls.slice(),
@@ -179,10 +186,14 @@ test("proto: liquid region lines fail closed on malformed shapes (W24)", () => {
   extra.zorp = 1;
   rejects("unknown region field", worldupd([extra]));
 
-  // delta cells must be exact quintuples with bounded uint fields
-  const good = { idx: 3, rev: 7, cells: [[5, 0, 0, 0, 0]] };
-  accepts(worldupd([good]));
-  rejects("delta cell triple (v2 shape)", worldupd([{ idx: 3, rev: 7, cells: [[5, 0, 0]] }]));
+  // delta cells may be compact triples (dry — zeros implied by v3) or full
+  // quintuples; anything else is malformed and rejected
+  const goodQuint = { idx: 3, rev: 7, cells: [[5, 0, 0, 0, 0]] };
+  accepts(worldupd([goodQuint]));
+  const goodTriple = { idx: 3, rev: 7, cells: [[5, 0, 0]] };
+  accepts(worldupd([goodTriple]));
+  const mixedLine = { idx: 3, rev: 7, cells: [[5, 0, 0], [6, 1, 2, 3, 4]] };
+  accepts(worldupd([mixedLine]));
   rejects("delta cell quadruple", worldupd([{ idx: 3, rev: 7, cells: [[5, 0, 0, 0]] }]));
   rejects("delta cell sextuple", worldupd([{ idx: 3, rev: 7, cells: [[5, 0, 0, 0, 0, 9]] }]));
   rejects("liq type out of range", worldupd([{ idx: 3, rev: 7, cells: [[5, 0, 0, 256, 0]] }]));

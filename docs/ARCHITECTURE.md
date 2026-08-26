@@ -1147,11 +1147,15 @@ Content is additive-only: tiles `wiring:inlet_pump`/`wiring:outlet_pump`
 fingerprint bdad6cfa/368 -> 1b1d7c15/374 with an additive-only proof against
 the retained W20 fixture (`tests/fixtures/registry-baseline-{w20,w24}.json`).
 
-Liquid replication (protocol v3): region lines now carry authoritative liquid
-type+amount alongside tiles/walls. Full lines are four equal-length hex layers;
-delta cells are `[cellIdx, tile, wall, liqType, liqAmt]` quintuples restating
-ALL authoritative fields of a changed cell (no ambiguous omission). v3 rejects
-v1/v2/unknown versions with a clean expected-version error. Host side reads
+Liquid replication (protocol v3): region lines carry authoritative liquid
+type+amount alongside tiles/walls. Full lines are equal-length hex layers —
+four when a region holds any liquid, and tiles/walls ONLY when it is bone dry
+(the joint absence of ltype/lamt is authoritative "no liquid", keeping join
+payloads near v2 size). Delta cells come in two bounded forms under one rule:
+`[cellIdx, tile, wall]` asserts a dry cell and `[cellIdx, tile, wall,
+liqType, liqAmt]` restates all authoritative fields of a wet cell — omission
+inside a cell is never ambiguous. v3 rejects v1/v2/unknown versions with a
+clean expected-version error. Host side reads
 layers through the bounded read-only seam `TC.Liquids.snapshotRegion()`;
 baselines (`conn.lastSent`) include liquid so ACK bookkeeping cannot mix stale
 liquid with fresh tiles. Client mirror applies truth through the

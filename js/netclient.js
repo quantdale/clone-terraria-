@@ -292,9 +292,9 @@
         }
       }
       let ltype = null, lamt = null;
-      if (LQ && r.cells.length && r.cells[0].length >= 5) {
-        // seed delta buffers with current mirror state so unchanged cells
-        // restate identically and the mirror write only repaints real diffs
+      if (LQ && r.cells.length) {
+        // Compact triples assert NO liquid just like explicit zeros, so seed
+        // the delta buffers from current mirror state for ANY line.
         const snap = LQ.snapshotRegion(baseX, baseY, TSZ);
         ltype = snap.type; lamt = snap.amount;
       }

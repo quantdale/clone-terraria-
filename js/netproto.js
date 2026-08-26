@@ -217,9 +217,14 @@
     if (r.cells.length > 1024) return false;
     for (let i = 0; i < r.cells.length; i++) {
       const c = r.cells[i];
-      if (!Array.isArray(c) || c.length !== 5 ||
-          !uint(c[0], 1023) || !uint(c[1], 255) || !uint(c[2], 255) ||
-          !uint(c[3], 255) || !uint(c[4], 255)) return false;
+      // v3 delta cell: compact [idx,tile,wall] (dry — implies no liquid) or
+      // full [idx,tile,wall,liqType,liqAmt]. Mixed lengths within one line
+      // are fine; anything else is malformed.
+      if (!Array.isArray(c) ||
+          (c.length !== 3 && c.length !== 5) ||
+          !uint(c[0], 1023) || !uint(c[1], 255) || !uint(c[2], 255)) return false;
+      if (c.length === 5 &&
+          (!uint(c[3], 255) || !uint(c[4], 255))) return false;
     }
     return true;
   }
@@ -447,7 +452,11 @@
       const lt = cur.ltype[i], la = cur.lamt[i];
       if (t !== (pT ? pT[i] : -1) || w !== (pW ? pW[i] : -1) ||
           lt !== (pLT ? pLT[i] : -1) || la !== (pLA ? pLA[i] : -1)) {
-        cells.push([i, t, w, lt, la]);
+        // Compact form: a DRY changed cell encodes as [idx,tile,wall] —
+        // under protocol v3 a missing liquid pair means type 0 / amount 0.
+        // Wet cells restate all five authoritative fields.
+        if (lt === 0 && la === 0) cells.push([i, t, w]);
+        else cells.push([i, t, w, lt, la]);
       }
     }
     return cells;
@@ -458,8 +467,9 @@
       const c = cells[i];
       tiles[c[0]] = c[1];
       walls[c[0]] = c[2];
-      if (ltype && c.length > 3) ltype[c[0]] = c[3];
-      if (lamt && c.length > 4) lamt[c[0]] = c[4];
+      // v3: a compact (length-3) cell asserts NO liquid — clear the layers.
+      if (ltype) ltype[c[0]] = c.length > 3 ? c[3] : 0;
+      if (lamt) lamt[c[0]] = c.length > 4 ? c[4] : 0;
     }
   }
 

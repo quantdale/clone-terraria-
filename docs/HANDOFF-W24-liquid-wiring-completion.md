@@ -62,11 +62,14 @@ Task ID: W24 (execution of `.agent/EXECUTION_PROMPT.md`, Status ACTIVE at
   identical pre-transfer state and loops/duplicate paths dedupe via a Set.
   Ordering is ascending world cell index (deterministic under any discovery
   order); per-outlet budgets are cumulative across the whole batch.
-- **Protocol v3, not v2-compatible splicing**: liquid layers change every
+- Protocol v3, not v2-compatible splicing: liquid layers change every
   region line materially, so VERSION bumps 2→3 with clean expected-version
-  rejection; delta cells became fixed quintuples `[cellIdx,tile,wall,liqType,
-  liqAmt]` so omission can never be ambiguous; full lines are four equal-length
-  hex layers; unknown region fields now fail closed (v2 tolerated extras).
+  rejection. Full lines hex four layers for WET regions and omit the pair
+  for dry ones (absence is authoritative empty — payload economy measured
+  against mining churn after the first CI run showed quintuple-only deltas
+  inflating mine-burst outbound ~35%). Delta cells are bounded triples
+  (dry, zeros implied) or quintuples (wet, all fields restated) so omission
+  inside a cell can never be ambiguous; unknown region fields fail closed.
 - **Mirror boundary**: `TC.Liquids.snapshotRegion()` (read-only host copy) vs
   `applyMirrorRegion()` (presentation-only client writer: no settle wake, no
   gameplay events, no echo; marks local WorldRegions 'liquid' so renderer/
@@ -124,12 +127,12 @@ Task ID: W24 (execution of `.agent/EXECUTION_PROMPT.md`, Status ACTIVE at
   exactly-once transfer (authoritative unitsMoved +48 per edge), two-client
   mirror coherence at the rig, truth-changed-during-absence + rejoin resync
   coherence, clean shutdown for both clients.
-- Benchmarks (`node tools/bench-multiplayer.js 300`, VM-realm tax applies;
-  relative signals matter): idle-2p retains idle suppression (no liquid spam);
-  new scenes liquid-churn 39.6 KiB/s and pump-burst 46.5 KiB/s outbound with
-  bounded region deltas (no full-layer resend), pump pulses processed within
-  caps. Historical W22 idle-2p reference 86.0 KiB/s remains printed by the
-  tool; current absolute numbers vary by machine load.
+- Benchmarks (`node tools/bench-multiplayer.js`, VM-realm tax applies;
+  relative signals matter): idle-2p retains idle suppression (no liquid spam)
+  at ~59 KiB/s; mine-burst 56.5 KiB/s vs the historical W22 reference 47.9
+  (the residual is wet-cell quintuples + fixture-era scenes); liquid-churn
+  31.3 KiB/s and pump-burst 36.3 KiB/s outbound with bounded region deltas
+  (no full-layer resend), pump pulses processed within caps.
 - Seeded soak/fuzz (`node tools/soak-multiplayer.js --seed 4711 --ticks
   20000`, now including a deterministic pump phase): TWO independent runs
   produced IDENTICAL evidence — liquidDigest `3854750836`, pump pulses 222 /
@@ -146,9 +149,17 @@ Task ID: W24 (execution of `.agent/EXECUTION_PROMPT.md`, Status ACTIVE at
 ## Validation gate
 
 Final evidence recorded in the closing commit message and CI:
-`npm run validate` (syntax + i18n + 569 headless + build + verify + browser
-suite incl. Journey O) executed on the final head; GitHub Actions result for
-the pushed head checked per completion criterion 21.
+`npm run validate` executed locally green on the pre-push head (569/569
+headless, build + verify-dist OK, 29/29 browser journeys incl. Journey O).
+CI history during the gate: run `32924416865` (8820911) failed Journey O on
+an over-strict rejoin equality — a wandering enemy legitimately crossed the
+plate mid-journey; fixed to whole-batch semantics. Run `32925497426`
+(6e0c243) exposed CI-runner load shaping M/N/O differently; root-caused to
+quintuple-only deltas inflating churn traffic — fixed by the compact-dry
+delta encoding plus targeted journey calibration (documented above).
+Run `32926994609` (b6270c2) left only journey M, fixed by owner-side landing
+gate; run `32928999490` (7929494) left only M's place loop, fixed by real
+re-approach recovery. Final head result recorded at close.
 
 ## Remaining known limitations / next-campaign candidates
 
