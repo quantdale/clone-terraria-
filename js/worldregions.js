@@ -43,6 +43,7 @@
   const R = {
     CHUNK: CHUNK,
     REASONS: REASONS.slice(),
+    LIQUID_BIT: BIT.liquid, // consumer-side filtering (e.g. renderer skips liquid-only regions)
     world: null,
     chunksX: 0, chunksY: 0, count: 0,
     rev: null,          // Uint32Array(count) monotonic per-region revision
@@ -116,6 +117,7 @@
     for (const rec of R.consumers.values()) {
       if (!rec.qFlag[idx]) { rec.qFlag[idx] = 1; rec.queue.push(idx); }
       if (rec.seen[idx] === old) rec.pending++;
+      if (rec.kinds) rec.kinds[idx] |= bit; // per-consumer pending-kind view
     }
   }
   function markIdx(idx, reason) {
@@ -197,6 +199,11 @@
     rec.queue = [];
     rec.qFlag = new Uint8Array(R.count);
     rec._buf = [];
+    // Per-consumer pending-kind view: bits accumulated while THIS consumer is
+    // stale, cleared on its own observe(). Lets a consumer skip invalidation
+    // kinds it does not render (the chunk renderer ignores liquid-only marks;
+    // liquid paints through TC.Liquids.draw, never through chunk canvases).
+    rec.kinds = new Uint8Array(R.count);
     const rev = R.rev;
     for (let i = 0; i < R.count; i++) {
       if (rec.seen[i] !== rev[i]) {
@@ -204,6 +211,7 @@
         R.outstanding[i]++;
         rec.qFlag[i] = 1;
         rec.queue.push(i);
+        rec.kinds[i] = R.kinds ? (R.kinds[i] || 1) : 1; // conservative snapshot
       }
     }
     rec._clean = false;
@@ -279,6 +287,7 @@
         rec.seen[idx] = R.rev[idx];
         rec.pending--;
         if (rec.pending < 0) rec.pending = 0;
+        if (rec.kinds) rec.kinds[idx] = 0;
         if (R.outstanding[idx] > 0) {
           R.outstanding[idx]--;
           if (R.outstanding[idx] === 0) R.kinds[idx] = 0; // fully observed
@@ -291,6 +300,7 @@
           if (seen[i] !== rev[i]) {
             seen[i] = rev[i];
             rec.pending = Math.max(0, rec.pending - 1);
+            if (rec.kinds) rec.kinds[i] = 0;
             if (R.outstanding[i] > 0) {
               R.outstanding[i]--;
               if (R.outstanding[i] === 0) R.kinds[i] = 0;
@@ -300,6 +310,13 @@
         rec.pending = 0;
         rec._clean = true;
         rec._bumpAtLastSweep = R.bumps;
+      },
+      // Pending-change kind bitmask for THIS consumer at idx (0 when current).
+      // Precise per-consumer view — unlike R.pendingKinds(), which keeps
+      // bits while ANY consumer lags.
+      pendingKinds: function (idx) {
+        return (rec.kinds && rec.seen && R.rev && rec.seen[idx] !== R.rev[idx])
+          ? rec.kinds[idx] : 0;
       }
     };
     return rec.api;

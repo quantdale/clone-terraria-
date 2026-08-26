@@ -541,47 +541,52 @@
   }
 
   // ---- background walls ----
-  const wallCache = new Map(); // wall id -> HTMLCanvasElement (one look per id)
+  // PERF: position speckles are baked into WALL_VARIANTS pre-rendered
+  // variants per wall id; drawWall picks one with a single hash2(tx,ty,id)
+  // instead of re-synthesizing speckles (9 hash2 calls + string-built
+  // fillStyle + 3 fillRects) for every wall tile on every chunk rebuild.
+  // Deterministic and position-varied like the tile variant cache above.
+  const WALL_VARIANTS = 8;
+  const wallCache = new Map(); // wall id -> canvas[WALL_VARIANTS]
 
-  function buildWall(id) {
+  function buildWallVariants(id) {
     const def = TC.WALL_DEFS[id];
-    const cv = document.createElement('canvas');
-    cv.width = BASE;
-    cv.height = BASE;
-    const g = cv.getContext('2d');
-    rect(g, def.color, 0, 0, BASE, BASE);
-    const H = function (k) { return hash2(id, id, k); }; // id-only mottling
-    for (let k = 0; k < 6; k++) {
-      rect(g, shade(def.color, H(k + 20) < 0.5 ? -0.12 : 0.06),
-        (H(k) * BASE) | 0, (H(k + 10) * BASE) | 0, 1, 1);
+    const speckle = shade(def.color, -0.18);
+    const arr = new Array(WALL_VARIANTS);
+    for (let v = 0; v < WALL_VARIANTS; v++) {
+      const cv = document.createElement("canvas");
+      cv.width = BASE;
+      cv.height = BASE;
+      const g = cv.getContext("2d");
+      rect(g, def.color, 0, 0, BASE, BASE);
+      const H = function (k) { return hash2(v * 29 + 7, id * 97 + k, k); };
+      for (let k = 0; k < 6; k++) {
+        rect(g, shade(def.color, H(k + 20) < 0.5 ? -0.12 : 0.06),
+          (H(k) * BASE) | 0, (H(k + 10) * BASE) | 0, 1, 1);
+      }
+      rect(g, shade(def.color, -0.15), 0, 0, BASE, 1); // darker top lip
+      for (let k = 0; k < 3; k++) { // baked position-style speckles
+        const s = H(k + 40) < 0.35 ? 2 : 1;
+        const x = Math.min((H(k + 50) * BASE) | 0, BASE - s);
+        const y = Math.min((H(k + 60) * BASE) | 0, BASE - s);
+        rect(g, speckle, x, y, s, s);
+      }
+      arr[v] = cv;
     }
-    rect(g, shade(def.color, -0.15), 0, 0, BASE, 1); // darker top lip (no neighbor info)
-    return cv;
+    return arr;
   }
 
   function drawWall(ctx, id, px, py, ts, tx, ty) {
     const def = TC.WALL_DEFS && TC.WALL_DEFS[id];
     if (!def || !def.color) return; // NONE (id 0) or unknown wall id
     ts = ts || (TC.CONST && TC.CONST.TS) || BASE;
-    tx = tx | 0; ty = ty | 0;
-    let cv = wallCache.get(id);
-    if (!cv) {
-      cv = buildWall(id);
-      wallCache.set(id, cv);
+    let arr = wallCache.get(id);
+    if (!arr) {
+      arr = buildWallVariants(id);
+      wallCache.set(id, arr);
     }
-    const ox = Math.round(px), oy = Math.round(py);
-    ctx.drawImage(cv, ox, oy, ts, ts);
-    // position-seeded darker speckles so long wall runs don't visibly repeat
-    ctx.save();
-    ctx.fillStyle = shade(def.color, -0.18);
-    const u = Math.max(1, Math.round(ts / 16));
-    for (let k = 0; k < 3; k++) {
-      const s = (hash2(tx, ty, id * 97 + k) < 0.35 ? 2 : 1) * u;
-      const x = Math.min((hash2(tx, ty, id * 131 + k) * ts) | 0, ts - s);
-      const y = Math.min((hash2(tx, ty, id * 193 + k) * ts) | 0, ts - s);
-      ctx.fillRect(ox + x, oy + y, s, s);
-    }
-    ctx.restore();
+    const v = (hash2(tx | 0, ty | 0, id) * WALL_VARIANTS) | 0;
+    ctx.drawImage(arr[v], Math.round(px), Math.round(py), ts, ts);
   }
 
   // Ghost outline of a tile shape for placement/hammer previews. Screen or

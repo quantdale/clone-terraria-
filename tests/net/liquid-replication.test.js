@@ -127,9 +127,13 @@ test("liquid net: snapshot regions carry authoritative ltype+lamt layers", () =>
   // forces fresh FULL lines that must carry it.
   const p = TC.Players.get(pid);
   const sx = Math.floor(p.x / TS), sy = TC.world.surfaceY[sx] + 2;
-  for (let y = sy - 1; y <= sy; y++) {
-    for (let x = sx - 1; x <= sx + 1; x++) TC.world.setRaw(x, y, TC.TILE.AIR);
-  }
+  // Seal the cell on all sides so its volume cannot settle away — the test
+  // pins "the exact volume present when a pulse fires", which must hold
+  // regardless of settle scheduling or active-set ordering.
+  TC.world.setRaw(sx, sy, TC.TILE.AIR);
+  TC.world.setRaw(sx, sy - 1, TC.TILE.STONE);
+  TC.world.setRaw(sx - 1, sy, TC.TILE.STONE);
+  TC.world.setRaw(sx + 1, sy, TC.TILE.STONE);
   TC.Liquids.set(sx, sy, TC.Liquids.TYPE.WATER, 200);
 
   A.outbox.length = 0;

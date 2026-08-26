@@ -309,6 +309,12 @@
   }
 
   // Budgeted settle pass, at most every TICK (mirrors world.stepWater).
+  // PERF + DETERMINISM: the active set is snapshotted into a reusable buffer
+  // and processed in ascending index order each step. Cells woken mid-step
+  // join the NEXT step — identical inputs now produce identical evolution
+  // regardless of how the set was built (save/load rebuilds it), so saved
+  // worlds replay their remaining settle deterministically.
+  let orderBuf = new Uint32Array(0);
   function update(dt) {
     if (!ready) return;
     frameChanges.length = 0;
@@ -317,10 +323,21 @@
     if (acc < TICK) return;
     acc %= TICK;
     if (!active.size) return;
+    if (orderBuf.length < active.size) {
+      orderBuf = new Uint32Array(Math.max(64, active.size * 2));
+    }
+    const list = orderBuf;
+    {
+      let k = 0;
+      for (const i of active) list[k++] = i;
+    }
+    const n = active.size;
+    // Numeric, in-place sort of exactly the occupied range.
+    orderBuf.subarray(0, n).sort();
     let budget = BUDGET;
-    for (const i of active) {
+    for (let k = 0; k < n; k++) {
       if (budget-- <= 0) break;
-      if (!settleCell(i)) active.delete(i);
+      if (!settleCell(list[k])) active.delete(list[k]);
     }
     flushEvents();
   }
@@ -773,7 +790,7 @@
     if (!TC.SaveCore || typeof TC.SaveCore.register !== "function") return;
     try {
       TC.SaveCore.register("world.core.liquids", {
-        version: 1,
+        version: 2,
         serialize: (ctx) => {
           const w = (ctx && ctx.world) || worldRef;
           if (
@@ -803,33 +820,47 @@
             pt = t;
             pa = a;
           }
-          return out.length ? out : null;
+          // v2: persist the active set so a reload CONTINUES the settle
+          // deterministically instead of re-deriving it from a surface-wake
+          // heuristic (which changes visit order and can resolve pending
+          // water×lava contacts differently than the live session would).
+          const act = [];
+          if (active.size) {
+            const idxs = Array.from(active);
+            idxs.sort((x, y) => x - y);
+            let s = -2, run = 0;
+            for (const i of idxs) {
+              if (i === s + run) { run++; continue; }
+              if (run) pushRun(act, s, run);
+              s = i; run = 1;
+            }
+            if (run) pushRun(act, s, run);
+          }
+          return out.length ? { cells: out, active: act } : null;
         },
         deserialize: (data, ctx) => {
           const w = (ctx && ctx.world) || TC.world || null;
           if (!w) return;
           reset(w);
-          if (!Array.isArray(data)) return;
+          // v1 legacy payload: bare RLE array of cells.
+          const cells = Array.isArray(data) ? data
+            : (data && Array.isArray(data.cells)) ? data.cells : null;
+          if (!cells) return;
           mode = "layer"; // restored data is layer-owned liquid
           const n = w.width * w.height;
-          for (let k = 0; k < data.length; k++) {
-            const e = data[k];
-            if (!Array.isArray(e) || e.length < 3) continue;
-            const start = e[0] | 0;
-            const t = clampType(e[1]);
-            const a = clampAmt(e[2]);
-            if (!t || !a || start < 0 || start >= n) continue;
-            const len = e.length > 3 ? Math.max(1, e[3] | 0) : 1;
-            for (let j = 0; j < len && start + j < n; j++) {
-              const i = start + j;
-              // Invariant guard: never restore layer liquid into a cell that
-              // still holds a legacy liquid tile.
-              const id = w.tiles[i];
-              if (id === TC.TILE.WATER || id === TC.TILE.LAVA) continue;
-              liquidType[i] = t;
-              liquidAmount[i] = a;
-              const above = i >= w.width ? i - w.width : -1;
-              if (above < 0 || liquidType[above] !== t) wakeIdx(i);
+          const legacyWake = Array.isArray(data); // v1: heuristic wakes; v2: exact set below
+          for (let k = 0; k < cells.length; k++) {
+            applyCellEntry(cells[k], legacyWake);
+          }
+          // v2: exact active-set restore. Legacy payloads fall back to the
+          // surface-wake heuristic above.
+          if (!Array.isArray(data) && data && Array.isArray(data.active)) {
+            for (let k = 0; k < data.active.length; k++) {
+              const e = data.active[k];
+              if (!Array.isArray(e) || e.length < 2) continue;
+              const start = e[0] | 0;
+              const len = Math.max(1, e[1] | 0);
+              for (let j = 0; j < len; j++) wakeIdx(start + j);
             }
           }
         },
@@ -839,6 +870,36 @@
         "[TC.Liquids] SaveCore provider registration skipped:",
         e && e.message,
       );
+    }
+  }
+
+  function pushRun(arr, start, len) { arr.push([start, len]); }
+
+  // One RLE cell entry [start,type,amount(,runLen)] into the live layers,
+  // honouring the dual-authority invariant (never over a legacy liquid tile).
+  // When `heuristicWake` is set, surface cells also wake (v1 payloads and
+  // callers without an explicit active set); v2 restores pass false so the
+  // persisted active set is the sole source of wake state.
+  function applyCellEntry(e, heuristicWake) {
+    if (!Array.isArray(e) || e.length < 3) return;
+    const w = worldRef;
+    if (!w) return;
+    const n = w.width * w.height;
+    const start = e[0] | 0;
+    const t = clampType(e[1]);
+    const a = clampAmt(e[2]);
+    if (!t || !a || start < 0 || start >= n) return;
+    const len = e.length > 3 ? Math.max(1, e[3] | 0) : 1;
+    for (let j = 0; j < len && start + j < n; j++) {
+      const i = start + j;
+      const id = w.tiles[i];
+      if (id === TC.TILE.WATER || id === TC.TILE.LAVA) continue;
+      liquidType[i] = t;
+      liquidAmount[i] = a;
+      if (heuristicWake) {
+        const above = i >= w.width ? i - w.width : -1;
+        if (above < 0 || liquidType[above] !== t) wakeIdx(i);
+      }
     }
   }
 

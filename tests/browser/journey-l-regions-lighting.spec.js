@@ -333,6 +333,19 @@ test.describe("journey L — world regions, RGB lighting, minimap", () => {
     await page.evaluate(() => { window.TC.Lighting.setQuality("high"); });
 
     // ---- 9. save -> reload page -> continue: world unchanged --------------
+    // Quiesce ambient liquid first: the fingerprint above and the diff
+    // capture inside saveNow() run in separate evaluate hops with live rAF
+    // ticks between them, so a draining worldgen pool resolving a pending
+    // water×lava contact in that gap legitimately changes world bytes.
+    // Live-liquid save/load continuation determinism is covered headlessly
+    // (tests/world/liquids-determinism.test.js); this assertion pins that
+    // PRESENTATION work never alters simulation state.
+    await page.evaluate(() => {
+      const TC = window.TC;
+      TC.Liquids.reset(TC.world);
+      TC.WorldRegions.markAll("bulk");
+    });
+    await H.runFrames(page, 5);
     const beforeSave = await page.evaluate(fingerprintFn());
     await page.evaluate(() => { if (!window.__TEST__.saveNow()) throw new Error("save failed"); });
     await page.reload({ waitUntil: "load" });

@@ -174,7 +174,7 @@
       this.CHUNK = 32; // chunk size in tiles (shared with TC.WorldRegions)
       this.chunksX = Math.ceil(this.width / this.CHUNK);
       this.chunksY = Math.ceil(this.height / this.CHUNK);
-      this.chunks = new Map(); // chunkKey -> { cv, ctx } canvas cache
+      this.chunks = new Map(); // chunkKey -> { cv, ctx } canvas cache (bounded, see evictFarChunks)
       // W21: dirty tracking is OWNED by TC.WorldRegions (PERF-004). This
       // renderer is just one consumer of the shared revision authority; its
       // legacy private Set is gone so lighting/minimap/persistence observe
@@ -190,6 +190,7 @@
         maxBacklog: 0,
         skipped: 0,
         lastBudgetUsed: 0,
+        liquidOnly: 0,
       };
       if (!this._regions) this.markAllDirty();
     }
@@ -655,6 +656,12 @@
     // Dirty state comes from THIS consumer's cursor into the shared region
     // authority — draining it never hides invalidations from lighting,
     // minimap or any other consumer (W21 PERF-004/VIS-002).
+    //
+    // PERF: regions whose pending kinds are liquid-only are observed and
+    // skipped — chunk canvases hold walls+tiles only; liquid renders live
+    // through TC.Liquids.draw each frame (and the minimap keeps its own
+    // consumer). Without this, settling pools force max-budget chunk
+    // rebuilds every tick even while nothing visual changes here.
     update(dt) {
       const cons = this._regions;
       if (!cons || !TC.Tiles) return;
@@ -670,6 +677,20 @@
       const span = this.CHUNK * TS;
       const cam = TC.camera;
       let order = cons.dirtyRegions();
+      const LIQ = TC.WorldRegions ? TC.WorldRegions.LIQUID_BIT : 0;
+      if (LIQ && typeof cons.pendingKinds === "function" && order.length) {
+        let kept = 0;
+        for (let i = 0; i < order.length; i++) {
+          const idx = order[i];
+          if ((cons.pendingKinds(idx) & ~LIQ) === 0) {
+            cons.observe(idx); // handled: nothing to repaint in chunk canvases
+            this._rstats.liquidOnly++;
+          } else {
+            order[kept++] = idx;
+          }
+        }
+        order.length = kept;
+      }
       if (cam && order.length > BUDGET) {
         const cxc = cam.x / span,
           cyc = cam.y / span;
@@ -690,6 +711,46 @@
       this._rstats.lastBudgetUsed = n;
     }
 
+    // MEMORY: chunk canvases are CHUNK*TS square (~1MB raster each at the
+    // default sizes). Long sessions that travel widely used to retain every
+    // chunk ever revealed (hundreds of MB). Keep a bounded cache: when over
+    // capacity, drop farthest-from-camera chunks first (never ones currently
+    // on screen). A dropped chunk whose area becomes visible again is rebuilt
+    // synchronously by draw() — no other consumer is disturbed. Hysteresis
+    // avoids thrash.
+    evictFarChunks() {
+      const CAP = 160;
+      const FLOOR = 120;
+      if (this.chunks.size <= CAP) return;
+      const zoom = (TC.camera && TC.camera.zoom) || 1;
+      const viewW = (TC.canvas ? TC.canvas.width : 960) / zoom;
+      const viewH = (TC.canvas ? TC.canvas.height : 540) / zoom;
+      const span = this.CHUNK * TS;
+      const camX = TC.camera ? TC.camera.x : 0;
+      const camY = TC.camera ? TC.camera.y : 0;
+      const ccxPx = camX + viewW / 2; // camera centre, world px
+      const ccyPx = camY + viewH / 2;
+      const ccx = Math.floor(ccxPx / span); // centre chunk
+      const ccy = Math.floor(ccyPx / span);
+      const hw = Math.ceil(viewW / span / 2) + 1; // visible half-span (+margin)
+      const vh = Math.ceil(viewH / span / 2) + 1;
+      const cand = [];
+      for (const key of this.chunks.keys()) {
+        const cx = key % this.chunksX,
+          cy = (key / this.chunksX) | 0;
+        if (Math.abs(cx - ccx) <= hw && Math.abs(cy - ccy) <= vh) continue; // on screen
+        const dx = cx + 0.5 - ccxPx / span;
+        const dy = cy + 0.5 - ccyPx / span;
+        cand.push([key, dx * dx + dy * dy]);
+      }
+      cand.sort((a, b) => b[1] - a[1]); // farthest first
+      let target = FLOOR;
+      for (let i = 0; i < cand.length && this.chunks.size > target; i++) {
+        this.chunks.delete(cand[i][0]);
+        this._rstats.evicted = (this._rstats.evicted || 0) + 1;
+      }
+    }
+
     // VIS-002 instrumentation: lifetime rebuilds, current/high-water dirty
     // backlog, idle skips, last-frame budget usage.
     regionStats() {
@@ -699,7 +760,10 @@
         maxBacklog: this._rstats.maxBacklog,
         skippedCurrent: this._rstats.skipped,
         budgetPerFrame: 3,
-        budgetUsedLastFrame: this._rstats.lastBudgetUsed
+        budgetUsedLastFrame: this._rstats.lastBudgetUsed,
+        liquidOnlySkipped: this._rstats.liquidOnly || 0,
+        chunkCacheSize: this.chunks.size,
+        chunksEvicted: this._rstats.evicted || 0
       };
     }
 
@@ -776,12 +840,18 @@
         this.chunksY - 1,
         Math.floor((cam.y + viewH) / span),
       );
+      // PERF + correctness: a visible chunk whose canvas was evicted (or not
+      // yet built) is rebuilt synchronously here — the visible set is small
+      // and this is the only place a hole would actually show.
       for (let cy = cy0; cy <= cy1; cy++) {
         for (let cx = cx0; cx <= cx1; cx++) {
-          const rec = this.chunks.get(cy * this.chunksX + cx);
+          const key = cy * this.chunksX + cx;
+          if (!this.chunks.has(key)) this.rebuildChunk(key);
+          const rec = this.chunks.get(key);
           if (rec) ctx.drawImage(rec.cv, cx * span, cy * span);
         }
       }
+      this.evictFarChunks();
       // Crack overlays for tiles and exposed walls currently being mined.
       if (TC.Tiles && (this.damage.size || this.wallDamage.size)) {
         const tx0 = Math.floor(cam.x / TS) - 1,

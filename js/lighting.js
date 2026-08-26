@@ -78,13 +78,22 @@
   };
 
   function hexToRgb(hex) {
+    // PERF: callers re-register the same '#rrggbb' literals every frame;
+    // parse once per distinct string (bounded set of authored colors).
+    let hit = HEX_CACHE.get(hex);
+    if (hit !== undefined) return hit;
     let h = String(hex == null ? '' : hex).trim();
     if (h.charCodeAt(0) === 35) h = h.slice(1);
     if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-    if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
-    const n = parseInt(h, 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) { hit = null; }
+    else {
+      const n = parseInt(h, 16);
+      hit = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    }
+    if (HEX_CACHE.size < 256) HEX_CACHE.set(hex, hit); // bound defensive
+    return hit;
   }
+  const HEX_CACHE = new Map();
 
   const Lighting = {
     world: null,
@@ -371,57 +380,60 @@
 
   // Merge alive dynamic sources onto `out` over the union of their boxes.
   // Radial falloff, no occlusion — cheap transient glows, not propagators.
+  // Union box of alive dynamic sources + position signature in ONE pass.
+  // Writes into L._ubox scratch (no per-frame allocation).
   function dynUnionBox(L) {
     const TSz = TC.CONST.TS;
-    let bx0 = 1e9, by0 = 1e9, bx1 = -1e9, by1 = -1e9, any = false;
+    const box = L._ubox || (L._ubox = { x0: 0, y0: 0, x1: 0, y1: 0, any: false });
+    box.any = false;
+    let sig = 0;
     for (let d = 0; d < DYN_MAX; d++) {
       const s = L.dyn[d];
       if (s.ttl <= 0 || s.intensity <= 0) continue;
       const tx = s.x / TSz, ty = s.y / TSz, rt = s.r / TSz;
       const x0 = tx - rt, x1 = tx + rt, y0 = ty - rt, y1 = ty + rt;
-      if (x0 < bx0) bx0 = x0;
-      if (y0 < by0) by0 = y0;
-      if (x1 > bx1) bx1 = x1;
-      if (y1 > by1) by1 = y1;
-      any = true;
+      if (!box.any) { box.x0 = x0; box.y0 = y0; box.x1 = x1; box.y1 = y1; box.any = true; }
+      else {
+        if (x0 < box.x0) box.x0 = x0;
+        if (y0 < box.y0) box.y0 = y0;
+        if (x1 > box.x1) box.x1 = x1;
+        if (y1 > box.y1) box.y1 = y1;
+      }
+      sig = (sig + s.x * 7 + s.y * 13 + s.r * 29 + d * 101) | 0;
     }
-    return any ? { x0: bx0, y0: by0, x1: bx1, y1: by1 } : null;
+    box.sig = sig;
+    return box;
   }
 
   Lighting.mergeDynamics = function () {
     const w = this.w, h = this.h;
     if (w <= 0 || h <= 0) return;
     const cur = dynUnionBox(this);
+    const sig = cur.sig;
     // Static-scene skip: identical live-source layout on an unchanged field
     // means `out` is already correct (ttl decay does not affect pixels).
-    let sig = 0;
-    if (cur) {
-      for (let d = 0; d < DYN_MAX; d++) {
-        const s = this.dyn[d];
-        if (s.ttl <= 0 || s.intensity <= 0) continue;
-        sig = (sig + s.x * 7 + s.y * 13 + s.r * 29 + d * 101) | 0;
-      }
-    }
     if (!this._dirtySinceMerge && sig === this._mergeSig) return;
     // Reset the union of PREVIOUS and CURRENT dyn coverage from the pristine
     // field, then stamp current sources — moving/expiring glows leave no
     // residue.
     const prev = this._prevDynBox;
     let ux0 = 1e9, uy0 = 1e9, ux1 = -1e9, uy1 = -1e9;
-    for (const b of [prev, cur]) {
-      if (!b) continue;
-      if (b.x0 < ux0) ux0 = b.x0;
-      if (b.y0 < uy0) uy0 = b.y0;
-      if (b.x1 > ux1) ux1 = b.x1;
-      if (b.y1 > uy1) uy1 = b.y1;
+    if (prev && prev.any) {
+      ux0 = prev.x0; uy0 = prev.y0; ux1 = prev.x1; uy1 = prev.y1;
     }
-    this._prevDynBox = cur;
+    if (cur.any) {
+      if (cur.x0 < ux0) ux0 = cur.x0;
+      if (cur.y0 < uy0) uy0 = cur.y0;
+      if (cur.x1 > ux1) ux1 = cur.x1;
+      if (cur.y1 > uy1) uy1 = cur.y1;
+    }
+    this._prevDynBox = { x0: cur.x0, y0: cur.y0, x1: cur.x1, y1: cur.y1, any: cur.any };
     if (ux1 >= ux0) {
       // syncOut takes WORLD tile coords and window-offsets internally.
       this.syncOut(Math.floor(ux0), Math.floor(uy0),
                    Math.ceil(ux1), Math.ceil(uy1));
     }
-    if (!cur) return;
+    if (!cur.any) return;
 
     const TSz = TC.CONST.TS;
     const oR = this.outR, oG = this.outG, oB = this.outB;
@@ -570,7 +582,7 @@
     // queries are unaffected.
     this._dynFrame++;
     const skip = PROFILE[this.quality()].dynSkip;
-    let hasLive = this._prevDynBox != null;
+    let hasLive = this._prevDynBox != null && this._prevDynBox.any === true;
     if (!hasLive) {
       for (let i = 0; i < DYN_MAX; i++) {
         if (this.dyn[i].ttl > 0) { hasLive = true; break; }

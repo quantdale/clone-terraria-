@@ -166,8 +166,11 @@ test('v2 round-trip: full mutation matrix survives save → fresh boot → conti
   assert.ok(Array.isArray(env.world.core.data.wallDiffs) &&
     env.world.core.data.wallDiffs.some((d) => d[0] === wallIdx && d[1] === TC.WALL.NONE),
     'broken-wall diff missing from envelope');
-  assert.ok(Array.isArray(env.world['core.liquids'].data) &&
-    env.world['core.liquids'].data.length >= 3,
+  // v2 payloads wrap the RLE cells beside the persisted active set;
+  // legacy v1 payloads were the bare array.
+  const liqData = env.world['core.liquids'].data;
+  const liqCells = Array.isArray(liqData) ? liqData : liqData && liqData.cells;
+  assert.ok(Array.isArray(liqCells) && liqCells.length >= 3,
     'liquids section empty');
 
   assert.ok(env.systems['core.wiring'].data.timers.includes(timerIdx), 'timer index not saved');
