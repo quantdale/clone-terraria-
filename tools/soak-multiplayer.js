@@ -56,6 +56,24 @@ let churnTick = 900 + ((SEED % 200) | 0);
 let s3Joined = false;
 let maxPendingSeen = 0;
 
+// ---- W24 phase: deterministic pump rig churn ----------------------------
+// Seeded host-authoritative rig near S1; pulses + top-ups ride the same sim
+// ticks as everything else so replication/conservation run under load.
+const T24 = TC.TILE;
+const p1 = TC.world.width >> 1;
+const rrow = TC.world.surfaceY[p1] + 6;
+for (let y = rrow - 2; y <= rrow + 1; y++) {
+  for (let x = p1; x <= p1 + 10; x++) TC.world.setRaw(x, y, T24.AIR);
+}
+TC.world.setRaw(p1, rrow, T24.INLET_PUMP);
+TC.world.setRaw(p1 + 8, rrow, T24.OUTLET_PUMP);
+TC.world.setRaw(p1 + 1, rrow, T24.STONE);
+TC.world.setRaw(p1 + 7, rrow, T24.STONE);
+TC.world.setRaw(p1 + 9, rrow, T24.STONE);
+for (let x = p1; x <= p1 + 8; x++) TC.world.setRaw(x, rrow - 1, T24.WIRE);
+if (TC.Wiring.resetForNewWorld) TC.Wiring.resetForNewWorld();
+TC.Liquids.set(p1, rrow, TC.Liquids.TYPE.WATER, 255);
+
 for (let tick = 1; tick <= TICKS; tick++) {
   for (let i = 0; i < 2; i++) {
     const d = D[i];
@@ -95,6 +113,11 @@ for (let tick = 1; tick <= TICKS; tick++) {
   }
 
   server.tick();
+  // W24 churn: bounded pulse batch + supply top-up on a seeded schedule
+  if (tick % 90 === 0) {
+    TC.Wiring.pulse(p1 + 4, rrow - 1);
+    if (tick % 360 === 0) TC.Liquids.set(p1, rrow, TC.Liquids.TYPE.WATER, 255);
+  }
   const q = server.summary();
   if (q.stats.pendingHighWater === undefined) maxPendingSeen = Math.max(maxPendingSeen, server.conns.size);
   for (const d of D) d.outbox.length = 0;
@@ -120,7 +143,9 @@ console.log(JSON.stringify({
   reconnects: st.reconnects,
   disconnects: st.disconnects,
   idleTicksSkipped: st.idleTicksSkipped,
-  outBytesPeakPerTick: st.outBytesPeakPerTick
+  outBytesPeakPerTick: st.outBytesPeakPerTick,
+  liquidDigest: TC.Liquids.digest(),
+  pump: TC.Wiring.pumpStats()
 }, null, 1));
 
 server.stop();

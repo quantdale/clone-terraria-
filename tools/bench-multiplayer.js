@@ -293,6 +293,69 @@ function main() {
     server.stop();
   }
 
+  // ---- scene: bounded liquid churn (W24) ----
+  // Authoritative pours + settles near one client: proves liquid deltas ride
+  // the region budget instead of full-layer liquid spam.
+  {
+    const server = freshSession(9011);
+    const a = joinDriver(server, "Pourer");
+    const pa = TC.Players.get(a.pid);
+    timedRun(server, WARMUP, null);
+    const ax = Math.floor(pa.x / TS);
+    const row = TC.world.surfaceY[ax] + 4;
+    for (let y = row - 2; y <= row + 2; y++) {
+      for (let x = ax - 3; x <= ax + 3; x++) TC.world.setRaw(x, y, TC.TILE.AIR);
+    }
+    for (let x = ax - 3; x <= ax + 3; x++) TC.world.setRaw(x, row + 2, TC.TILE.STONE);
+    let pourTick = 0;
+    const times = timedRun(server, TICKS, () => {
+      if (pourTick++ % 12 === 0) {
+        const ty = row - 1 - ((pourTick / 12) | 0) % 2;
+        TC.Liquids.placeAt(ax - 1 + (pourTick % 5), Math.max(row - 2, ty),
+          pourTick % 24 === 0 ? TC.Liquids.TYPE.LAVA : TC.Liquids.TYPE.WATER);
+      }
+    });
+    const st = server.summary().stats;
+    reportScene("liquid-churn", times, st.msgsOut / TICKS, st.bytesOut / (TICKS / 60));
+    server.stop();
+  }
+
+  // ---- scene: pump burst (W24 LIQ-006) ----
+  // Wired inlet/outlet rig pulsed every 20 ticks: measures batch processing
+  // cost plus the replication footprint of steady pump transfer.
+  {
+    const server = freshSession(9012);
+    const a = joinDriver(server, "Pumper");
+    const pa = TC.Players.get(a.pid);
+    timedRun(server, WARMUP, null);
+    const T = TC.TILE, w = TC.world;
+    const ax = Math.floor(pa.x / TS);
+    const row = TC.world.surfaceY[ax] + 6;
+    for (let y = row - 3; y <= row + 2; y++) {
+      for (let x = ax; x <= ax + 10; x++) w.setRaw(x, y, T.AIR);
+    }
+    w.setRaw(ax, row, T.INLET_PUMP);
+    w.setRaw(ax + 8, row, T.OUTLET_PUMP);
+    // seal both endpoint cells so every pulse finds its supply/capacity
+    w.setRaw(ax + 1, row, T.STONE);
+    w.setRaw(ax + 7, row, T.STONE);
+    w.setRaw(ax + 9, row, T.STONE);
+    for (let x = ax; x <= ax + 8; x++) w.setRaw(x, row - 1, T.WIRE);
+    TC.Liquids.set(ax, row, TC.Liquids.TYPE.WATER, 255);
+    let i0 = 0;
+    const ps0 = TC.Wiring.pumpStats().pulses;
+    const times = timedRun(server, TICKS, () => {
+      if (i0 % 80 === 0) TC.Liquids.set(ax, row, TC.Liquids.TYPE.WATER, 255); // keep supplied
+      if (i0++ % 20 === 0) TC.Wiring.pulse(ax + 4, row - 1);
+    });
+    const st = server.summary().stats;
+    const pulsesDone = TC.Wiring.pumpStats().pulses - ps0;
+    reportScene("pump-burst", times, st.msgsOut / TICKS, st.bytesOut / (TICKS / 60));
+    console.log("         pump pulses processed: " + pulsesDone +
+      "  units moved: " + TC.Wiring.pumpStats().unitsMoved);
+    server.stop();
+  }
+
   // ---- one-client vs two-client comparison ----
   function avgTickMedian(clientCount) {
     const server = freshSession(9005 + clientCount);

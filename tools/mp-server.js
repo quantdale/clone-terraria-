@@ -1,12 +1,12 @@
-/* tools/mp-server.js — headless authoritative multiplayer host (W22/W23).
+/* tools/mp-server.js — headless authoritative multiplayer host (W22–W24).
    Boots the REAL game scripts headless (same VM loader as the test/bench
-   harnesses), creates one authoritative world, and serves the W23 protocol
+   harnesses), creates one authoritative world, and serves the protocol
    over a dependency-free WebSocket endpoint.
 
    Usage:
      node tools/mp-server.js [--seed 1337] [--port 7777]
           [--interest 56] [--budget 4] [--rate 2] [--keyframe 600]
-          [--detach-grace 300] [--max-out-kb 128]
+          [--detach-grace 300] [--max-out-kb 128] [--fixture pumps]
 
      interest      region interest radius in tiles around each player
      budget        changed regions replicated per tick per connection
@@ -14,6 +14,10 @@
      keyframe      ticks between entity baseline resets (recovery)
      detach-grace  seconds a detached identity survives for reconnect
      max-out-kb    per-tick outbound byte budget per connection
+     fixture       opt-in host-side test rig ("pumps" = wired inlet/outlet
+                   trench near spawn). The HOST is the authority: this only
+                   seeds world state through the same authoritative seams the
+                   simulation uses; clients still act via real network intent.
 
    Clients: browser title screen -> "Join Local Server" (ws://localhost:PORT),
    or any TC.NetTransport.websocket(). The simulation advances on a wall-clock
@@ -67,6 +71,41 @@ if (!started.ok) {
 // so the movement system has no ghost singleton outside the registry.
 server.attachLocal("Server");
 
+// ---- W24 opt-in test fixture: pump trench near spawn ---------------------
+// Host-authoritative seeding ONLY. Nothing here bypasses replication or
+// hands truth to clients; it exists so browser journeys can exercise pump
+// mechanics without crafting to an anvil first.
+let FIXTURE = null;
+if (arg("fixture", "") === "pumps") {
+  const T = TC.TILE;
+  const w = TC.world;
+  const sx = TC.world.width >> 1;
+  const SR = w.surfaceY[sx]; // natural ground row; machinery embeds in SR+1
+  const x0 = sx + 4, x1 = sx + 16;
+  for (let x = x0; x <= x1; x++) w.setRaw(x, SR, T.AIR); // walking slot
+  w.setRaw(x0 + 0, SR + 1, T.STONE);
+  w.setRaw(x0 + 1, SR + 1, T.STONE);
+  w.setRaw(x0 + 2, SR + 1, T.INLET_PUMP);
+  for (let x = x0 + 3; x <= x0 + 9; x++) w.setRaw(x, SR + 1, T.WIRE);
+  w.setRaw(x0 + 5, SR + 1, T.PRESSURE_PLATE); // replaces mid-run wire cell
+  w.setRaw(x0 + 10, SR + 1, T.OUTLET_PUMP);
+  w.setRaw(x0 + 11, SR + 1, T.STONE);
+  w.setRaw(x0 + 12, SR + 1, T.STONE);
+  TC.Liquids.set(x0 + 2, SR + 1, TC.Liquids.TYPE.WATER, 255);
+  if (TC.Wiring && TC.Wiring.resetForNewWorld) TC.Wiring.resetForNewWorld();
+  // Keep the inlet supplied: natural settling bleeds volume into adjacent
+  // wire cells between presses, which would starve later presses.
+  const supplyTimer = setInterval(() => {
+    try {
+      const q = TC.Liquids.queryAt(x0 + 2, SR + 1);
+      if (!q || q.amount < 200) TC.Liquids.set(x0 + 2, SR + 1, TC.Liquids.TYPE.WATER, 255);
+    } catch (e) { /* world torn down */ }
+  }, 4000);
+  supplyTimer.unref();
+  FIXTURE = { kind: "pumps", inlet: [x0 + 2, SR + 1], outlet: [x0 + 10, SR + 1], plate: [x0 + 5, SR + 1] };
+  console.log(`[mp-server] fixture pumps inlet=${x0 + 2},${SR + 1} outlet=${x0 + 10},${SR + 1} plate=${x0 + 5},${SR + 1}`);
+}
+
 console.log(`[mp-server] session ${started.sid} seed=${TC.worldSeed} ` +
             `world=${TC.world.width}x${TC.world.height} listening on :${PORT}`);
 
@@ -92,7 +131,16 @@ const httpServer = http.createServer((req, res) => {
       })() : null,
     }));
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ sid: started.sid, tick: server.summary().tick, players, enemies, drops }, null, 1));
+    res.end(JSON.stringify({
+      sid: started.sid, tick: server.summary().tick, players, enemies, drops,
+      // W24 read-only pump observability (journey O)
+      pump: (TC.Wiring && TC.Wiring.pumpStats) ? TC.Wiring.pumpStats() : null,
+      liquid: FIXTURE ? {
+        inlet: TC.Liquids.queryAt(FIXTURE.inlet[0], FIXTURE.inlet[1]),
+        outlet: TC.Liquids.queryAt(FIXTURE.outlet[0], FIXTURE.outlet[1]),
+        at: FIXTURE,
+      } : null,
+    }, null, 1));
     return;
   }
   res.writeHead(200, { "Content-Type": "text/plain" });

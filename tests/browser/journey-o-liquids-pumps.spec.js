@@ -24,7 +24,9 @@ const H = require("./helpers.js");
 const TS = 16; // tile size (matches TC.CONST.TS)
 
 function pickPort() {
-  return 7900 + ((Date.now() % 500) | 0);
+  // Collisions across stale processes made journeys talk to the WRONG host
+  // once — derive uniqueness from time+pid, clear of dev-server/game ports.
+  return 47000 + (((Date.now() ^ process.pid) % 2000) | 0);
 }
 
 function startServer(port) {
@@ -71,6 +73,9 @@ function fetchDebug(port) {
   });
 }
 
+let T0 = 0;
+function el() { return ((Date.now() - T0) / 1000).toFixed(0) + "s"; }
+
 async function joinAs(page, url, label) {
   const errors = await H.openGame(page, "#test");
   await page.evaluate(([u, l]) => {
@@ -105,6 +110,7 @@ async function walk(page, dir, tiles) {
 test.describe("journey O — liquids, pumps & mechanism parity", () => {
   test("non-primary plate activation pumps once; mirrors converge; rejoin sees current truth", async ({ browser }) => {
     test.setTimeout(480 * 1000);
+    T0 = Date.now();
     const port = pickPort();
     const srv = startServer(port);
     if (!(await waitReady(port, 30000))) {
@@ -135,6 +141,7 @@ test.describe("journey O — liquids, pumps & mechanism parity", () => {
       // ---- 1. Bob (non-primary) walks right off spawn into the trench ----
       // Headless scheduling may starve synthetic input for stretches, so
       // keep pushing toward the plate until the authoritative counter moves.
+      console.log("journey-O: " + el() + " both clients playing");
       const base = await movedAt();
       const rigInfo = dbg0.liquid.at;
       const plateTx = rigInfo.plate[0];
@@ -148,7 +155,7 @@ test.describe("journey O — liquids, pumps & mechanism parity", () => {
           firstMove = (await movedAt()) - base;
         }
       }
-      console.log("journey-O: firstMove=" + firstMove);
+      console.log("journey-O: " + el() + " firstMove=" + firstMove);
       // Exactly-once-per-rising-edge semantics are proven deterministically in
       // tests/net/mechanisms-multiplayer.test.js; here the counter must show
       // whole bounded batches (the homing walk may cross the plate twice).
@@ -173,7 +180,7 @@ test.describe("journey O — liquids, pumps & mechanism parity", () => {
       expect(mB.outlet.amount).toBe(mA.outlet.amount);
       expect(mB.inlet.amount).toBe(mA.inlet.amount);
       expect(mA.outlet.amount + mA.inlet.amount).toBeGreaterThan(0);
-      console.log("journey-O: mirrors coherent inlet=" + mA.inlet.amount +
+      console.log("journey-O: " + el() + " mirrors coherent inlet=" + mA.inlet.amount +
         " outlet=" + mA.outlet.amount);
 
       // ---- 3. Bob leaves; Alice's press changes truth during absence ----
@@ -182,7 +189,7 @@ test.describe("journey O — liquids, pumps & mechanism parity", () => {
       await pageB.waitForFunction(() =>
         !window.__mpc || window.__mpc.phase === "closed" || window.TC.state === "title",
         null, { timeout: 20000 });
-      console.log("journey-O: bob left at unitsMoved=" + beforeLeave);
+      console.log("journey-O: " + el() + " bob left at unitsMoved=" + beforeLeave);
 
       // Alice heads for the same plate; same starvation-proof loop.
       let secondMove = 0;
@@ -195,16 +202,19 @@ test.describe("journey O — liquids, pumps & mechanism parity", () => {
           secondMove = (await movedAt()) - beforeLeave;
         }
       }
-      console.log("journey-O: secondMove=" + secondMove);
+      console.log("journey-O: " + el() + " secondMove=" + secondMove);
       expect(secondMove).toBeGreaterThanOrEqual(48);
       expect(secondMove % 48).toBe(0);
       const afterAbsence = await movedAt();
       expect(afterAbsence).toBeGreaterThan(beforeLeave);
 
       // ---- 4. Bob rejoins: resync observes CURRENT liquid truth ----
+      await pageB.reload({ waitUntil: "load", timeout: 30000 });
+      await pageB.waitForFunction(() => window.TC && window.TC.state === "title",
+        null, { timeout: 30000 });
       const errB2 = await joinAs(pageB, url, "Bob2");
       void errB2;
-      console.log("journey-O: bob rejoined as Bob2");
+      console.log("journey-O: " + el() + " bob rejoined as Bob2");
       for (let i = 0; i < 40; i++) {   // converge mirrors, then compare
         await pageB.waitForTimeout(400);
         mB = await mirror(pageB);
@@ -217,7 +227,7 @@ test.describe("journey O — liquids, pumps & mechanism parity", () => {
       // his fresh view reflects the post-absence world (pump counter grew)
       const dbgNow = await fetchDebug(port);
       expect(dbgNow.pump.unitsMoved).toBe(afterAbsence);
-      console.log("journey-O: rejoin truth coherent unitsMoved=" + dbgNow.pump.unitsMoved);
+      console.log("journey-O: " + el() + " rejoin truth coherent unitsMoved=" + dbgNow.pump.unitsMoved);
 
       // ---- 5. shutdown returns BOTH clients to a coherent title ----
       srv.proc.kill();
