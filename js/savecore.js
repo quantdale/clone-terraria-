@@ -23,7 +23,7 @@
   const DEFAULT_KEY = 'tc_save_v2'; // distinct from save.js 'tc_save_v1'
   const SECTIONS = ['world', 'character', 'systems'];
   const TOP_LEVEL_KEYS = ['formatVersion', 'gameVersion', 'generationVersion',
-    'registryFingerprint', 'metadata', 'world', 'character', 'systems'];
+    'registryFingerprint', 'packs', 'metadata', 'world', 'character', 'systems'];
   const MAX_MIGRATION_STEPS = 32;
 
   // ---- small helpers ----
@@ -116,6 +116,7 @@
       gameVersion: GAME_VERSION,
       generationVersion: currentGenerationVersion(),
       registryFingerprint: null,
+      packs: null,
       metadata: { savedAt: new Date().toISOString(), seed: null },
       world: {},
       character: {},
@@ -129,6 +130,13 @@
     ctx = ctx || buildCtx();
     const env = emptyEnvelope();
     env.registryFingerprint = fingerprint();
+    // W25 MOD-003: active pack-set identity rides the envelope so loads can
+    // be classified (exact / missing / incompatible) BEFORE world state
+    // mutates. Null when no packs are active (pre-W25 shape).
+    try {
+      env.packs = (TC.Packs && typeof TC.Packs.saveMetadata === 'function')
+        ? TC.Packs.saveMetadata() : null;
+    } catch (e) { env.packs = null; }
     if (isObj(ctx) && isNum(ctx.seed)) env.metadata.seed = ctx.seed;
     providers.forEach(function (p) {
       let data;
@@ -199,6 +207,24 @@
     if (!isInt(env.generationVersion) || env.generationVersion < 1) fail('generationVersion must be an integer >= 1');
     if (env.registryFingerprint != null && typeof env.registryFingerprint !== 'string') {
       fail('registryFingerprint must be a string or null');
+    }
+    if (env.packs != null) {
+      if (!isObj(env.packs) || env.packs.v !== 1 ||
+          typeof env.packs.fp !== 'string' || typeof env.packs.gfp !== 'string' ||
+          !Array.isArray(env.packs.packs)) {
+        fail('packs metadata must be { v:1, fp, gfp, packs: [...] } or null');
+      } else if (env.packs.packs.length > 16) {
+        fail('packs metadata lists too many entries');
+      } else {
+        for (const p of env.packs.packs) {
+          if (!isObj(p) || typeof p.id !== 'string' || !p.id ||
+              typeof p.version !== 'string' || !p.version ||
+              (p.type !== 'data' && p.type !== 'resource')) {
+            fail('packs metadata entries must be { id, version, type }');
+            break;
+          }
+        }
+      }
     }
     if (!isObj(env.metadata)) fail('metadata must be an object');
     else {

@@ -119,6 +119,20 @@
   TC.continueGame = function () {
     const data = TC.Save.load();
     if (!data) { TC.newGame(); return; }
+    // W25 MOD-003: classify pack compatibility BEFORE any world/character
+    // state mutates. An incompatible load refuses cleanly, shows an
+    // actionable diagnostic, and leaves the stored save untouched.
+    if (TC.Packs && data.__envelope) {
+      const cls = TC.Packs.classifySave(data.__envelope.packs || null);
+      if (!cls.ok) {
+        if (TC.UI && typeof TC.UI.showPackProblem === 'function') {
+          TC.UI.showPackProblem(cls);
+        } else {
+          console.warn('[TC] save incompatible with active packs:', cls.problems.join('; '));
+        }
+        return; // stay on title; storage untouched
+      }
+    }
     const gen = buildWorld(data.seed, data.diffs, data.wallDiffs);
     TC.player = TC.Player.deserialize(data.player);
     if (!TC.player) {
@@ -495,6 +509,15 @@
 
   // ---- boot ----
   if (TC.Input) TC.Input.init(canvas);
+  // W25: activate the persisted pack set BEFORE the registry sync so pack
+  // content joins the same identity pass as built-ins. Failure falls back
+  // to the zero-pack base set (fail closed); the reason is surfaced on the
+  // title screen via TC.Packs.lastError().
+  let packsBootError = null;
+  if (TC.Packs && typeof TC.Packs.bootActivate === "function") {
+    const bootResult = TC.Packs.bootActivate();
+    packsBootError = bootResult.error || null;
+  }
   if (TC.Registry) {
     TC.Registry.syncFromTables();
     try { TC.Registry.validate(); } catch (e) { console.warn('[TC] registry validation:', e.message); }

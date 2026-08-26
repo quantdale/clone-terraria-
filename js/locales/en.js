@@ -44,6 +44,18 @@
         new_world_confirm: 'Generate a new world? Unsaved changes since the last save will be lost.',
         host_multiplayer: 'Host Local Multiplayer',
         join_server: 'Join Local Server',
+        packs: 'Content Packs',
+      },
+      packs: {
+        title: 'CONTENT PACKS',
+        hint: 'Declarative content only. Apply restarts the game.',
+        none: 'No packs are installed with this build.',
+        apply: 'Apply & Restart',
+        apply_failed: 'Could not activate packs: {reason}',
+        type_data: 'DATA',
+        type_resource: 'RESOURCE',
+        problem_title: 'This save needs packs that are not active:',
+        boot_error: 'Pack activation failed at boot; running with built-in content only (see console).',
       },
       net: {
         unavailable: 'Multiplayer modules unavailable',
@@ -68,6 +80,7 @@
         new_world: 'New World',
       },
       common: {
+        close: 'Close',
         on: 'On',
         off: 'Off',
       },

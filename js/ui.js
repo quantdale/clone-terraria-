@@ -482,6 +482,47 @@
     lastShop = null;
   }
 
+  // ---- W25 pack management (title screen) ----
+  // Apply persists the selection via TC.Settings and RELOADS the host:
+  // committed pack content extends dense identity tables that cannot be
+  // withdrawn mid-session, so a changed set always takes effect on a fresh
+  // boot (which validates it fail-closed and reports problems here).
+  let packsOpen = false;
+  let packSel = {};                       // id -> bool (panel checkbox state)
+  let packProblem = null;                 // MOD-003 classification result
+
+  function actTogglePacks() {
+    packsOpen = !packsOpen;
+    if (packsOpen) {
+      packSel = {};
+      const cur = TC.Packs ? TC.Packs.active() : [];
+      for (const id of cur) packSel[id] = true;
+    }
+  }
+  function actPackRow(id) {
+    if (!TC.Packs || !TC.Packs.getManifest(id)) return; // only provided packs
+    packSel[id] = !packSel[id];
+  }
+  function actPacksApply() {
+    if (!TC.Settings || !TC.Packs) return;
+    const ids = Object.keys(packSel).filter((id) => packSel[id]).sort();
+    try { TC.Settings.set('activePacks', ids); } catch (e) {}
+    if (typeof window !== 'undefined' && window.location &&
+        typeof window.location.reload === 'function') {
+      window.location.reload();
+    } else {
+      // Headless/no-reload embeds: attempt in-session activation instead.
+      try { TC.Packs.setActive(ids, { persist: false }); packsOpen = false; }
+      catch (e) { toast(t('ui.packs.apply_failed', { reason: String(e && e.message || e).slice(0, 80) })); }
+    }
+  }
+
+  // main.continueGame calls this when a save's pack metadata classifies as
+  // incompatible. The diagnostic stays until the player acts.
+  UI.showPackProblem = function (cls) {
+    packProblem = cls || null;
+  };
+
   // ---- menu actions ----
   function actNewWorld() { TC.newGame(); resetPanels(); }
   function actContinue() { TC.continueGame(); resetPanels(); }
@@ -762,6 +803,11 @@
     if (TC.state !== 'title') {
       for (let i = 0; i < L.hotbar.length; i++) L.uiRects.push(L.hotbar[i]);
     }
+    if (L.packsPanel) {
+      L.uiRects.push(L.packsPanel);
+      L.uiRects.push(L.packsApplyRect);
+      L.uiRects.push(L.packsCloseRect);
+    }
     if (UI.invOpen) {
       L.uiRects.push(L.bagPanel);
       if (L.chestPanel) L.uiRects.push(L.chestPanel);
@@ -770,7 +816,24 @@
     }
 
     // menu buttons
-    if (TC.state === 'title') {
+    if (TC.state === 'title' && packsOpen && TC.Packs) {
+      // Packs panel replaces the menu while open (modal on the title screen).
+      const avail = TC.Packs.available();
+      const rowH = 30, headH = 56, footH = 62;
+      const pw = 460;
+      const ph = headH + Math.max(1, avail.length) * rowH + footH;
+      const px = w / 2 - pw / 2, py = Math.max(24, h * 0.16);
+      L.packsPanel = { x: px, y: py, w: pw, h: ph };
+      L.packsRows = [];
+      for (let i = 0; i < avail.length; i++) {
+        L.packsRows.push({
+          id: avail[i].id,
+          rect: { x: px + 12, y: py + headH + i * rowH, w: pw - 24, h: rowH - 6 },
+        });
+      }
+      L.packsApplyRect = { x: px + 12, y: py + ph - 48, w: 200, h: 36 };
+      L.packsCloseRect = { x: px + pw - 130, y: py + ph - 48, w: 118, h: 36 };
+    } else if (TC.state === 'title') {
       const bw = 300, bh = 48;
       let by = Math.max(h * 0.44, h / 2 - 100);
       const defs = [
@@ -782,6 +845,9 @@
       if (hasSave) defs.push({ id: 'continue', label: t('ui.menu.continue_world'), act: actContinue });
       defs.push({ id: 'hostmp', label: t('ui.menu.host_multiplayer'), act: actHostMultiplayer });
       defs.push({ id: 'joinmp', label: t('ui.menu.join_server'), act: actJoinServer });
+      defs.push({ id: 'packs', label: t('ui.menu.packs') +
+        (TC.Packs && TC.Packs.active().length ? ' (' + TC.Packs.active().length + ')' : ''),
+        act: actTogglePacks });
       for (let i = 0; i < defs.length; i++) {
         L.buttons.push({
           id: defs[i].id, label: defs[i].label, act: defs[i].act,
@@ -1282,11 +1348,64 @@
 
     for (let i = 0; i < L.buttons.length; i++) drawButton(ctx, L.buttons[i], mx, my);
 
+    if (L.packsPanel) drawPacksPanel(ctx, L, mx, my);
+
+    // MOD-003: incompatible-save diagnostic (until the player acts)
+    if (packProblem && !packProblem.ok) {
+      const lines = wrapText(ctx,
+        t('ui.packs.problem_title'), w - 80).concat(
+        packProblem.problems.map((p) => '• ' + p));
+      let py = h - 96 - lines.length * 18;
+      ctx.fillStyle = 'rgba(40,8,10,0.82)';
+      ctx.fillRect(30, py - 12, w - 60, lines.length * 18 + 26);
+      for (const line of lines) {
+        txt(ctx, ellipsize(ctx, line, w - 90), w / 2, py, 14, '#ff9a8a', 'center');
+        py += 18;
+      }
+    } else if (TC.Packs && typeof TC.Packs.lastError === 'function' &&
+               TC.Packs.lastError()) {
+      txt(ctx, t('ui.packs.boot_error'), w / 2, h - 84, 13, '#ffcf7a', 'center');
+    }
+
     // controls legend
     const legendY = h - 66;
     txt(ctx, t('ui.title_screen.controls_1'), w / 2, legendY, 14, TEXT_DIM, 'center');
     txt(ctx, t('ui.title_screen.controls_2'), w / 2, legendY + 22, 14, TEXT_DIM, 'center');
     txt(ctx, 'v' + (TC.VERSION || '?'), 10, h - 16, 12, TEXT_DIM, 'left');
+  }
+
+  // ---- W25 packs panel ----
+  function drawPacksPanel(ctx, L, mx, my) {
+    const p = L.packsPanel;
+    panel(ctx, p.x, p.y, p.w, p.h, true);
+    txtShadow(ctx, t('ui.packs.title'), p.x + p.w / 2, p.y + 24, 20, GOLD, 'center');
+    txt(ctx, t('ui.packs.hint'), p.x + p.w / 2, p.y + 42, 11, TEXT_DIM, 'center');
+    const avail = TC.Packs.available();
+    if (!avail.length) {
+      txt(ctx, t('ui.packs.none'), p.x + p.w / 2, p.y + 56 + 12, 13, TEXT_DIM, 'center');
+    }
+    for (const row of L.packsRows) {
+      const r = row.rect;
+      const hov = inRect(mx, my, r);
+      const checked = !!packSel[row.id];
+      const meta = TC.Packs.getManifest(row.id);
+      ctx.fillStyle = hov ? 'rgba(255,220,140,0.10)' : 'rgba(255,255,255,0.03)';
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      // checkbox
+      ctx.strokeStyle = checked ? GOLD : TEXT_DIM;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(r.x + 8.5, r.y + (r.h - 16) / 2 + 0.5, 15, 15);
+      if (checked) {
+        ctx.fillStyle = GOLD;
+        ctx.fillRect(r.x + 12, r.y + (r.h - 16) / 2 + 4, 9, 9);
+      }
+      const label = meta ? meta.name + '  v' + meta.version : row.id;
+      const tag = meta && meta.type === 'resource' ? t('ui.packs.type_resource') : t('ui.packs.type_data');
+      txt(ctx, label, r.x + 34, r.y + r.h / 2, 14, checked ? TEXT : TEXT_DIM, 'left');
+      txt(ctx, tag, r.x + r.w - 8, r.y + r.h / 2, 10, TEXT_DIM, 'right');
+    }
+    drawButton(ctx, { rect: L.packsApplyRect, id: 'apply', label: t('ui.packs.apply') }, mx, my);
+    drawButton(ctx, { rect: L.packsCloseRect, id: 'close', label: t('ui.common.close') }, mx, my);
   }
 
   function drawPause(ctx, L, mx, my) {
@@ -1761,6 +1880,14 @@
   function onClick(L, mx, my, rightClick) {
     if (TC.state === 'title') {
       if (rightClick) return;
+      if (L.packsPanel) {
+        for (const row of L.packsRows || []) {
+          if (inRect(mx, my, row.rect)) { actPackRow(row.id); return; }
+        }
+        if (inRect(mx, my, L.packsApplyRect)) { actPacksApply(); return; }
+        if (inRect(mx, my, L.packsCloseRect)) { packsOpen = false; return; }
+        return; // modal: clicks inside never fall through to menu buttons
+      }
       const b = hitButton(L, mx, my);
       if (b && b.act) b.act();
       return;
@@ -1962,6 +2089,10 @@
   function syncState() {
     if (prevState !== TC.state) {
       if (TC.state === 'title') resetPanels();
+      if (TC.state === 'playing') {
+        packsOpen = false;
+        packProblem = null;   // a successful start resolves any load diagnostic
+      }
       prevState = TC.state;
     }
     // player.js owns hotbar selection (digits + wheel); mirror it for drawing
