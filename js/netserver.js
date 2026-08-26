@@ -355,6 +355,17 @@
   NetServer.prototype._onHello = function (conn, m) {
     if (conn.pid) { this._reject(conn, 'payload', 'already-helloed'); return; }
     const p = m.p || {};
+    // W25 pack compatibility gate — BEFORE any identity binding (fresh join
+    // OR detached-identity rejoin): a gameplay pack-set mismatch must never
+    // bind a player entity or mutate world state. The reason names both
+    // digests so the mismatch is actionable on both ends.
+    const ownPacks = this._packsMeta();
+    const got = p.packs && typeof p.packs.fp === 'string' ? p.packs.fp : '?';
+    if (!p.packs || p.packs.fp !== ownPacks.fp) {
+      this._reject(conn, 'payload',
+        'content-mismatch: host=' + ownPacks.fp + ' client=' + String(got).slice(0, 16));
+      return;
+    }
     const rj = p.rejoin;
     if (rj) {
       // Reconnect: validate session + identity, rebind generation, resync.
@@ -409,13 +420,28 @@
     this._beginSnapshot(conn, 'join');
   };
 
+  NetServer.prototype._packsMeta = function () {
+    let fp = '', list = [];
+    try {
+      if (TC.Packs && typeof TC.Packs.digest === 'function') {
+        fp = TC.Packs.digest();
+        list = TC.Packs.active().map(function (id) {
+          const r = TC.Packs.getManifest(id);
+          return id + '@' + (r ? r.version : '?');
+        });
+      }
+    } catch (e) {}
+    return { fp: fp, list: list.slice(0, 16) };
+  };
+
   NetServer.prototype._sendWelcome = function (conn, mode) {
     this._send(conn, 'welcome', {
       tick: this._tick(),
       seed: (typeof TC.worldSeed === 'number') ? TC.worldSeed : 0,
       you: { pid: conn.pid },
       players: [],
-      mode: mode
+      mode: mode,
+      packs: this._packsMeta()
     });
   };
 

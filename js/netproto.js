@@ -29,7 +29,7 @@
 (function () {
   const TC = window.TC = window.TC || {};
 
-  const VERSION = 3; // v3 (W24): region lines carry authoritative liquid type+amount
+  const VERSION = 4; // v4 (W25): hello/welcome carry gameplay pack-set identity
 
   // Maximum serialized message size accepted by decode() (bytes of JSON).
   // Region snapshots are the largest legitimate messages by far; a full
@@ -129,8 +129,8 @@
   // Each validator receives p (already proven an object) and returns null or
   // an error string. Unknown payload keys are rejected (fail closed).
   const PAYLOAD_KEYS = {
-    hello: ['name', 'rejoin'],
-    welcome: ['tick', 'seed', 'you', 'players', 'mode'],
+    hello: ['name', 'rejoin', 'packs'],
+    welcome: ['tick', 'seed', 'you', 'players', 'mode', 'packs'],
     reject: ['reason'],
     snapshot: ['reason', 'seed', 'you', 'regions', 'players', 'enemies', 'drops'],
     input: ['btn', 'aimX', 'aimY', 'use', 'slot'],
@@ -295,6 +295,20 @@
     return true;
   }
 
+  // W25 pack-set identity (v4, REQUIRED in hello/welcome): the sender's
+  // active GAMEPLAY pack fingerprint plus a bounded id@version list for
+  // diagnostics. Resource packs never participate. Fail-closed: a missing
+  // or malformed field rejects the message before any join proceeds.
+  function validPacksMeta(p) {
+    if (!isObj(p)) return false;
+    for (const k in p) {
+      if (!(k === 'fp' || k === 'list')) return false;
+    }
+    if (!str(p.fp, 16)) return false;
+    if (p.fp !== '' && !/^[0-9a-f]{1,16}$/.test(p.fp)) return false;
+    return strArr(p.list, 16, 48);
+  }
+
   const SCHEMA = {
     hello(p) {
       if (p.name !== undefined && !str(p.name, MAX_NAME)) return 'bad name';
@@ -303,12 +317,14 @@
         if (!isObj(r) || !str(r.sid, MAX_STR) || !str(r.pid, MAX_STR) ||
             !uint(r.tick, 0xffffffff)) return 'bad rejoin';
       }
+      if (!validPacksMeta(p.packs)) return 'bad packs';
       return null;
     },
     welcome(p) {
       if (!uint(p.tick, 0xffffffff)) return 'bad tick';
       if (!isInt(p.seed)) return 'bad seed';
       if (!isObj(p.you) || !str(p.you.pid, MAX_STR)) return 'bad you';
+      if (!validPacksMeta(p.packs)) return 'bad packs';
       return null;
     },
     reject(p) { return str(p.reason, MAX_STR) ? null : 'bad reason'; },

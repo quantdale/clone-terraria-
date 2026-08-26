@@ -89,11 +89,28 @@
       }
     });
     const hello = { v: P.VERSION, t: 'hello', sid: null, pid: null, cseq: 1, sseq: 0, tick: 0, p: { name: String(this.name).slice(0, 24) } };
+    hello.p.packs = this._packsMeta();
     if (rejoin && rejoin.sid && rejoin.pid) {
       hello.p.rejoin = { sid: String(rejoin.sid), pid: String(rejoin.pid), tick: (rejoin.tick | 0) || 0 };
     }
     this._rawSend(hello);
     return { ok: true };
+  };
+
+  // The client's gameplay pack identity — compared against the server's
+  // welcome before any snapshot is applied.
+  NetClient.prototype._packsMeta = function () {
+    let fp = '', list = [];
+    try {
+      if (TC.Packs && typeof TC.Packs.digest === 'function') {
+        fp = TC.Packs.digest();
+        list = TC.Packs.active().map(function (id) {
+          const r = TC.Packs.getManifest(id);
+          return id + '@' + (r ? r.version : '?');
+        });
+      }
+    } catch (e) {}
+    return { fp: fp, list: list.slice(0, 16) };
   };
 
   NetClient.prototype._rawSend = function (msg) {
@@ -179,6 +196,15 @@
   NetClient.prototype._handle = function (m) {
     switch (m.t) {
       case 'welcome':
+        // W25 pack gate BEFORE entering 'syncing': a host running different
+        // gameplay content must never hand us authoritative world state.
+        // Clean disconnect leaves both sides coherent (no partial join).
+        if (!m.p.packs || m.p.packs.fp !== this._packsMeta().fp) {
+          this.status = 'ui.net.rejected';
+          this.lastCmdError = 'content-mismatch';
+          this.disconnect('content-mismatch');
+          break;
+        }
         this.sid = m.sid; this.pid = m.p.you.pid; this.seed = m.p.seed;
         this.phase = 'syncing';
         break;
