@@ -211,9 +211,28 @@ syntax **57 files / 0 failures**; check:i18n green — catalog 554 fallback
 keys, "registry fingerprint matches the W24 baseline: 1b1d7c15", "374 stable
 ids match the W24 baseline exactly", "368 pre-W24 stable ids verified
 unchanged"; npm test **597 pass / 0 fail**; release build + verify-dist exit
-0; browser suite **30 passed**. The campaign is not terminal until the
-authoritative pushed head is green; if reading this and unsure, check
-Actions for HEAD.
+0; browser suite **30 passed**.
+
+### Closure fix (post-pin)
+
+The pinned evidence above was captured on `7545ea0`, but the authoritative
+CI run on that head **failed** at `tests/browser/journey-n-multiplayer-
+parity.spec.js` (pageA never returned to `title` within 45s after the
+multiplayer server process was killed). Root cause: main.js deferred the
+pack/registry sync to `DOMContentLoaded` for load-order correctness, but
+`Systems.runBoot()` / `registerSystems()` / `registerLayers()` / the rAF
+`frame` loop were still started **immediately** — before the registry mirror
+ran. Under CI load this produced a brief window where the simulation booted
+against an unsynced (or not-yet-pack-extended) registry; a link-loss at
+server shutdown then left the rAF loop without a clean title transition and
+the wait timed out. The fix (`ba47214`, "defer full boot tail to
+DOMContentLoaded") collapses the entire boot tail — packs activation +
+registry sync + Systems boot + layer registration + rAF start — into a
+single `bootAll()` that runs atomically after the mirror, with a
+`TC._bootDone` flag the browser helper now waits on. No index-identity or
+pack-content changes. CI run `32979138678` on `ba47214` is **green**
+(validate exit 0, journey N 21s local, 30/30 browser), and the campaign is
+terminal.
 
 ## Remaining limitations
 
