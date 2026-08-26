@@ -243,10 +243,14 @@
     const coords = R.chunkCoords(r.idx);
     const TSZ = R.CHUNK;
     const baseX = coords.cx * TSZ, baseY = coords.cy * TSZ;
+    const LQ = TC.Liquids && typeof TC.Liquids.applyMirrorRegion === 'function'
+      ? TC.Liquids : null;
     if (r.tiles && typeof r.tiles === 'string' && r.walls && typeof r.walls === 'string') {
-      // full layers
+      // full layers — v3 lines also carry authoritative liquid truth
       const tiles = this._unhex(r.tiles);
       const walls = this._unhex(r.walls);
+      const ltype = r.ltype ? this._unhex(r.ltype) : null;
+      const lamt = r.lamt ? this._unhex(r.lamt) : null;
       for (let y = 0; y < TSZ; y++) {
         const wy = baseY + y;
         if (wy >= w.height) break;
@@ -258,6 +262,11 @@
           if (w.tiles[wy * w.width + wx] !== t) w.setRaw(wx, wy, t);
           if (w.walls && w.getWall(wx, wy) !== wl) w.setRawWall(wx, wy, wl);
         }
+      }
+      if (LQ && ltype && lamt) {
+        // Presentation-only mirror write; marks local WorldRegions so
+        // renderer/minimap/lighting repaint. No gameplay events, no settle.
+        LQ.applyMirrorRegion(baseX, baseY, TSZ, ltype, lamt);
       }
       this.stats.regionsApplied++;
       this.stats.cellsApplied += TSZ * TSZ;
@@ -275,7 +284,14 @@
           walls[o] = w.walls ? w.walls[wy * w.width + wx] : 0;
         }
       }
-      P.applyCells(tiles, walls, r.cells);
+      let ltype = null, lamt = null;
+      if (LQ && r.cells.length && r.cells[0].length >= 5) {
+        // seed delta buffers with current mirror state so unchanged cells
+        // restate identically and the mirror write only repaints real diffs
+        const snap = LQ.snapshotRegion(baseX, baseY, TSZ);
+        ltype = snap.type; lamt = snap.amount;
+      }
+      P.applyCells(tiles, walls, r.cells, ltype, lamt);
       for (let i = 0; i < r.cells.length; i++) {
         const c = r.cells[i];
         const wx = baseX + (c[0] % TSZ), wy = baseY + ((c[0] / TSZ) | 0);
@@ -285,6 +301,7 @@
         if (curT !== c[1]) w.setRaw(wx, wy, c[1]);
         if (w.walls && curW !== c[2]) w.setRawWall(wx, wy, c[2]);
       }
+      if (ltype && lamt) LQ.applyMirrorRegion(baseX, baseY, TSZ, ltype, lamt);
       this.stats.regionsApplied++;
       this.stats.cellsApplied += r.cells.length;
     }

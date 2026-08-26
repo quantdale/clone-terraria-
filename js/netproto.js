@@ -29,7 +29,7 @@
 (function () {
   const TC = window.TC = window.TC || {};
 
-  const VERSION = 2;
+  const VERSION = 3; // v3 (W24): region lines carry authoritative liquid type+amount
 
   // Maximum serialized message size accepted by decode() (bytes of JSON).
   // Region snapshots are the largest legitimate messages by far; a full
@@ -183,23 +183,35 @@
     return true;
   }
 
-  // Region update line: either a full layer pair (hex strings) or a delta
-  // cell list [[cellIdx, tile, wall], ...] within one 32x32 region.
+  // Region update line (v3): EITHER a full four-layer line — tiles, walls,
+  // ltype, lamt as equal-length bounded hex strings — OR a delta cell list of
+  // [cellIdx, tile, wall, liqType, liqAmt] quintuples within one 32x32 region.
+  // Unknown fields are rejected; partial layer sets never validate.
   function validRegion(r) {
     if (!isObj(r)) return false;
+    for (const k in r) {
+      if (!(k === 'idx' || k === 'rev' || k === 'tiles' || k === 'walls' ||
+            k === 'ltype' || k === 'lamt' || k === 'cells')) return false;
+    }
     if (!uint(r.idx, 1 << 24)) return false;
     if (!uint(r.rev, 0xffffffff)) return false;
-    const fullT = str(r.tiles, 4096) || r.tiles === undefined;
-    const fullW = str(r.walls, 4096) || r.walls === undefined;
-    if (!fullT || !fullW) return false;
-    if (r.tiles === undefined && r.walls === undefined && !Array.isArray(r.cells)) return false;
-    if (Array.isArray(r.cells)) {
-      if (r.cells.length > 1024) return false;
-      for (let i = 0; i < r.cells.length; i++) {
-        const c = r.cells[i];
-        if (!Array.isArray(c) || c.length !== 3 ||
-            !uint(c[0], 1023) || !uint(c[1], 255) || !uint(c[2], 255)) return false;
-      }
+    const hasFull = r.tiles !== undefined || r.walls !== undefined ||
+      r.ltype !== undefined || r.lamt !== undefined;
+    if (hasFull) {
+      if (!str(r.tiles, 4096) || !str(r.walls, 4096) ||
+          !str(r.ltype, 4096) || !str(r.lamt, 4096)) return false;
+      if (r.tiles.length !== r.walls.length ||
+          r.tiles.length !== r.ltype.length ||
+          r.tiles.length !== r.lamt.length) return false;
+      return true;
+    }
+    if (!Array.isArray(r.cells)) return false;
+    if (r.cells.length > 1024) return false;
+    for (let i = 0; i < r.cells.length; i++) {
+      const c = r.cells[i];
+      if (!Array.isArray(c) || c.length !== 5 ||
+          !uint(c[0], 1023) || !uint(c[1], 255) || !uint(c[2], 255) ||
+          !uint(c[3], 255) || !uint(c[4], 255)) return false;
     }
     return true;
   }
@@ -391,35 +403,48 @@
   }
 
   // ---- region codec ----
-  // Full layers as hex pairs (deterministic; compact enough for the slice),
-  // deltas as [cellIdx, tile, wall] triples relative to the last ACKED copy.
+  // Full layers as hex strings (deterministic; compact enough for the slice);
+  // v3 full lines carry FOUR authoritative layers: tiles, walls, liquid type,
+  // liquid amount. Deltas are [cellIdx, tile, wall, liqType, liqAmt] quintuples
+  // relative to the last ACKED copy — every changed cell restates ALL its
+  // authoritative fields so omission can never be ambiguous.
   function hexBytes(u8) {
     let s = '';
     for (let i = 0; i < u8.length; i++) s += u8[i].toString(16).padStart(2, '0');
     return s;
   }
 
-  function buildFullRegion(idx, rev, tiles, walls) {
-    return { idx: idx, rev: rev, tiles: hexBytes(tiles), walls: hexBytes(walls) };
+  function buildFullRegion(idx, rev, tiles, walls, ltype, lamt) {
+    return {
+      idx: idx, rev: rev,
+      tiles: hexBytes(tiles), walls: hexBytes(walls),
+      ltype: hexBytes(ltype), lamt: hexBytes(lamt)
+    };
   }
 
-  function diffRegion(prevTiles, prevWalls, curTiles, curWalls) {
+  function diffRegion(prev, cur) {
     const cells = [];
-    const n = Math.min(curTiles.length, 1024);
+    const n = Math.min(cur.tiles.length, 1024);
+    const pT = prev ? prev.tiles : null, pW = prev ? prev.walls : null;
+    const pLT = prev ? prev.ltype : null, pLA = prev ? prev.lamt : null;
     for (let i = 0; i < n; i++) {
-      const t = curTiles[i], w = curWalls[i];
-      const pt = prevTiles ? prevTiles[i] : -1;
-      const pw = prevWalls ? prevWalls[i] : -1;
-      if (t !== pt || w !== pw) cells.push([i, t, w]);
+      const t = cur.tiles[i], w = cur.walls[i];
+      const lt = cur.ltype[i], la = cur.lamt[i];
+      if (t !== (pT ? pT[i] : -1) || w !== (pW ? pW[i] : -1) ||
+          lt !== (pLT ? pLT[i] : -1) || la !== (pLA ? pLA[i] : -1)) {
+        cells.push([i, t, w, lt, la]);
+      }
     }
     return cells;
   }
 
-  function applyCells(tiles, walls, cells) {
+  function applyCells(tiles, walls, cells, ltype, lamt) {
     for (let i = 0; i < cells.length; i++) {
       const c = cells[i];
       tiles[c[0]] = c[1];
       walls[c[0]] = c[2];
+      if (ltype && c.length > 3) ltype[c[0]] = c[3];
+      if (lamt && c.length > 4) lamt[c[0]] = c[4];
     }
   }
 

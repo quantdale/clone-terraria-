@@ -758,6 +758,11 @@
     const tiles = new Uint8Array(TSZ * TSZ);
     const walls = new Uint8Array(TSZ * TSZ);
     const baseX = coords.cx * TSZ, baseY = coords.cy * TSZ;
+    // W24: authoritative liquid type+amount ride every region line so joined
+    // clients converge on bucket/settle/reaction/pump mutations. Read through
+    // the bounded read-only snapshot seam — never the live arrays.
+    const LQ = TC.Liquids && typeof TC.Liquids.snapshotRegion === 'function'
+      ? TC.Liquids.snapshotRegion(baseX, baseY, TSZ) : null;
     for (let y = 0; y < TSZ; y++) {
       const wy = baseY + y;
       if (wy >= w.height) break;
@@ -769,7 +774,11 @@
         walls[o] = w.walls ? w.walls[wy * w.width + wx] : 0;
       }
     }
-    return { tiles: tiles, walls: walls };
+    return {
+      tiles: tiles, walls: walls,
+      ltype: LQ ? LQ.type : new Uint8Array(TSZ * TSZ),
+      lamt: LQ ? LQ.amount : new Uint8Array(TSZ * TSZ)
+    };
   };
 
   NetServer.prototype._queueSnapshots = function (conn, idxs) {
@@ -797,8 +806,10 @@
       const idx = conn.snapQueue.shift();
       const rev = TC.WorldRegions.revision(idx);
       const layers = this._regionLayers(idx);
-      regions.push(P.buildFullRegion(idx, rev, layers.tiles, layers.walls));
-      conn.lastSent.set(idx, { rev: rev, tiles: layers.tiles, walls: layers.walls });
+      regions.push(P.buildFullRegion(idx, rev, layers.tiles, layers.walls,
+        layers.ltype, layers.lamt));
+      conn.lastSent.set(idx, { rev: rev, tiles: layers.tiles, walls: layers.walls,
+        ltype: layers.ltype, lamt: layers.lamt });
       this.stats.regionsSentFull++;
       if (conn.consumer) conn.consumer.observe(idx);
     }
@@ -1069,14 +1080,16 @@
         const layers = this._regionLayers(idx);
         let line;
         if (!prev) {
-          line = P.buildFullRegion(idx, rev, layers.tiles, layers.walls);
+          line = P.buildFullRegion(idx, rev, layers.tiles, layers.walls,
+            layers.ltype, layers.lamt);
         } else {
           line = {
             idx: idx, rev: rev,
-            cells: P.diffRegion(prev.tiles, prev.walls, layers.tiles, layers.walls)
+            cells: P.diffRegion(prev, layers)
           };
         }
-        conn.lastSent.set(idx, { rev: rev, tiles: layers.tiles, walls: layers.walls });
+        conn.lastSent.set(idx, { rev: rev, tiles: layers.tiles, walls: layers.walls,
+          ltype: layers.ltype, lamt: layers.lamt });
         conn.consumer.observe(idx);
         regions.push(line);
         this.stats.regionsSentDelta++;
