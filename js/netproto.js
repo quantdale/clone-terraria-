@@ -198,6 +198,14 @@
     const hasFull = r.tiles !== undefined || r.walls !== undefined ||
       r.ltype !== undefined || r.lamt !== undefined;
     if (hasFull) {
+      // Liquid layers are all-or-nothing. Their joint ABSENCE is meaningful
+      // (authoritative empty region — the encoder omits them when dry);
+      // a lone layer is ambiguous and rejected.
+      if (r.ltype === undefined && r.lamt === undefined) {
+        if (!str(r.tiles, 4096) || !str(r.walls, 4096)) return false;
+        if (r.tiles.length !== r.walls.length) return false;
+        return true;
+      }
       if (!str(r.tiles, 4096) || !str(r.walls, 4096) ||
           !str(r.ltype, 4096) || !str(r.lamt, 4096)) return false;
       if (r.tiles.length !== r.walls.length ||
@@ -415,11 +423,18 @@
   }
 
   function buildFullRegion(idx, rev, tiles, walls, ltype, lamt) {
-    return {
-      idx: idx, rev: rev,
-      tiles: hexBytes(tiles), walls: hexBytes(walls),
-      ltype: hexBytes(ltype), lamt: hexBytes(lamt)
-    };
+    const line = { idx: idx, rev: rev, tiles: hexBytes(tiles), walls: hexBytes(walls) };
+    // Dry regions (the vast majority) omit the liquid layers entirely: the
+    // absence is AUTHORITATIVE "no liquid here", which keeps join/sync
+    // payloads near v2 size. Any nonzero cell carries both layers.
+    let wet = false;
+    if (ltype && lamt) {
+      for (let i = 0; i < ltype.length; i++) {
+        if (ltype[i] !== 0 || lamt[i] !== 0) { wet = true; break; }
+      }
+      if (wet) { line.ltype = hexBytes(ltype); line.lamt = hexBytes(lamt); }
+    }
+    return line;
   }
 
   function diffRegion(prev, cur) {

@@ -246,11 +246,13 @@
     const LQ = TC.Liquids && typeof TC.Liquids.applyMirrorRegion === 'function'
       ? TC.Liquids : null;
     if (r.tiles && typeof r.tiles === 'string' && r.walls && typeof r.walls === 'string') {
-      // full layers — v3 lines also carry authoritative liquid truth
+      // full layers — v3 lines carry liquid truth; a dry region omits the
+      // pair, and that absence is authoritative "no liquid here"
       const tiles = this._unhex(r.tiles);
       const walls = this._unhex(r.walls);
-      const ltype = r.ltype ? this._unhex(r.ltype) : null;
-      const lamt = r.lamt ? this._unhex(r.lamt) : null;
+      const hasLiquid = r.ltype !== undefined && r.lamt !== undefined;
+      const ltype = hasLiquid ? this._unhex(r.ltype) : null;
+      const lamt = hasLiquid ? this._unhex(r.lamt) : null;
       for (let y = 0; y < TSZ; y++) {
         const wy = baseY + y;
         if (wy >= w.height) break;
@@ -263,10 +265,15 @@
           if (w.walls && w.getWall(wx, wy) !== wl) w.setRawWall(wx, wy, wl);
         }
       }
-      if (LQ && ltype && lamt) {
-        // Presentation-only mirror write; marks local WorldRegions so
-        // renderer/minimap/lighting repaint. No gameplay events, no settle.
-        LQ.applyMirrorRegion(baseX, baseY, TSZ, ltype, lamt);
+      if (LQ) {
+        if (hasLiquid) {
+          // Presentation-only mirror write; marks local WorldRegions so
+          // renderer/minimap/lighting repaint. No gameplay events, no settle.
+          LQ.applyMirrorRegion(baseX, baseY, TSZ, ltype, lamt);
+        } else {
+          LQ.applyMirrorRegion(baseX, baseY, TSZ,
+            new Uint8Array(TSZ * TSZ), new Uint8Array(TSZ * TSZ));
+        }
       }
       this.stats.regionsApplied++;
       this.stats.cellsApplied += TSZ * TSZ;

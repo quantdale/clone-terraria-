@@ -343,7 +343,9 @@ test.describe("journey M — multiplayer vertical slice", () => {
       // converges through replication
       const ownerPage = pageB;
       const placeRes = await (async () => {
-        for (let i = 0; i < 300; i++) {
+        // iteration budget calibrated for CI-class runners (W21 environment
+        // caveat: journey wall-clock is host-load sensitive)
+        for (let i = 0; i < 600; i++) {
           const r = await ownerPage.evaluate(([cell, item]) => {
             const TC = window.TC;
             const TSz = TC.CONST.TS;

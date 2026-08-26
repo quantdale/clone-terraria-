@@ -140,27 +140,42 @@ test("proto: stale protocol versions are rejected cleanly (v3 gate)", () => {
 });
 
 test("proto: liquid region lines fail closed on malformed shapes (W24)", () => {
-  const mkFull = () => P.buildFullRegion(0, 1,
+  // a WET region carries both layers; a DRY one omits them (authoritative
+  // absence) — build wet fixtures so partial-layer mutations are meaningful
+  const mkWet = () => {
+    const lt = new Uint8Array(1024); const la = new Uint8Array(1024);
+    lt[7] = 1; la[7] = 9;
+    return P.buildFullRegion(0, 1,
+      new Uint8Array(1024), new Uint8Array(1024), lt, la);
+  };
+  // a genuinely dry region encodes WITHOUT liquid keys and validates
+  const dry = P.buildFullRegion(0, 1,
     new Uint8Array(1024), new Uint8Array(1024),
     new Uint8Array(1024), new Uint8Array(1024));
+  assert.ok(dry.ltype === undefined && dry.lamt === undefined,
+    "dry regions must omit liquid layers (payload economy)");
+  accepts((() => ({ v: P.VERSION, t: "worldupd", sid: null, pid: null,
+    cseq: 0, sseq: 0, tick: 0,
+    p: { regions: [dry], players: [], enemies: [], drops: [] } }))());
+
   const worldupd = (regions) => ({ v: P.VERSION, t: "worldupd", sid: null,
     pid: null, cseq: 0, sseq: 0, tick: 0, p: { regions, players: [], enemies: [], drops: [] } });
 
   // partial layer sets are ambiguous — never validate
-  const missingLamt = mkFull();
+  const missingLamt = mkWet();
   delete missingLamt.lamt;
   rejects("full line missing lamt", worldupd([missingLamt]));
-  const missingLT = mkFull();
+  const missingLT = mkWet();
   delete missingLT.ltype;
   rejects("full line missing ltype", worldupd([missingLT]));
 
   // unequal layer lengths fail closed
-  const shortLayers = mkFull();
+  const shortLayers = mkWet();
   shortLayers.ltype = "00".repeat(1023);
   rejects("ltype shorter than tiles", worldupd([shortLayers]));
 
   // unknown region fields are rejected
-  const extra = mkFull();
+  const extra = mkWet();
   extra.zorp = 1;
   rejects("unknown region field", worldupd([extra]));
 

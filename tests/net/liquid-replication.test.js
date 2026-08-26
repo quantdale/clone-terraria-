@@ -142,7 +142,12 @@ test("liquid net: snapshot regions carry authoritative ltype+lamt layers", () =>
     const snap = [...A.outbox].reverse().find((m) => m.t === "snapshot" && m.p.regions.length);
     if (!snap) continue;
     for (const r of snap.p.regions) {
-      assert.ok(r.ltype && r.lamt, "full snapshot line missing liquid layers");
+      // dry regions legitimately omit the liquid pair (authoritative empty);
+      // wet regions must carry BOTH layers
+      const hasPair = r.ltype !== undefined && r.lamt !== undefined;
+      assert.ok(hasPair || (r.ltype === undefined && r.lamt === undefined),
+        "full line must carry both liquid layers or neither");
+      if (!hasPair) continue;
       const lt = Buffer.from(r.ltype, "hex");
       const la = Buffer.from(r.lamt, "hex");
       const coords = TC.WorldRegions.chunkCoords(r.idx);

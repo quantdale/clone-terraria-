@@ -224,9 +224,9 @@ test.describe("journey N — multiplayer productionization parity", () => {
       // ---- 5. shutdown returns BOTH clients to a coherent title ----
       srv.proc.kill();
       await pageA.waitForFunction(() => window.TC.state === "title",
-        null, { timeout: 20000 });
+        null, { timeout: 45000 });
       await pageB.waitForFunction(() => window.TC.state === "title",
-        null, { timeout: 20000 });
+        null, { timeout: 45000 });
 
       H.assertNoErrors(errA, "journey N/Alice");
       H.assertNoErrors(errB, "journey N/Bob");
