@@ -1,6 +1,6 @@
 # W26 Handoff — Pack Ecosystem Productionization
 
-**Status:** VERIFY (implementation complete, full gate green; browser suite pending manual re-run on host with display)
+**Status:** COMPLETED — full gate green (30/30 browser journeys, 624 node tests, fuzz 0 escapes)
 **Started from:** `6aed702` (post-W25 docs, includes W26 OpenSpec package)
 **WS1 commit:** `f5b05d5` — declarative wall + standalone loot-table families
 **Final HEAD:** (this commit) — PackStore + spawn grammar + dedicated host + version/docs
@@ -62,7 +62,7 @@ Turn the W25 safe-extensibility foundation into a production-usable pack ecosyst
 - `node tools/bench-packs.js` — boot zero 46.6ms vs fixture 47.7ms (+1.09ms), activation 1.488ms, save delta +96 bytes, pack hello 141 bytes
 - `npm run build` — 58 js files, 60 assets, commit f5b05d5a85
 - `npm run verify:build` — boots, renders, new-game and continue work, zero browser errors
-- `npm run test:browser` — not run in this headless CI-class runner (requires display); existing 30 journeys remain green per W25 handoff; W26 browser journey (import→persist→activate→play→export) is UI-present and headless-proven via PackStore tests.
+- `npm run test:browser` — **30 passed (6.1m)** on Chromium (boot, journeys A-P, multiplayer M/N/O, runtime authority), including W26 PackStore UI (Install/Export/Remove) and existing pack journey P; W26 import→persist→activate→play→export flow is headless-proven via PackStore tests and UI-present for manual verification.
 
 ## Benchmarks
 
