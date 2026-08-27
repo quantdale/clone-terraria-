@@ -225,6 +225,34 @@
     return true;
   }
 
+  // Pack natural-spawn seam (W26): compiled pack rules are filtered here.
+  // No per-tick registry scan — rules are precompiled at activation and
+  // indexed by zone via TC.Packs.getSpawnRules().
+  function packSpawnEntries(zone, pcol, depth, biome, dl) {
+    if (!TC.Packs || typeof TC.Packs.getSpawnRules !== 'function') return [];
+    let rules;
+    try { rules = TC.Packs.getSpawnRules(); } catch (e) { return []; }
+    if (!Array.isArray(rules) || !rules.length) return [];
+    const out = [];
+    for (let i = 0; i < rules.length; i++) {
+      const r = rules[i];
+      if (!r || r.zone !== zone) continue;
+      if (r.biome != null && r.biome !== biome) continue;
+      if (r.depthMin != null && depth < r.depthMin) continue;
+      if (r.depthMax != null && depth > r.depthMax) continue;
+      if (r.time === 'day' && dl < 0.5) continue;
+      if (r.time === 'night' && dl >= 0.5) continue;
+      if (r.requires != null && TC.Progression && typeof TC.Progression.test === 'function') {
+        try { if (!TC.Progression.test(r.requires)) continue; } catch (e) { continue; }
+      }
+      if (!TC.ENEMY_DEFS || !TC.ENEMY_DEFS[r.enemy]) continue;
+      const def = TC.ENEMY_DEFS[r.enemy];
+      if (def && def.boss) continue;
+      out.push([r.enemy, r.weight]);
+    }
+    return out;
+  }
+
   function zoneTable(zone, pcol, p) {
     const C = TC.CONST;
     const bio =
@@ -258,7 +286,8 @@
       if (entry[0] === "gloom_bat") return depth > 42; // deep underground
       return true;
     });
-    return base.concat(extra);
+    const packEntries = packSpawnEntries(zone, pcol, depth, b, daylight());
+    return base.concat(extra).concat(packEntries);
   }
 
   // ---- placement ----

@@ -516,6 +516,96 @@
       catch (e) { toast(t('ui.packs.apply_failed', { reason: String(e && e.message || e).slice(0, 80) })); }
     }
   }
+  function actPacksInstall() {
+    if (!TC.PackStore || typeof TC.PackStore.install !== 'function') { toast(t('ui.packs.install_failed', { reason: 'unavailable' })); return; }
+    // Use a transient hidden file input; works in real browsers and degrades
+    // gracefully in headless (no document). Provide a prompt fallback.
+    try {
+      if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+        const inp = document.createElement('input');
+        inp.type = 'file';
+        inp.accept = 'application/json,.json';
+        inp.style.display = 'none';
+        inp.onchange = function () {
+          const file = inp.files && inp.files[0];
+          if (!file) { try { document.body.removeChild(inp); } catch (e) {} return; }
+          if (file.size > 256 * 1024) { toast(t('ui.packs.install_failed', { reason: t('ui.packs.quota_error') })); try { document.body.removeChild(inp); } catch (e) {} return; }
+          const reader = (typeof FileReader !== 'undefined') ? new FileReader() : null;
+          if (!reader || typeof reader.readAsText !== 'function') { toast(t('ui.packs.install_failed', { reason: 'unavailable' })); try { document.body.removeChild(inp); } catch (e) {} return; }
+          reader.onload = function () {
+            const text = String(reader.result || '');
+            const r = TC.PackStore.install(text);
+            if (r.ok) {
+              if (r.status === 'unchanged') toast(t('ui.packs.install_unchanged', { id: r.id }));
+              else toast(t('ui.packs.install_ok', { id: r.id }));
+              // Refresh checkbox state for newly available pack
+              if (r.id) packSel[r.id] = true;
+            } else {
+              let key = 'ui.packs.install_failed';
+              let reason = r.error || 'unknown';
+              if (r.error === 'conflict') reason = t('ui.packs.conflict_error');
+              else if (r.error === 'quota' || r.error === 'max-installed') reason = t('ui.packs.quota_error');
+              else if (r.error === 'too-large') reason = t('ui.packs.quota_error');
+              else if (r.error === 'active') reason = t('ui.packs.remove_active');
+              else if (r.detail) reason = String(r.detail).slice(0, 80);
+              toast(t(key, { reason: reason }));
+            }
+            try { document.body.removeChild(inp); } catch (e) {}
+          };
+          reader.onerror = function () { toast(t('ui.packs.install_failed', { reason: 'read error' })); try { document.body.removeChild(inp); } catch (e) {} };
+          reader.readAsText(file);
+        };
+        // Append to body so the input exists in DOM for file picker to work
+        try { document.body.appendChild(inp); } catch (e) {}
+        inp.click();
+        return;
+      }
+    } catch (e) {}
+    // Fallback: text prompt (headless or no file API)
+    try {
+      const text = window.prompt(t('ui.packs.install'));
+      if (text == null) return;
+      const r = TC.PackStore.install(String(text));
+      if (r.ok) toast(t('ui.packs.install_ok', { id: r.id }));
+      else toast(t('ui.packs.install_failed', { reason: r.error || 'unknown' }));
+    } catch (e) { toast(t('ui.packs.install_failed', { reason: String(e && e.message || e).slice(0, 80) })); }
+  }
+  function actPacksExport(id) {
+    if (!TC.PackStore || typeof TC.PackStore.exportPack !== 'function') { toast(t('ui.packs.export_failed')); return; }
+    try {
+      let text = null;
+      if (id && TC.PackStore.has && TC.PackStore.has(id)) text = TC.PackStore.exportPack(id);
+      else if (TC.PackStore.exportJSON) text = TC.PackStore.exportJSON();
+      if (!text) { toast(t('ui.packs.export_failed')); return; }
+      // Trigger download via data URL or Blob
+      if (typeof document !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined' && URL.createObjectURL) {
+        const blob = new Blob([text], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = (id || 'packs') + '.json';
+        try { document.body.appendChild(a); a.click(); document.body.removeChild(a); } catch (e) { window.prompt(t('ui.packs.export'), text); }
+        setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 1000);
+        toast(t('ui.packs.installed'));
+      } else if (typeof window !== 'undefined' && window.prompt) {
+        window.prompt(t('ui.packs.export'), text);
+      } else {
+        toast(text.slice(0, 80));
+      }
+    } catch (e) { toast(t('ui.packs.export_failed')); }
+  }
+  function actPacksRemove(id) {
+    if (!TC.PackStore || typeof TC.PackStore.remove !== 'function') { toast(t('ui.packs.remove_failed', { reason: 'unavailable' })); return; }
+    if (!id) return;
+    const r = TC.PackStore.remove(id);
+    if (r.ok) {
+      toast(t('ui.packs.remove_ok', { id: id }));
+      if (packSel[id]) delete packSel[id];
+    } else {
+      let reason = r.error || 'unknown';
+      if (r.error === 'active') reason = t('ui.packs.remove_active');
+      toast(t('ui.packs.remove_failed', { reason: reason }));
+    }
+  }
 
   // main.continueGame calls this when a save's pack metadata classifies as
   // incompatible. The diagnostic stays until the player acts.
@@ -806,7 +896,12 @@
     if (L.packsPanel) {
       L.uiRects.push(L.packsPanel);
       L.uiRects.push(L.packsApplyRect);
+      if (L.packsInstallRect) L.uiRects.push(L.packsInstallRect);
       L.uiRects.push(L.packsCloseRect);
+      for (const row of L.packsRows || []) {
+        if (row.exportRect) L.uiRects.push(row.exportRect);
+        if (row.removeRect) L.uiRects.push(row.removeRect);
+      }
     }
     if (UI.invOpen) {
       L.uiRects.push(L.bagPanel);
@@ -820,18 +915,25 @@
       // Packs panel replaces the menu while open (modal on the title screen).
       const avail = TC.Packs.available();
       const rowH = 30, headH = 56, footH = 62;
-      const pw = 460;
+      const pw = 500;
       const ph = headH + Math.max(1, avail.length) * rowH + footH;
       const px = w / 2 - pw / 2, py = Math.max(24, h * 0.16);
       L.packsPanel = { x: px, y: py, w: pw, h: ph };
       L.packsRows = [];
       for (let i = 0; i < avail.length; i++) {
-        L.packsRows.push({
-          id: avail[i].id,
-          rect: { x: px + 12, y: py + headH + i * rowH, w: pw - 24, h: rowH - 6 },
-        });
+        const id = avail[i].id;
+        const rowRect = { x: px + 12, y: py + headH + i * rowH, w: pw - 24, h: rowH - 6 };
+        const entry = { id: id, rect: rowRect };
+        // Per-row Export/Remove for installed packs (WS2)
+        if (TC.PackStore && typeof TC.PackStore.has === 'function' && TC.PackStore.has(id)) {
+          entry.exportRect = { x: px + pw - 132, y: rowRect.y + 3, w: 54, h: 18 };
+          const isActive = TC.Packs.isActive && TC.Packs.isActive(id);
+          if (!isActive) entry.removeRect = { x: px + pw - 70, y: rowRect.y + 3, w: 50, h: 18 };
+        }
+        L.packsRows.push(entry);
       }
-      L.packsApplyRect = { x: px + 12, y: py + ph - 48, w: 200, h: 36 };
+      L.packsApplyRect = { x: px + 12, y: py + ph - 48, w: 140, h: 36 };
+      L.packsInstallRect = { x: px + 160, y: py + ph - 48, w: 110, h: 36 };
       L.packsCloseRect = { x: px + pw - 130, y: py + ph - 48, w: 118, h: 36 };
     } else if (TC.state === 'title') {
       const bw = 300, bh = 48;
@@ -1400,11 +1502,17 @@
         ctx.fillRect(r.x + 12, r.y + (r.h - 16) / 2 + 4, 9, 9);
       }
       const label = meta ? meta.name + '  v' + meta.version : row.id;
+      const hasActions = !!(row.exportRect || row.removeRect);
       const tag = meta && meta.type === 'resource' ? t('ui.packs.type_resource') : t('ui.packs.type_data');
-      txt(ctx, label, r.x + 34, r.y + r.h / 2, 14, checked ? TEXT : TEXT_DIM, 'left');
-      txt(ctx, tag, r.x + r.w - 8, r.y + r.h / 2, 10, TEXT_DIM, 'right');
+      // Truncate label to leave room for action buttons
+      const labelMax = hasActions ? r.w - 160 : r.w - 90;
+      txt(ctx, ellipsize(ctx, label, labelMax), r.x + 34, r.y + r.h / 2, 13, checked ? TEXT : TEXT_DIM, 'left');
+      if (!hasActions) txt(ctx, tag, r.x + r.w - 8, r.y + r.h / 2, 10, TEXT_DIM, 'right');
+      if (row.exportRect) drawSmallButton(ctx, { rect: row.exportRect, id: 'exp-' + row.id, label: t('ui.packs.export') }, mx, my);
+      if (row.removeRect) drawSmallButton(ctx, { rect: row.removeRect, id: 'rm-' + row.id, label: t('ui.packs.remove') }, mx, my);
     }
     drawButton(ctx, { rect: L.packsApplyRect, id: 'apply', label: t('ui.packs.apply') }, mx, my);
+    if (L.packsInstallRect) drawButton(ctx, { rect: L.packsInstallRect, id: 'install', label: t('ui.packs.install') }, mx, my);
     drawButton(ctx, { rect: L.packsCloseRect, id: 'close', label: t('ui.common.close') }, mx, my);
   }
 
@@ -1882,9 +1990,12 @@
       if (rightClick) return;
       if (L.packsPanel) {
         for (const row of L.packsRows || []) {
+          if (row.exportRect && inRect(mx, my, row.exportRect)) { actPacksExport(row.id); return; }
+          if (row.removeRect && inRect(mx, my, row.removeRect)) { actPacksRemove(row.id); return; }
           if (inRect(mx, my, row.rect)) { actPackRow(row.id); return; }
         }
         if (inRect(mx, my, L.packsApplyRect)) { actPacksApply(); return; }
+        if (L.packsInstallRect && inRect(mx, my, L.packsInstallRect)) { actPacksInstall(); return; }
         if (inRect(mx, my, L.packsCloseRect)) { packsOpen = false; return; }
         return; // modal: clicks inside never fall through to menu buttons
       }

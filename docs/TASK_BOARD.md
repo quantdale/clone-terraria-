@@ -22,9 +22,13 @@ DONE      acceptance criteria proven
 
 ---
 
-# Status snapshot (authoritative, W20 truth-sync)
+# Status snapshot (authoritative, W26 pack-ecosystem truth-sync)
 
-Reconciled against the implementation on the W20 Localization campaign
+Reconciled against the implementation on the W26 Pack Ecosystem Productionization
+campaign. Consult docs/ARCHITECTURE.md §19 (capability matrix), §29 (W26
+pack families + PackStore + spawn grammar), §24 (W20 localization contracts),
+§23 (W19 contracts), §22 (W18 runtime contracts) and §21 (W17 contracts) for
+per-module ownership detail.
 checkpoint. Consult docs/ARCHITECTURE.md §19 (capability matrix), §24 (W20
 localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
 §21 (W17 contracts) for per-module ownership detail.
@@ -49,8 +53,16 @@ localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
 | Performance | PERF-001 | DONE (TC.Debug instrumentation + F3 overlay); PERF-002 partially covered by `tools/bench-runtime.js` fixed-step benchmark; PERF-003..005 TODO |
 | Multiplayer | NET-001..004 | DONE through W22 foundation + W23 productionization (see rows below; NET-004 productionization closed by W23) |
 | Extensibility/mods | MOD-001..004 | MOD-001/002/003 DONE (W25: canonical TC.Packs authority — fail-closed manifest/data-pack pipeline, declarative tile/item/enemy/recipe families, atomic activation with session-permanence, pack-aware save classification + continue gating, title-screen packs panel, protocol-v4 handshake identity, fixture pack + journey P; see ARCHITECTURE.md §29). MOD-004 remains RESEARCH ONLY (docs/ADR-MOD-004-sandboxed-mods.md — recommendation DEFER); no executable-mod runtime exists by design |
+| Pack ecosystem prod. (W26) | walls + lootTables + spawnRules + PackStore + dedicated host | DONE (WS1: declarative wall/lootTable families via same atomic pipeline; WS2: TC.PackStore durable install + title import/export/remove; WS3: compiled spawn-rule grammar into EnemySpawn; WS4: mp-server --packs/--pack-file pre-world activation; WS5: version/doc truth-sync) |
 
-### Newly discovered follow-ups (updated W25)
+### Newly discovered follow-ups (updated W26)
+
+- **W26 status:** pack ecosystem productionization LANDED — declarative walls/
+  standalone loot tables + deterministic spawn-rule grammar (EnemySpawn seam) +
+  durable TC.PackStore install/import/export/remove with caps/corruption handling
+  and title import/export/remove UX + dedicated mp-server pack selection +
+  version/doc truth-sync. Zero-pack fingerprint 1b1d7c15 preserved, W25 fixture
+  identity intact, saves remain classified before mutation.
 
 - **W25 status:** safe extensibility foundation LANDED — declarative data
   packs (tiles/items/enemies/recipes) + resource locale fragments through a

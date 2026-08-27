@@ -82,6 +82,7 @@
     recipes: 256,
     walls: 64,
     lootTables: 64,
+    spawnRules: 64,
   };
   const MAX_DEPS = 16;
   const MAX_PACKS_ACTIVE = 16;
@@ -461,7 +462,7 @@
     if (m.content !== undefined) {
       if (!isObj(m.content)) errs.push("content must be an object");
       else {
-        const knownFam = { tiles: 1, items: 1, enemies: 1, recipes: 1, walls: 1, lootTables: 1 };
+        const knownFam = { tiles: 1, items: 1, enemies: 1, recipes: 1, walls: 1, lootTables: 1, spawnRules: 1 };
         for (const k in m.content) {
           if (!knownFam[k]) {
             errs.push("unknown content family '" + k + "'");
@@ -511,6 +512,8 @@
   let activeList = []; // activated pack ids in deterministic order
   let activeRecords = []; // parallel records
   const committed = new Map(); // id -> rawDigest of the LIVE committed content
+  let spawnRules = []; // compiled global spawn rules in committed pack order
+  let spawnRuleCounter = 0; // deterministic order tick
   let statsCounters = {
     provided: 0,
     attempts: 0,
@@ -845,7 +848,7 @@
   // family plus updated staged maps. PURE — throws PackError on problems.
   function stageContent(rec, ctx) {
     const content = rec.content;
-    const out = { tiles: [], items: [], enemies: [], recipes: [], walls: [], lootTables: [] };
+    const out = { tiles: [], items: [], enemies: [], recipes: [], walls: [], lootTables: [], spawnRules: [] };
     if (!content) return out;
     const ns = rec.id;
     const P = [];
@@ -1401,6 +1404,56 @@
       }
     }
 
+    // ---- spawn rules (pack natural spawn) -----------------------------
+    if (Array.isArray(content.spawnRules)) {
+      const ALLOWED_ZONES = { day: 1, night: 1, cave: 1, underworld: 1 };
+      const ALLOWED_BIOMES = { forest: 1, desert: 1, snow: 1, jungle: 1, ocean: 1, corruption: 1 };
+      const ALLOWED_TIMES = { day: 1, night: 1 };
+      if (content.spawnRules.length > 64) P.push(ns + ".spawnRules: exceeds 64 entries");
+      else for (let i = 0; i < content.spawnRules.length; i++) {
+        const sr = content.spawnRules[i];
+        const who = ns + ".spawnRules[" + i + "]";
+        if (!isObj(sr)) { P.push(who + ": entry must be an object"); continue; }
+        for (const k in sr) {
+          if (!{ enemy: 1, zone: 1, weight: 1, biome: 1, depthMin: 1, depthMax: 1, time: 1, requires: 1 }[k]) {
+            P.push(who + ": unknown field '" + k + "'");
+          }
+        }
+        if (sr.enemy == null) { P.push(who + ": enemy required"); continue; }
+        const eid = needRef(ctx.resolveEnemy, "enemy", sr.enemy, who, "enemy", P);
+        if (eid == null) continue;
+        // Boss check: must not reference boss machinery
+        let edef = null;
+        if (TC.Registry && TC.Registry.get) edef = TC.Registry.get("enemy", eid);
+        if (!edef && ctx.stagedEnemyDefs) edef = ctx.stagedEnemyDefs[eid] || null;
+        if (edef && edef.boss === true) { P.push(who + ": enemy '" + eid + "' is boss machinery (not spawnable)"); continue; }
+        if (edef && edef.ai && BOSS_AI[edef.ai]) { P.push(who + ": enemy '" + eid + "' uses boss AI '" + edef.ai + "'"); continue; }
+        const enemyPack = eid.indexOf(':') >= 0 ? eid.split(':')[0] : 'core';
+        if (enemyPack !== ns && enemyPack !== 'core' && !rec.deps[enemyPack] && !(rec.optionalDeps && rec.optionalDeps[enemyPack])) {
+          P.push(who + ": enemy '" + eid + "' cross-pack reference requires declared dependency");
+          continue;
+        }
+        if (typeof sr.zone !== "string" || !ALLOWED_ZONES[sr.zone]) { P.push(who + ": zone must be one of day|night|cave|underworld"); continue; }
+        if (!boundedNum(sr.weight, 0.01, 10)) { P.push(who + ": weight must be a number within 0.01..10"); continue; }
+        if (sr.biome != null && (typeof sr.biome !== "string" || !ALLOWED_BIOMES[sr.biome])) { P.push(who + ": biome must be one of forest|desert|snow|jungle|ocean|corruption"); continue; }
+        if (sr.depthMin != null && !boundedNum(sr.depthMin, 0, 500)) { P.push(who + ": depthMin must be a number within 0..500"); continue; }
+        if (sr.depthMax != null && !boundedNum(sr.depthMax, 0, 500)) { P.push(who + ": depthMax must be a number within 0..500"); continue; }
+        if (sr.depthMin != null && sr.depthMax != null && sr.depthMin > sr.depthMax) { P.push(who + ": depthMin > depthMax"); continue; }
+        if (sr.time != null && (typeof sr.time !== "string" || !ALLOWED_TIMES[sr.time])) { P.push(who + ": time must be day|night"); continue; }
+        if (sr.requires != null && !validConditionShape(sr.requires, who + ".requires", P)) continue;
+        out.spawnRules.push({
+          enemy: sr.enemy,
+          zone: sr.zone,
+          weight: sr.weight,
+          biome: sr.biome == null ? null : sr.biome,
+          depthMin: sr.depthMin == null ? null : sr.depthMin,
+          depthMax: sr.depthMax == null ? null : sr.depthMax,
+          time: sr.time == null ? null : sr.time,
+          requires: sr.requires == null ? null : sr.requires,
+        });
+      }
+    }
+
     // ---- recipes (last: may reference everything staged above) ----------
     if (Array.isArray(content.recipes)) {
       for (let i = 0; i < content.recipes.length; i++) {
@@ -1596,6 +1649,10 @@
       if (TC.WALL_DEFS && TC.WALL_DEFS.length > j.wallLen) {
         TC.WALL_DEFS.length = j.wallLen;
       }
+      if (j.spawnLen != null) {
+        spawnRules.length = j.spawnLen;
+        spawnRuleCounter = j.spawnCounter;
+      }
       for (const k of j.itemKeys) delete TC.ITEM_DEFS[k];
       for (const k of j.enemyKeys) delete TC.ENEMY_DEFS[k];
       if (TC.Registry && typeof TC.Registry.forgetLast === "function") {
@@ -1668,6 +1725,25 @@
     // Loot tables: registered as stable identities only (no dense world id).
     for (const e of staged.lootTables) {
       defineInRegistry("lootTable", e.sid, e.def, j);
+    }
+    // Spawn rules: compiled into global deterministic index (no registry).
+    for (const r of staged.spawnRules) {
+      const sid = resolveStable("enemy", r.enemy, ctx);
+      const canon = sid != null ? canonicalRef("enemy", sid, ctx) : r.enemy;
+      const compiled = {
+        pack: ns,
+        enemy: canon,
+        stableEnemy: sid || r.enemy,
+        zone: r.zone,
+        weight: r.weight,
+        biome: r.biome,
+        depthMin: r.depthMin,
+        depthMax: r.depthMax,
+        time: r.time,
+        requires: r.requires,
+        order: spawnRuleCounter++,
+      };
+      spawnRules.push(compiled);
     }
 
     // ---- reference normalization (canonical RUNTIME forms) ------------
@@ -1749,7 +1825,8 @@
     }
     statsCounters.committedEntries +=
       staged.tiles.length + staged.items.length + staged.enemies.length +
-      staged.recipes.length + staged.walls.length + staged.lootTables.length;
+      staged.recipes.length + staged.walls.length + staged.lootTables.length +
+      staged.spawnRules.length;
   }
 
   // Resolve any validated ref form to its stable id using the SAME union
@@ -1919,6 +1996,8 @@
       tileLen: TC.TILE_DEFS ? TC.TILE_DEFS.length : 0,
       recipesLen: TC.RECIPES ? TC.RECIPES.length : 0,
       wallLen: TC.WALL_DEFS ? TC.WALL_DEFS.length : 0,
+      spawnLen: spawnRules.length,
+      spawnCounter: spawnRuleCounter,
       itemKeys: [],
       enemyKeys: [],
       regDefs: [],
@@ -2139,6 +2218,9 @@
     }
   }
 
+  function getSpawnRules() {
+    return spawnRules.slice();
+  }
   TC.Packs = {
     MANIFEST_VERSION: MANIFEST_VERSION,
     GAME_VERSION: GAME_VERSION,
@@ -2157,6 +2239,7 @@
     classifySave: classifySave,
     bootActivate: bootActivate,
     stats: stats,
+    getSpawnRules: getSpawnRules,
     // Test/debug seam: last activation failure (null when none).
     lastError: () => lastError,
   };

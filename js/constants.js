@@ -2,7 +2,7 @@
 
 window.TC = window.TC || {};
 
-TC.VERSION = "0.1.0";
+TC.VERSION = "0.9.0"; // W26: align with package.json release version; TC.Packs.GAME_VERSION stays "0.9" for pack compat
 
 TC.CONST = {
   TS: 16,

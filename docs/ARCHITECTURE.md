@@ -1187,9 +1187,9 @@ exactly-once transfer via /debug counters, two-client mirror coherence,
 rejoin-current-truth, clean shutdown. Benchmarks: bench-multiplayer scenes
 liquid-churn + pump-burst (bounded deltas, idle suppression retained).
 
-## 29. Campaign contracts (W25 — Safe Extensibility Foundation)
+## 29. Campaign contracts (W26 — Pack Ecosystem Productionization)
 
-MOD-001/002/003 ship as production systems; MOD-004 remains research-only
+W26 extends W25 with declarative walls/standalone loot tables, compiled spawn-rule grammar, durable PackStore, dedicated host packs and version/doc truth-sync. MOD-001/002/003 ship as production systems; MOD-004 remains research-only
 (docs/ADR-MOD-004-sandboxed-mods.md, recommendation: DEFER). The canonical
 authority is **TC.Packs** (js/packs.js); the committed fixture pack lives at
 packs/testpack.js and rides the SAME public seam any third-party declarative
@@ -1208,13 +1208,11 @@ pipeline, and pack content can never supply callbacks or hooks — enemy ai/
 look, tile patterns and stations must reference BUILT-IN vocabulary resolved
 against the live registries at stage time.
 
-### Supported families (MOD-002 scope)
-tiles / items / enemies / recipes. Walls, NPCs/shops, standalone loot tables,
-projectiles, buffs and biomes are deliberately NOT pack-extensible in W25
-(numeric-identity risk, dialog/shop surface area, or missing strong invariants).
-Enemy drops already give declarative loot; recipes may use the existing W14
-Progression condition grammar; summon items may target pack enemies that
-declare boss:true (routing through built-in encounter machinery only).
+### Supported families (W26 scope)
+tiles / items / enemies / recipes / walls / standalone lootTables + spawnRules.
+Walls append to WALL_DEFS with numeric alias and use PlaceWall/MineWall;
+loot tables are stable lootTable identities rolled via LootTables.rollById and
+referenced from enemies; spawnRules are declarative {enemy,zone,weight,biome?,depthMin?,depthMax?,time?,requires?} compiled at activation into a zone-indexed seam consumed by EnemySpawn.zoneTable (deterministic GameRng.spawn, no per-tick registry scan). NPCs/shops, projectiles, buffs and biomes remain intentionally OUT of scope (dialog/shop surface, missing invariants). Enemy drops already give declarative loot; recipes may use the existing W14 Progression condition grammar; summon items may target pack enemies that declare boss:true (routing through built-in encounter machinery only).
 
 ### Namespace + identity rules (WS4)
 Content stable ids are always '<packid>:<key>' where namespace == pack id;
@@ -1244,14 +1242,38 @@ ENEMY_DEFS key writes, locale fragments via Localization.extend (undoable).
 Any staging/commit failure rolls back to the previous coherent state
 (Registry.forgetLast removes tail entries AND their aliases).
 
-### Boot timing (load-order contract)
+### Boot timing (load-order contract, W26)
 main.js defers boot-time activation + registry sync to DOMContentLoaded when
 available, because sibling modules may APPEND to shared tables at their own
 script-load time (wiring.js loads after main.js). Headless embeds without a
-real document fall through immediately. Production activation surface:
-TC.Settings 'activePacks' persisted by the title-screen Content Packs panel
-(toggle rows -> Apply & Restart); bootActivate applies it fail-closed and
-surfaces failures via TC.Packs.lastError() for the title screen.
+real document fall through immediately. W26 pack boot order: build-provided
+packs (packs/testpack.js) -> PackStore.load() provides every user-installed
+validated manifest from tc_packs_installed_v1 -> Settings 'activePacks'
+persisted by the title-screen Content Packs panel (toggle rows -> Apply &
+Restart, plus Install/Export/Remove via PackStore) -> bootActivate applies it
+fail-closed and surfaces failures via TC.Packs.lastError() for the title
+screen. PackStore caps (64 manifests, 256 KiB each, 4 MiB total) and
+corruption handling degrade to empty without breaking boot.
+
+### PackStore (W26)
+TC.PackStore owns the installed-manifest source (separate from Settings and
+world saves) under tc_packs_installed_v1. Install validates through the SAME
+TC.Packs.provideJSON boundary, so malicious store data can never bypass
+security; duplicate identical is idempotent, conflicting same-id requires
+explicit replace (rejected while active), quota/corrupt/wrong-version degrade
+safely, export is canonical JSON, remove is blocked while active (dense
+indices would shift). Dedicated hosts select packs via tools/mp-server.js
+--packs/--pack-file before world creation; the same validation/provide path
+is used, so host and client digests gate admission before snapshot.
+
+### Version semantics (W26 truth-sync)
+package.json "0.9.0" is the release version; TC.VERSION mirrors it for the
+title UI. TC.Packs.GAME_VERSION "0.9" is the pack compatibility target
+(major.minor) checked against requires.game ranges — "0.9" and "0.9.0" are
+equivalent (dotted 1..3 parts, missing parts padded to 0). SaveCore writes
+"0.9.0-campaign" (release version + campaign tag); format compatibility is
+controlled by SaveCore.formatVersion, not the display string. NetProto.VERSION
+remains 4 (wire unchanged by W26 CLI).
 
 ### Save compatibility (MOD-003)
 Save envelopes gain top-level 'packs' metadata {v, fp, gfp,

@@ -527,6 +527,12 @@
   const bootAll = function () {
     if (_bootDone) return;
     _bootDone = true;
+    // W26: provide every USER-INSTALLED manifest to TC.Packs BEFORE activation
+    // so a pack installed through the title UI can be activated on a fresh boot.
+    // Best-effort + degrade-safe: a corrupt/oversized store must not block boot.
+    if (TC.PackStore && typeof TC.PackStore.load === "function") {
+      try { TC.PackStore.load(); } catch (e) { console.warn('[TC] pack store load failed:', e && e.message); }
+    }
     if (TC.Packs && typeof TC.Packs.bootActivate === "function") {
       const r = TC.Packs.bootActivate();
       packsBootError = r.error || null;

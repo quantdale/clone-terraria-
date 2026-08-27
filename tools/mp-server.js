@@ -27,12 +27,20 @@ const path = require("path");
 const http = require("http");
 
 const ROOT = path.join(__dirname, "..");
+const fs = require("fs");
 const { loadGame } = require(path.join(ROOT, "tests", "helpers", "load-game.js"));
 const wsShim = require(path.join(__dirname, "net", "wsserver.js"));
 
 function arg(name, dflt) {
   const i = process.argv.indexOf("--" + name);
   return (i >= 0 && process.argv[i + 1] != null) ? process.argv[i + 1] : dflt;
+}
+function argsAll(name) {
+  const out = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === "--" + name && i + 1 < process.argv.length) out.push(process.argv[i + 1]);
+  }
+  return out;
 }
 
 const SEED = parseInt(arg("seed", "1337"), 10) | 0;
@@ -47,6 +55,44 @@ const MAX_OUT_KB = parseFloat(arg("max-out-kb", "128"));
 // ---- boot the real game headless ----
 const game = loadGame({ hash: "" });
 const TC = game.TC;
+
+// ---- W26: dedicated host pack selection (must happen BEFORE world creation) ----
+// --packs id1,id2  (build-provided/installed packs)
+// --pack-file path.json  (repeatable, host-local JSON manifests)
+(function () {
+  const packsArg = arg("packs", "");
+  const packFiles = argsAll("pack-file");
+  if (!packsArg && !packFiles.length) return;
+  const wantIds = packsArg ? packsArg.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const fileIds = [];
+  for (const fp of packFiles) {
+    let text;
+    try { text = fs.readFileSync(fp, "utf8"); } catch (e) {
+      console.error("[mp-server] pack file unreadable '" + fp + "': " + (e && e.message));
+      process.exit(1);
+    }
+    if (text.length > 256 * 1024) {
+      console.error("[mp-server] pack file '" + fp + "' exceeds 256 KiB");
+      process.exit(1);
+    }
+    let rec;
+    try { rec = TC.Packs.provideJSON(text); } catch (e) {
+      console.error("[mp-server] pack file '" + fp + "' invalid: " + (e && e.message));
+      process.exit(1);
+    }
+    fileIds.push(rec.id);
+  }
+  const toActivate = [...wantIds, ...fileIds];
+  if (!toActivate.length) return;
+  try {
+    const r = TC.Packs.setActive(toActivate);
+    console.log("[mp-server] packs active: " + r.activated.join(",") + " digest=" + TC.Packs.digest());
+  } catch (e) {
+    console.error("[mp-server] pack activation failed: " + (e && e.message));
+    if (e && e.details) for (const d of e.details) console.error("  - " + d);
+    process.exit(1);
+  }
+})();
 
 if (!TC.NetServer || !TC.Runtime) {
   console.error("[mp-server] net modules missing — check index.html script order");

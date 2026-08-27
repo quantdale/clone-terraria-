@@ -27,7 +27,7 @@ npm run test:net      # multiplayer protocol/session/replication suites
 npm run test:packs    # pack loader/activation/save/multiplayer suites
 ```
 
-## Content packs (W25)
+## Content packs (W26 — Pack Ecosystem)
 
 The game ships a safe, declarative extensibility layer. Packs are pure data —
 no scripts, no callbacks, no code execution; everything is validated fail-closed
@@ -36,14 +36,23 @@ before anything is committed atomically to the game.
 - **Storm Frontier** (`packs/testpack.js`) ships as the built-in fixture: a small
   tempest crafting chain (Tempest Brick block, Shard/Bar/Blade items and a Wisp
   Charm that summons a mini-boss) plus its display strings.
-- Enable it on the title screen via **Content Packs** → toggle → **Apply &
+- **Declarative families:** tiles / items / enemies / recipes / **walls** /
+  **standalone loot tables** / **spawn rules** (zone/biome/depth/time/requires) —
+  all validated, dependency-ordered and atomically committed with rollback.
+- **PackStore** — install any validated JSON pack from the title screen via
+  **Content Packs → Install JSON**, export it back, or remove it (blocked while
+  active). Installed packs persist in `tc_packs_installed_v1` with caps
+  (64 manifests, 256 KiB each, 4 MiB total) and corruption-safe degrade, and are
+  provided before activation on every boot so they can be enabled after a reload.
+- Enable packs on the title screen via **Content Packs** → toggle → **Apply &
   Restart**. The choice persists (like the locale); booting without a pack is
   byte-for-byte the historical game.
 - Saves record which packs were active. Loading a save whose packs are missing
   or changed refuses cleanly with an actionable message and never touches the
   stored save.
 - Multiplayer peers prove identical gameplay pack sets during the join handshake
-  before any world state is shared (protocol v4).
+  before any world state is shared (protocol v4). Dedicated hosts select packs
+  before world creation via `node tools/mp-server.js --packs a,b --pack-file ./p.json`.
 
 See docs/ARCHITECTURE.md §29 for the full contract and docs/ADR-MOD-004-
 sandboxed-mods.md for why executable mods stay research-only.
@@ -55,8 +64,10 @@ Two ways to play locally:
 
 1. **Dedicated headless host** - `node tools/mp-server.js [--seed 1337] [--port 7777]`
    with tuning flags `--interest 56 --budget 4 --rate 2 --keyframe 600
-   --detach-grace 300 --max-out-kb 128`, then open the game in each browser and
-   pick **Join Local Server** (`ws://localhost:7777`).
+   --detach-grace 300 --max-out-kb 128` and pack selection
+   `--packs a,b --pack-file ./my-pack.json` (repeatable, validated before world
+   creation; mismatched clients are rejected before snapshot), then open the game
+   in each browser and pick **Join Local Server** (`ws://localhost:7777`).
 2. **Browser host** - pick **Host Local Multiplayer** on one machine's title screen;
    other browsers join it the same way.
 
