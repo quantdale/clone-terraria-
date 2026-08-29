@@ -226,17 +226,79 @@
   }
 
   // Pack natural-spawn seam (W26): compiled pack rules are filtered here.
-  // No per-tick registry scan — rules are precompiled at activation and
-  // indexed by zone via TC.Packs.getSpawnRules().
-  function packSpawnEntries(zone, pcol, depth, biome, dl) {
-    if (!TC.Packs || typeof TC.Packs.getSpawnRules !== 'function') return [];
+  // The pack set is session-permanent, so build a small zone index lazily and
+  // reuse it for every spawn attempt. Dynamic filters (biome/depth/time/
+  // progression) remain here because they depend on the current anchor.
+  let packRuleIndex = null;
+  let packRuleFallbackKey = null;
+  let packRuleEventDriven = false;
+  const packRuleEmpty = [];
+  const EMPTY_PACK_INDEX = { day: packRuleEmpty, night: packRuleEmpty,
+    cave: packRuleEmpty, underworld: packRuleEmpty };
+
+  function invalidatePackRuleIndex() {
+    packRuleIndex = null;
+    packRuleFallbackKey = null;
+  }
+
+  // PacksChanged is emitted only after an atomic activation commit. Listening
+  // here avoids polling Packs.active() and its defensive array copy on every
+  // spawn-table query. Partial embeds use the guarded polling fallback below.
+  if (TC.Events && typeof TC.Events.on === 'function' &&
+      TC.Events.EVENT && TC.Events.EVENT.PacksChanged) {
+    TC.Events.on(TC.Events.EVENT.PacksChanged, invalidatePackRuleIndex);
+    packRuleEventDriven = true;
+  }
+
+  function activePackFallbackKey() {
+    if (!TC.Packs || typeof TC.Packs.active !== 'function') return null;
+    try {
+      const active = TC.Packs.active();
+      return Array.isArray(active) ? active.join('\u001f') : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function indexedPackRules() {
+    if (!TC.Packs || typeof TC.Packs.getSpawnRules !== 'function') return null;
+    if (!packRuleEventDriven) {
+      const key = activePackFallbackKey();
+      if (key !== null && packRuleIndex && packRuleFallbackKey === key) {
+        return packRuleIndex;
+      }
+      if (key !== null) packRuleFallbackKey = key;
+      else packRuleFallbackKey = null;
+      packRuleIndex = null;
+    } else if (packRuleIndex) {
+      return packRuleIndex;
+    }
+
     let rules;
-    try { rules = TC.Packs.getSpawnRules(); } catch (e) { return []; }
-    if (!Array.isArray(rules) || !rules.length) return [];
+    try { rules = TC.Packs.getSpawnRules(); } catch (e) { return EMPTY_PACK_INDEX; }
+    if (!Array.isArray(rules) || !rules.length) {
+      packRuleIndex = EMPTY_PACK_INDEX;
+      return packRuleIndex;
+    }
+
+    const index = { day: [], night: [], cave: [], underworld: [] };
+    for (let i = 0; i < rules.length; i++) {
+      const r = rules[i];
+      if (r && index[r.zone]) index[r.zone].push(r);
+    }
+    packRuleIndex = index;
+    return index;
+  }
+
+  function packSpawnEntries(zone, pcol, depth, biome, dl) {
+    void pcol;
+    const index = indexedPackRules();
+    if (!index || !Array.isArray(index[zone])) return packRuleEmpty;
+    const rules = index[zone];
+    if (!rules.length) return packRuleEmpty;
     const out = [];
     for (let i = 0; i < rules.length; i++) {
       const r = rules[i];
-      if (!r || r.zone !== zone) continue;
       if (r.biome != null && r.biome !== biome) continue;
       if (r.depthMin != null && depth < r.depthMin) continue;
       if (r.depthMax != null && depth > r.depthMax) continue;
