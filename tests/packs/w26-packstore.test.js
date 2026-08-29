@@ -107,6 +107,40 @@ test('packstore: same id different digest requires explicit replace', () => {
   assert.strictEqual(TC.PackStore.list().length, 1);
 });
 
+test('packstore: storage write failures leave install, replace and remove unchanged', () => {
+  const map = new Map();
+  let failWrites = false;
+  const storage = {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => {
+      if (failWrites) throw new Error('quota');
+      map.set(String(k), String(v));
+    },
+    removeItem: (k) => map.delete(k),
+    clear: () => map.clear(),
+  };
+  const g = fresh(storage);
+  const TC = g.TC;
+  const first = manifest('storage_atomic');
+  const initial = TC.PackStore.install(first);
+  assert.strictEqual(initial.ok, true);
+  const before = TC.PackStore.exportPack('storage_atomic');
+  failWrites = true;
+
+  const rejectedInstall = TC.PackStore.install(manifest('storage_new'));
+  assert.strictEqual(rejectedInstall.ok, false);
+  assert.strictEqual(rejectedInstall.error, 'storage');
+  const rejectedReplace = TC.PackStore.install(
+    manifest('storage_atomic', { version: '2.0.0' }), { replace: true });
+  assert.strictEqual(rejectedReplace.ok, false);
+  assert.strictEqual(rejectedReplace.error, 'storage');
+  const rejectedRemove = TC.PackStore.remove('storage_atomic');
+  assert.strictEqual(rejectedRemove.ok, false);
+  assert.strictEqual(rejectedRemove.error, 'storage');
+  assert.strictEqual(TC.PackStore.exportPack('storage_atomic'), before);
+  assert.strictEqual(TC.PackStore.has('storage_new'), false);
+});
+
 test('packstore: cannot remove active pack', () => {
   const g = fresh();
   const TC = g.TC;

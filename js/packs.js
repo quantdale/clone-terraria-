@@ -593,6 +593,43 @@
     }
   }
 
+  // Validate JSON through the same fail-closed boundary as provideJSON, but
+  // do not register it. PackStore uses this for an explicit replacement: the
+  // old record may already be provided in this session, so calling provideJSON
+  // would either mutate nothing or report a duplicate after store state had
+  // already changed. The returned digest is the exact manifest identity used
+  // by provide()/normalizeRecord().
+  function validateJSON(text) {
+    try {
+      if (typeof text !== "string" || !text.length) {
+        fail("manifest", "pack JSON must be a non-empty string");
+      }
+      if (text.length > MAX_MANIFEST_BYTES) {
+        fail("manifest", "pack JSON exceeds " + MAX_MANIFEST_BYTES + " bytes");
+      }
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        fail("manifest", "malformed pack JSON: " + (e && e.message));
+      }
+      const scanErrs = [];
+      try {
+        safeScan(data, "manifest", 0, scanErrs);
+      } catch (e) {
+        scanErrs.push("scan failed: " + (e && e.message));
+      }
+      if (scanErrs.length) {
+        fail("security", "manifest rejected by safety scan", scanErrs);
+      }
+      validateManifestShape(data);
+      return { id: data.id, rawDigest: digestOf(data) };
+    } catch (e) {
+      statsCounters.rejectedJson++;
+      throw e;
+    }
+  }
+
   function getManifest(id) {
     return provided.get(id) || null;
   }
@@ -2227,6 +2264,7 @@
     Error: PackError,
     provide: provide,
     provideJSON: provideJSON,
+    validateJSON: validateJSON,
     getManifest: getManifest,
     available: available,
     setActive: setActive,

@@ -72,43 +72,53 @@
 
   function writeEnvelope(env) {
     const s = storage();
-    if (!s) return false;
+    if (!s) return true; // headless memory-only mode
     try {
       s.setItem(KEY, JSON.stringify(env));
       return true;
     } catch (e) {
-      // Quota or serialization failure must not crash boot; best-effort only.
+      // A storage/quota failure is a failed mutation, not a successful
+      // in-memory-only install. Callers commit their mirror only after this.
       return false;
     }
   }
 
-  function persist() {
-    writeEnvelope({ v: ENVELOPE_V, manifests: installed.slice() });
+  function persist(next) {
+    const value = Array.isArray(next) ? next : installed;
+    return writeEnvelope({ v: ENVELOPE_V, manifests: value.slice() });
   }
 
-  function totalBytes() {
+  function totalBytes(list) {
+    const value = Array.isArray(list) ? list : installed;
     let n = 0;
-    for (const m of installed) n += (m.json ? m.json.length : 0);
+    for (const m of value) n += (m.json ? m.json.length : 0);
     return n;
   }
 
   // Provide every installed manifest to TC.Packs so it can be activated on a
   // fresh boot. Runs BEFORE TC.Packs.bootActivate. A single bad entry is
-  // skipped (degrade) — it must never block boot.
+  // skipped (degrade) — it must never block boot. Stored ids/digests are not
+  // trusted: the validated manifest is the source of canonical identity.
   function load() {
     const env = readEnvelope();
     installed = [];
     lastLoadErrors = [];
     if (!Array.isArray(env.manifests)) return { provided: 0, errors: lastLoadErrors };
-    for (const m of env.manifests) {
+    if (env.manifests.length > MAX_INSTALLED) {
+      lastLoadErrors.push('installed manifest count exceeds limit');
+    }
+    for (const m of env.manifests.slice(0, MAX_INSTALLED)) {
       if (!m || typeof m.json !== 'string') continue;
+      if (m.json.length > MAX_MANIFEST_BYTES || totalBytes() + m.json.length > MAX_TOTAL_BYTES) {
+        lastLoadErrors.push((m.id || '?') + ': installed store quota exceeded');
+        continue;
+      }
       try {
-        if (TC.Packs && typeof TC.Packs.provideJSON === 'function') {
-          TC.Packs.provideJSON(m.json);
-        } else {
-          JSON.parse(m.json); // at least confirm it parses
-        }
-        installed.push({ id: m.id, digest: m.digest, json: m.json });
+        const rec = TC.Packs && typeof TC.Packs.provideJSON === 'function'
+          ? TC.Packs.provideJSON(m.json)
+          : null;
+        if (!rec) throw new Error('pack authority unavailable');
+        installed.push({ id: rec.id, digest: rec.rawDigest, json: m.json });
       } catch (e) {
         lastLoadErrors.push((m && m.id ? m.id : '?') + ': ' + (e && e.message || e));
       }
@@ -116,87 +126,83 @@
     return { provided: installed.length, errors: lastLoadErrors.slice() };
   }
 
+  // Persist a candidate before changing the in-memory mirror. This keeps
+  // install/replace/remove atomic when localStorage rejects the write.
+  function commitCandidate(candidate) {
+    if (!persist(candidate)) return false;
+    installed = candidate;
+    return true;
+  }
+
   // Validate + store a manifest. Does NOT activate. Returns a result object.
   function install(text, opts) {
     opts = opts || {};
-    if (typeof text !== 'string' || !text.length) {
-      return { ok: false, error: 'empty' };
+    if (typeof text !== 'string' || !text.length) return { ok: false, error: 'empty' };
+    if (text.length > MAX_MANIFEST_BYTES) return { ok: false, error: 'too-large' };
+    if (!TC.Packs || typeof TC.Packs.validateJSON !== 'function' ||
+        typeof TC.Packs.provideJSON !== 'function') {
+      return { ok: false, error: 'no-authority' };
     }
-    if (text.length > MAX_MANIFEST_BYTES) {
-      return { ok: false, error: 'too-large' };
-    }
-    // Parse id early for duplicate/conflict handling (needed when TC.Packs
-    // rejects different content under same id in this session).
-    let parsedId = null;
-    try { const p = JSON.parse(text); if (p && typeof p.id === 'string') parsedId = p.id; } catch (e) { /* handled below */ }
-    let rec;
+
+    let validated;
     try {
-      if (!TC.Packs || typeof TC.Packs.provideJSON !== 'function') {
-        return { ok: false, error: 'no-authority' };
-      }
-      rec = TC.Packs.provideJSON(text); // throws on invalid; validates security
+      validated = TC.Packs.validateJSON(text);
     } catch (e) {
-      // Duplicate with different content is a store-level conflict, not a
-      // generic invalid, when we already have that id installed.
-      if (e && e.code === 'duplicate' && parsedId) {
-        const existingDup = installed.find((m) => m.id === parsedId);
-        if (existingDup) {
-          if (TC.Packs.isActive && TC.Packs.isActive(parsedId)) {
-            return { ok: false, error: 'active' };
-          }
-          if (!opts.replace) {
-            return { ok: false, error: 'conflict' };
-          }
-          // Replace path for same-session duplicate: validate structure once
-          // more via JSON parse (already valid enough to reach duplicate check)
-          // then update the store for next boot.
-          installed = installed.filter((m) => m.id !== parsedId);
-          // Re-validate the new text is still provided-valid in a clean slot
-          // by checking it parses; if it does, store it.
-          try { JSON.parse(text); } catch (pe) {
-            return { ok: false, error: 'invalid', detail: pe && pe.message || String(pe) };
-          }
-          if (installed.length >= MAX_INSTALLED) return { ok: false, error: 'max-installed' };
-          if (totalBytes() + text.length > MAX_TOTAL_BYTES) return { ok: false, error: 'quota' };
-          // Digest for the new entry: will be canonicalized on next load; use
-          // a provisional hash of the text for this session's list.
-          let newDigest = 'pending';
-          try { newDigest = String(text.length) + ':' + text.slice(0, 32); } catch (e2) {}
-          installed.push({ id: parsedId, digest: newDigest, json: text });
-          persist();
-          return { ok: true, id: parsedId, digest: newDigest, status: 'replaced' };
-        }
-      }
-      return { ok: false, error: 'invalid', detail: (e && e.message) || String(e) };
+      return { ok: false, error: 'invalid', detail: e && e.message || String(e) };
     }
-    const id = rec.id;
-    const digest = rec.rawDigest;
-    // Same id + same digest => idempotent no-op.
+    const id = validated.id;
+    const digest = validated.rawDigest;
     const existing = installed.find((m) => m.id === id);
-    if (existing) {
-      if (existing.digest === digest) {
-        return { ok: true, id, digest, status: 'unchanged' };
-      }
-      // Conflicting content for an already-installed id.
-      if (TC.Packs.isActive && TC.Packs.isActive(id)) {
-        return { ok: false, error: 'active' }; // cannot silently shift committed set
-      }
-      if (!opts.replace) {
-        return { ok: false, error: 'conflict' };
-      }
-      // Replace path: drop the old entry, then fall through to insert.
-      installed = installed.filter((m) => m.id !== id);
+    if (existing && existing.digest === digest) {
+      return { ok: true, id, digest, status: 'unchanged' };
     }
-    // Caps.
-    if (installed.length >= MAX_INSTALLED) {
+    // A build-provided manifest may already occupy this id without being in
+    // the durable installed store. Reject different content before any store
+    // write; identical content can be recorded without calling provideJSON
+    // again, avoiding a duplicate error after persistence.
+    const provided = TC.Packs.getManifest && TC.Packs.getManifest(id);
+    if (!existing && provided) {
+      if (provided.rawDigest !== digest) {
+        return { ok: false, error: 'invalid', detail: 'pack id already provided with different content' };
+      }
+      const candidate = installed.concat({ id, digest, json: text });
+      if (installed.length >= MAX_INSTALLED) return { ok: false, error: 'max-installed' };
+      if (totalBytes(candidate) > MAX_TOTAL_BYTES) return { ok: false, error: 'quota' };
+      if (!persist(candidate)) return { ok: false, error: 'storage' };
+      installed = candidate;
+      return { ok: true, id, digest, status: 'installed' };
+    }
+    if (existing && TC.Packs.isActive && TC.Packs.isActive(id)) {
+      return { ok: false, error: 'active' };
+    }
+    if (existing && !opts.replace) return { ok: false, error: 'conflict' };
+
+    const candidate = existing
+      ? installed.map((m) => m.id === id ? { id, digest, json: text } : m)
+      : installed.concat({ id, digest, json: text });
+    if (!existing && installed.length >= MAX_INSTALLED) {
       return { ok: false, error: 'max-installed' };
     }
-    if (totalBytes() + text.length > MAX_TOTAL_BYTES) {
-      return { ok: false, error: 'quota' };
+    if (totalBytes(candidate) > MAX_TOTAL_BYTES) return { ok: false, error: 'quota' };
+
+    // Existing provided content is intentionally left untouched: replacing a
+    // pack is a next-boot operation because TC.Packs is session-permanent.
+    if (existing) {
+      if (!commitCandidate(candidate)) return { ok: false, error: 'storage' };
+      return { ok: true, id, digest, status: 'replaced' };
     }
-    installed.push({ id, digest, json: text });
-    persist();
-    return { ok: true, id, digest, status: existing ? 'replaced' : 'installed' };
+
+    // New content is provided only after durable persistence succeeds. If the
+    // authority rejects despite the probe, restore the prior store snapshot.
+    if (!persist(candidate)) return { ok: false, error: 'storage' };
+    try {
+      const rec = TC.Packs.provideJSON(text);
+      installed = candidate;
+      return { ok: true, id: rec.id, digest: rec.rawDigest, status: 'installed' };
+    } catch (e) {
+      persist(installed);
+      return { ok: false, error: 'invalid', detail: e && e.message || String(e) };
+    }
   }
 
   // Remove an installed manifest. Rejected while it is part of the live
@@ -207,8 +213,9 @@
     if (TC.Packs && typeof TC.Packs.isActive === 'function' && TC.Packs.isActive(id)) {
       return { ok: false, error: 'active' };
     }
-    installed.splice(idx, 1);
-    persist();
+    const candidate = installed.slice();
+    candidate.splice(idx, 1);
+    if (!commitCandidate(candidate)) return { ok: false, error: 'storage' };
     return { ok: true, id };
   }
 
@@ -233,21 +240,23 @@
 
   // Drop any entry whose JSON no longer validates (defensive hygiene).
   function repair() {
-    const before = installed.length;
+    const before = installed.slice();
     const kept = [];
-    for (const m of installed) {
+    for (const m of before) {
       try {
-        if (TC.Packs && typeof TC.Packs.provideJSON === 'function') {
-          TC.Packs.provideJSON(m.json);
+        const rec = TC.Packs.validateJSON(m.json);
+        if (rec.id !== m.id || rec.rawDigest !== m.digest) {
+          kept.push({ id: rec.id, digest: rec.rawDigest, json: m.json });
         } else {
-          JSON.parse(m.json);
+          kept.push(m);
         }
-        kept.push(m);
       } catch (e) { /* drop */ }
     }
+    if (totalBytes(kept) > MAX_TOTAL_BYTES || kept.length > MAX_INSTALLED || !persist(kept)) {
+      return { removed: 0, error: 'storage' };
+    }
     installed = kept;
-    persist();
-    return { removed: before - kept.length };
+    return { removed: before.length - kept.length };
   }
 
   function stats() {
