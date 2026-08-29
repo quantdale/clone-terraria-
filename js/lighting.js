@@ -113,7 +113,15 @@
     _dynFrame: 0,               // cadence counter for low-profile merges
     _prevDynBox: null,          // union box of last frame's live dyns
     _mergeSig: null,            // position signature of last merge
-    _dirtySinceMerge: true
+    _dirtySinceMerge: true,
+    // PERF (W27): draw() used to rebuild the overlay ImageData pixel-by-pixel
+    // and re-upload it via putImageData every frame, even on a fully static
+    // scene (no field change, no live dynamic lights, camera stationary).
+    // This tracks whether outR/outG/outB actually changed since the last
+    // upload; draw() still re-blits at the camera's current position every
+    // frame (cheap, and required while the camera eases toward the player),
+    // it just skips re-deriving and re-uploading identical pixel data.
+    _overlayDirty: true
   };
   for (let i = 0; i < DYN_MAX; i++) {
     Lighting.dyn.push({ x: 0, y: 0, r: 0, intensity: 0, ttl: 0, cr: 1, cg: 1, cb: 1 });
@@ -183,6 +191,7 @@
     this._prevDynBox = null;
     this._mergeSig = null;
     this._dirtySinceMerge = true;
+    this._overlayDirty = true;
     this._consumer = (TC.WorldRegions && typeof TC.WorldRegions.consume === 'function' && world)
       ? TC.WorldRegions.consume('lighting') : null;
   };
@@ -405,14 +414,16 @@
     return box;
   }
 
+  // Returns whether `out` actually changed (drives Lighting._overlayDirty —
+  // W27 — so draw() knows whether the presentation overlay needs a re-blit).
   Lighting.mergeDynamics = function () {
     const w = this.w, h = this.h;
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0) return false;
     const cur = dynUnionBox(this);
     const sig = cur.sig;
     // Static-scene skip: identical live-source layout on an unchanged field
     // means `out` is already correct (ttl decay does not affect pixels).
-    if (!this._dirtySinceMerge && sig === this._mergeSig) return;
+    if (!this._dirtySinceMerge && sig === this._mergeSig) return false;
     // Reset the union of PREVIOUS and CURRENT dyn coverage from the pristine
     // field, then stamp current sources — moving/expiring glows leave no
     // residue.
@@ -428,12 +439,13 @@
       if (cur.y1 > uy1) uy1 = cur.y1;
     }
     this._prevDynBox = { x0: cur.x0, y0: cur.y0, x1: cur.x1, y1: cur.y1, any: cur.any };
-    if (ux1 >= ux0) {
+    const changed = ux1 >= ux0;
+    if (changed) {
       // syncOut takes WORLD tile coords and window-offsets internally.
       this.syncOut(Math.floor(ux0), Math.floor(uy0),
                    Math.ceil(ux1), Math.ceil(uy1));
     }
-    if (!cur.any) return;
+    if (!cur.any) return changed;
 
     const TSz = TC.CONST.TS;
     const oR = this.outR, oG = this.outG, oB = this.outB;
@@ -467,6 +479,7 @@
     counters.dynMerges++;
     this._mergeSig = sig;
     this._dirtySinceMerge = false;
+    return true;
   };
 
   // Structural refresh driven by the shared region authority: expand each
@@ -566,8 +579,10 @@
       this.fullDirty = false;
       this.dirty = false;
       this._dirtySinceMerge = true;
+      this._overlayDirty = true;
     } else if (this.regionRefresh()) {
       this._dirtySinceMerge = true;
+      this._overlayDirty = true;
     } else if (this.dirty) {
       // legacy fallback (no region authority)
       this.recomputeRect(this.x0, this.y0, this.x0 + this.w - 1, this.y0 + this.h - 1);
@@ -575,6 +590,7 @@
       this.syncOut(this.x0, this.y0, this.x0 + this.w - 1, this.y0 + this.h - 1);
       this.dirty = false;
       this._dirtySinceMerge = true;
+      this._overlayDirty = true;
     }
 
     // Dynamic merge cadence: high/medium every simulated tick with live
@@ -589,7 +605,7 @@
       }
     }
     if (hasLive && (skip === 0 || (this._dynFrame & 1) === 0)) {
-      this.mergeDynamics();
+      if (this.mergeDynamics()) this._overlayDirty = true;
     }
   };
 
@@ -637,24 +653,36 @@
       this.cvs.width = iw;
       this.cvs.height = ih;
       this.img = null;
+      this._overlayDirty = true;
     }
-    if (!this.img) this.img = this.cctx.createImageData(iw, ih);
+    if (!this.img) { this.img = this.cctx.createImageData(iw, ih); this._overlayDirty = true; }
 
-    const d = this.img.data;
-    const oR = this.outR, oG = this.outG, oB = this.outB;
-    for (let y = 0; y < ih; y++) {
-      const sy = y * step;
-      for (let x = 0; x < iw; x++) {
-        const sx = x * step;
-        const i = sy * w + sx;
-        const j = (y * iw + x) * 4;
-        let r = oR[i] * 255; if (r > 255) r = 255; else if (r < 0) r = 0;
-        let g = oG[i] * 255; if (g > 255) g = 255; else if (g < 0) g = 0;
-        let b = oB[i] * 255; if (b > 255) b = 255; else if (b < 0) b = 0;
-        d[j] = r | 0; d[j + 1] = g | 0; d[j + 2] = b | 0; d[j + 3] = 255;
+    // PERF (W27): rebuilding this ImageData is a per-pixel loop and
+    // putImageData forces a texture upload — both pure waste on an unchanged
+    // scene (Lighting.update sets _overlayDirty only when outR/outG/outB
+    // actually changed). The overlay canvas itself persists across frames,
+    // so skipping this leaves cctx holding exactly the last uploaded pixels
+    // — byte-identical to what a rebuild would produce, since nothing wrote
+    // new values into outR/outG/outB in between. The blit below still runs
+    // every frame at the camera's current position.
+    if (this._overlayDirty) {
+      const d = this.img.data;
+      const oR = this.outR, oG = this.outG, oB = this.outB;
+      for (let y = 0; y < ih; y++) {
+        const sy = y * step;
+        for (let x = 0; x < iw; x++) {
+          const sx = x * step;
+          const i = sy * w + sx;
+          const j = (y * iw + x) * 4;
+          let r = oR[i] * 255; if (r > 255) r = 255; else if (r < 0) r = 0;
+          let g = oG[i] * 255; if (g > 255) g = 255; else if (g < 0) g = 0;
+          let b = oB[i] * 255; if (b > 255) b = 255; else if (b < 0) b = 0;
+          d[j] = r | 0; d[j + 1] = g | 0; d[j + 2] = b | 0; d[j + 3] = 255;
+        }
       }
+      this.cctx.putImageData(this.img, 0, 0);
+      this._overlayDirty = false;
     }
-    this.cctx.putImageData(this.img, 0, 0);
 
     // blit scaled so each tile maps to TS*zoom screen px, aligned to world origin
     const TSz = TC.CONST.TS;

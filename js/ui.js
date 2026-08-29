@@ -1210,9 +1210,68 @@
   }
 
   // ---- sections ----
-  function drawHeart(ctx, x, y, frac) {
+
+  // PERF (W27): drawHeart/drawShieldGlyph/drawBubble used to re-synthesize
+  // their pixel art with a fillRect/fillStyle pair PER LIT PIXEL, every
+  // frame — a health bar alone cost 55 fillRect + 55 fillStyle changes per
+  // heart (measured: 1,111 fillRect/frame at 400 max HP). Bake each shape
+  // into a small set of offscreen canvases once, exactly the technique
+  // js/tiles.js uses for WALL_VARIANTS, then blit with a single drawImage.
+  //
+  // SAFE BY CONSTRUCTION: every call site below passes integer x/y/cx/cy
+  // (HUD layout is built from integer canvas dimensions and integer
+  // tunables — HEART_SIZE, BUBBLE_R, BUBBLE_GAP are all whole pixels), so
+  // baking at local origin (0,0) and blitting via drawImage(cache, x, y)
+  // reproduces the exact same absolute pixels as the original fillRect
+  // calls shifted by (x, y) — no resampling, no new visual quantization.
+  // The only thing moved is *when* the pixels are computed, not *what* they
+  // are.
+  function canCacheSprites() {
+    return typeof document !== 'undefined' && typeof document.createElement === 'function';
+  }
+
+  const HEART_VARIANTS = 8; // cols 0..7 — drawHeart already quantizes to this
+  let heartCache = null;
+
+  function paintHeart(g, cols) {
     const px = HEART_SIZE / 7;
+    for (let r = 0; r < HEART_MAP.length; r++) {
+      const row = HEART_MAP[r];
+      for (let c = 0; c < 7; c++) {
+        if (row.charAt(c) !== '1') continue;
+        g.fillStyle = 'rgba(0,0,0,0.35)';
+        g.fillRect(c * px + 1, r * px + 1, Math.ceil(px), Math.ceil(px));
+        g.fillStyle = c < cols ? '#e23b3b' : 'rgba(40,14,14,0.6)';
+        g.fillRect(c * px, r * px, Math.ceil(px), Math.ceil(px));
+      }
+    }
+    if (cols > 0) {
+      g.fillStyle = 'rgba(255,255,255,0.45)';
+      g.fillRect(px, px, px, px);
+    }
+  }
+
+  function buildHeartVariants() {
+    const arr = new Array(HEART_VARIANTS);
+    for (let cols = 0; cols < HEART_VARIANTS; cols++) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = HEART_SIZE;
+      paintHeart(cv.getContext('2d'), cols);
+      arr[cols] = cv;
+    }
+    return arr;
+  }
+
+  function drawHeart(ctx, x, y, frac) {
     const cols = Math.round(clamp(frac, 0, 1) * 7);
+    if (!canCacheSprites()) { paintHeartAt(ctx, x, y, cols); return; }
+    if (!heartCache) heartCache = buildHeartVariants();
+    ctx.drawImage(heartCache[cols], x, y);
+  }
+
+  // Fallback for embeds without document.createElement (no cache to build).
+  function paintHeartAt(ctx, x, y, cols) {
+    const px = HEART_SIZE / 7;
     for (let r = 0; r < HEART_MAP.length; r++) {
       const row = HEART_MAP[r];
       for (let c = 0; c < 7; c++) {
@@ -1229,31 +1288,93 @@
     }
   }
 
-  // tiny pixel shield for the defense readout
-  function drawShieldGlyph(ctx, cx, cy, s) {
+  // tiny pixel shield for the defense readout — cached per size (only 13 is
+  // used today; keyed defensively like wallCache in case a future caller
+  // varies it). anchor is the single LOCAL (cx,cy) baked into the canvas
+  // (the glyph is drawn cx/cy-centered, so one anchor point serves both
+  // axes), so drawImage(entry.cv, cx - anchor, cy - anchor) reproduces the
+  // original cx/cy-centered drawing exactly.
+  const shieldCache = new Map();
+
+  function paintShieldGlyph(g, cx, cy, s) {
     const hw = s / 2, top = cy - hw;
-    ctx.fillStyle = '#8d8d99';
-    ctx.fillRect(cx - hw, top, s, s * 0.62);
-    ctx.beginPath();
-    ctx.moveTo(cx - hw, top + s * 0.5);
-    ctx.lineTo(cx + hw, top + s * 0.5);
-    ctx.lineTo(cx, top + s + 1);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#c0c0cc';
-    ctx.fillRect(cx - hw + 1.5, top + 1.5, s - 3, s * 0.42);
-    ctx.beginPath();
-    ctx.moveTo(cx - hw + 1.5, top + s * 0.44);
-    ctx.lineTo(cx + hw - 1.5, top + s * 0.44);
-    ctx.lineTo(cx, top + s - 0.5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.fillRect(cx - hw + 2, top + 2, 2, 3);
+    g.fillStyle = '#8d8d99';
+    g.fillRect(cx - hw, top, s, s * 0.62);
+    g.beginPath();
+    g.moveTo(cx - hw, top + s * 0.5);
+    g.lineTo(cx + hw, top + s * 0.5);
+    g.lineTo(cx, top + s + 1);
+    g.closePath();
+    g.fill();
+    g.fillStyle = '#c0c0cc';
+    g.fillRect(cx - hw + 1.5, top + 1.5, s - 3, s * 0.42);
+    g.beginPath();
+    g.moveTo(cx - hw + 1.5, top + s * 0.44);
+    g.lineTo(cx + hw - 1.5, top + s * 0.44);
+    g.lineTo(cx, top + s - 0.5);
+    g.closePath();
+    g.fill();
+    g.fillStyle = 'rgba(255,255,255,0.5)';
+    g.fillRect(cx - hw + 2, top + 2, 2, 3);
   }
 
-  // one breath bubble: filled = air left, else a dim placeholder outline
+  function buildShieldVariant(s) {
+    // margin covers the glyph's full extent around its center in both axes:
+    // horizontal cx +/- s/2, vertical cy - s/2 .. cy + s/2 + 1 (the pointed
+    // base extends one px past the nominal height).
+    const anchor = Math.ceil(s / 2) + 4;
+    const size = anchor * 2 + 2;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = size;
+    paintShieldGlyph(cv.getContext('2d'), anchor, anchor, s);
+    return { cv, anchor };
+  }
+
+  function drawShieldGlyph(ctx, cx, cy, s) {
+    if (!canCacheSprites()) { paintShieldGlyph(ctx, cx, cy, s); return; }
+    let entry = shieldCache.get(s);
+    if (!entry) { entry = buildShieldVariant(s); shieldCache.set(s, entry); }
+    ctx.drawImage(entry.cv, cx - entry.anchor, cy - entry.anchor);
+  }
+
+  // one breath bubble: filled = air left, else a dim placeholder outline.
+  // Only 2 variants exist; cache both up front.
+  const BUBBLE_SIZE = BUBBLE_R * 2 + 2;
+  let bubbleCache = null;
+
+  function paintBubble(g, filled) {
+    g.beginPath();
+    g.arc(BUBBLE_R, BUBBLE_R, BUBBLE_R, 0, Math.PI * 2);
+    g.fillStyle = filled ? 'rgba(96,168,235,0.92)' : 'rgba(24,40,66,0.5)';
+    g.fill();
+    g.lineWidth = 1;
+    g.strokeStyle = filled ? 'rgba(210,235,255,0.85)' : 'rgba(130,160,200,0.4)';
+    g.stroke();
+    if (filled) {
+      g.fillStyle = 'rgba(255,255,255,0.85)';
+      g.fillRect(2, 1, 2, 2);   // glint
+    }
+  }
+
+  function buildBubbleVariants() {
+    const arr = [];
+    for (const filled of [false, true]) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = BUBBLE_SIZE;
+      paintBubble(cv.getContext('2d'), filled);
+      arr.push(cv);
+    }
+    return arr;
+  }
+
   function drawBubble(ctx, x, y, filled) {
+    if (!canCacheSprites()) { paintBubbleAt(ctx, x, y, filled); return; }
+    if (!bubbleCache) bubbleCache = buildBubbleVariants();
+    ctx.drawImage(bubbleCache[filled ? 1 : 0], x, y);
+  }
+
+  // Fallback for embeds without document.createElement.
+  function paintBubbleAt(ctx, x, y, filled) {
     ctx.beginPath();
     ctx.arc(x + BUBBLE_R, y + BUBBLE_R, BUBBLE_R, 0, Math.PI * 2);
     ctx.fillStyle = filled ? 'rgba(96,168,235,0.92)' : 'rgba(24,40,66,0.5)';

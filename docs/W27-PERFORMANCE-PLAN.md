@@ -1,8 +1,9 @@
 # W27 — Presentation Performance Recovery
 
-**Status:** PROPOSED (planning-only; no code changed by this document)
+**Status:** ACTIVE (WS0.1, WS1, WS4 landed; WS0.2, WS2, WS3, WS5, WS6, WS7 remain — see `docs/HANDOFF-W27-performance.md`)
 **Planned-From:** `ca39da303e34e2eef1f6774dadbafe26df68b3c7`
 **Planned-At:** 2026-08-29
+**Execution-Started:** 2026-08-29
 **Target-Branch:** `main`
 **Campaign-Type:** performance investigation + render-path optimization + measurement-gate construction
 **Supersedes-Context:** W26 (`.agent/EXECUTION_PROMPT.md`) is `COMPLETED`; this is the next campaign.
@@ -312,6 +313,12 @@ possible outcome.
 
 ### WS0 — Make rendering measurable (blocking)
 
+**Status: PARTIALLY DONE.** Items 1, 4, 5 landed. Item 2 (real-browser
+frame-time journey) is **not done** — this execution environment cannot run
+it (see §4); it needs a follow-up pass on a machine with a working browser.
+Item 3's "real hardware" half is therefore also outstanding — the Node-side
+half is in `docs/PERFORMANCE.md`. See `docs/HANDOFF-W27-performance.md`.
+
 1. Add `tools/bench-render.js`: the counting-context harness from §4, promoted
    to a first-class tool. Reports total ops/frame, heavy-raster ops/frame, a
    per-operation histogram and per-drawer attribution, for a fixed set of named
@@ -333,6 +340,14 @@ regression (e.g. temporarily doubling heart draws) makes the browser gate fail.
 
 ### WS1 — HUD: stop re-rasterizing the health bar (largest win)
 
+**Status: MOSTLY DONE.** Items 1–2 (heart/shield/bubble sprite baking) landed
+and are measured: `UI.draw` 612 → 67 ops/frame at 100 max HP, 2,262 → 82 at
+400 max HP (real progression-derived max HP via `lifeCrystals`, not a poked
+field — see `docs/HANDOFF-W27-performance.md`), scaling ratio 3.70x → 1.22x.
+Items 3–4 (composed HUD-strip caching, `UI.layout()` memoization) are **not
+done** — deferred as a smaller residual win with more surface area for subtle
+state-invalidation bugs; not attempted without visual verification available.
+
 1. Bake heart sprites into pre-rendered offscreen canvases, following the
    `WALL_VARIANTS` precedent in `js/tiles.js`: 8 variants keyed by the existing
    `cols = round(frac * 7)` quantization (which the current code *already*
@@ -352,6 +367,11 @@ work at 100 HP and ~75% at 400 HP.
 
 ### WS2 — Sky: bake the parallax bands
 
+**Status: NOT STARTED.** Deferred — see `docs/HANDOFF-W27-performance.md` for
+why (color depends continuously on daylight, not just geometry; a correct
+cache needs either a stated daylight quantization or a mask/color split, and
+neither was attempted blind without visual verification).
+
 Render each background layer silhouette into an offscreen strip keyed by
 `(biome, layer, daylight quantum)`; blit with a horizontal scroll offset;
 rebuild only when the scroll crosses a segment boundary or the daylight quantum
@@ -361,6 +381,13 @@ daylight quantization explicitly.
 **Target:** `Sky.draw` from 435 ops/frame → **< 20**.
 
 ### WS3 — Renderer: end the treadmill, bound the memory
+
+**Status: NOT STARTED.** Deferred — see `docs/HANDOFF-W27-performance.md` for
+the specific risk found while designing this: gating `World.update()` to a
+camera-radius window means regions outside it are never `cons.observe()`'d,
+so the renderer's per-consumer pending queue can grow unboundedly for a
+roaming session with off-camera world edits. Needs a bounding design (e.g. a
+low-rate service pass for far regions) before landing, not attempted blind.
 
 1. Gate `World.update()` rebuilds to a camera-radius window. Regions outside it
    stay stale in the renderer's own cursor and are rebuilt on demand by
@@ -379,6 +406,13 @@ stated and bounded in `docs/PERFORMANCE.md`.
 
 ### WS4 — Lighting: skip unchanged frames
 
+**Status: DONE** (the core of it — the "revision" mechanism used is simpler
+than proposed here, see `docs/HANDOFF-W27-performance.md`). `putImageData`
+went from 1/frame to 0/frame on an idle scene; `Lighting.draw` 5 → 4
+ops/frame. The `imageSmoothingEnabled` measurement across quality profiles was
+**not** done — left for a follow-up pass alongside WS2 (both benefit from
+real browser measurement).
+
 Track a light-field revision plus camera position; when neither changed since
 the last `Lighting.draw`, skip the `ImageData` rebuild and the `putImageData`
 and blit the existing overlay canvas. Measure whether
@@ -387,6 +421,9 @@ quality profile. Queried light values must remain identical across profiles
 (existing contract).
 
 ### WS5 — Entity draw batching
+
+**Status: NOT STARTED.** Deferred to a follow-up pass — see
+`docs/HANDOFF-W27-performance.md`.
 
 Bake per-type enemy/NPC/player sprite variants keyed by `(type, facing,
 animation frame)` — the `WALL_VARIANTS` pattern again — or, where sprites are
@@ -397,6 +434,9 @@ particles by color before drawing.
 
 ### WS6 — Coalesce liquid invalidation
 
+**Status: NOT STARTED.** Deferred to a follow-up pass — see
+`docs/HANDOFF-W27-performance.md`.
+
 Accumulate liquid marks per region per tick and bump each affected region once,
 instead of once per cell. Must preserve the settle-order determinism contract in
 `docs/PERFORMANCE.md` (ascending-index snapshot iteration, bit-exact
@@ -406,6 +446,14 @@ post-reload continuation) and the multi-consumer invariant.
 number of distinct dirty regions.
 
 ### WS7 — Validation, gate and truth-sync
+
+**Status: PARTIAL.** Full `npm test` (625/625), `npm run check`,
+`bench-runtime`, `bench-scenarios` all green/unaffected at each landed step;
+`docs/PERFORMANCE.md` updated with WS1/WS4 evidence and the simulation-only
+scope warning; `docs/HANDOFF-W27-performance.md` written. **Not done:**
+`npm run build` / `verify:build` / `test:browser` (needs a display — could not
+run in this environment), `docs/ARCHITECTURE.md` / `docs/TASK_BOARD.md`
+truth-sync (deferred to campaign close, once the remaining workstreams land).
 
 Full `npm run validate` including `test:browser` on real hardware. Update
 `docs/PERFORMANCE.md` (before/after, both harnesses, machine stated),
