@@ -165,6 +165,45 @@ invariants (so a future editor doesn't accidentally reintroduce per-pixel HUD
 drawing or unconditional lighting uploads) and a before/after render-path
 evidence table.
 
+## Advisor review caught two real bugs before push — read this
+
+Op-count benchmarking and node-level tests cannot catch geometry errors or
+incomplete call-graph audits. A pre-push advisor review (mandatory practice
+in this environment for exactly this reason — no visual verification was
+available to catch these any other way) found two real defects in the first
+draft of this commit, both fixed before push:
+
+1. **Heart bake canvas was too small — the last column was clipped.** The
+   first draft sized the offscreen canvas to exactly `HEART_SIZE` (22px). But
+   `paintHeart`'s widest painted rect (column 6's shadow, since `HEART_MAP`
+   is 7 columns wide) extends to `6*px + 1 + Math.ceil(px)` where
+   `px = HEART_SIZE/7 ≈ 3.143` — that's **≈23.86px**, past a 22px canvas.
+   The "safe by construction / no new visual quantization" claim in the code
+   comment, `docs/PERFORMANCE.md`, and this handoff was therefore false for
+   the rightmost column until fixed: `heartCanvasSize()` now computes the
+   real painted extent instead of assuming the nominal `HEART_SIZE` bounds
+   it. Verified by direct arithmetic (`node -e` one-liner), not by rerunning
+   the benchmark — op counts don't change from a canvas-size fix, so the
+   benchmark alone would never have caught this or confirmed the fix.
+2. **`Lighting.recompute(cam)` — a public "legacy full-window entry point
+   (kept for embeds/tests)" — writes into `out*` but wasn't wired to
+   `_overlayDirty`.** My audit traced every call site reached from
+   `update()` (fullDirty branch, `regionRefresh()`, legacy fallback,
+   `mergeDynamics()`) but didn't grep the whole file for every function that
+   touches `outR`/`outG`/`outB`, so I missed this one — it has zero callers
+   in this repository today, but it's a documented public API, not dead
+   code, and any future embed/test calling it directly would have left
+   `draw()` blitting a stale overlay indefinitely. Fixed by adding
+   `this._overlayDirty = true;` at its one write site, mirroring the
+   `update()` branches exactly.
+
+Both fixes are in the commit; `npm test` (625/625) and `check-i18n`
+(fingerprint `1b1d7c15` unchanged) were rerun clean afterward. The lesson for
+whoever continues this campaign: when the audit method for a "safe by
+construction" claim is call-graph tracing rather than exhaustive grep, say so
+explicitly and expect it to be incomplete — grep for every write site to a
+shared array before claiming a dirty-flag invariant is complete.
+
 ## Validation performed
 
 - `node tools/check-syntax.js` — 58 files, 0 failures (after every edit).

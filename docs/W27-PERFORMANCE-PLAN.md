@@ -340,13 +340,16 @@ regression (e.g. temporarily doubling heart draws) makes the browser gate fail.
 
 ### WS1 — HUD: stop re-rasterizing the health bar (largest win)
 
-**Status: MOSTLY DONE.** Items 1–2 (heart/shield/bubble sprite baking) landed
-and are measured: `UI.draw` 612 → 67 ops/frame at 100 max HP, 2,262 → 82 at
-400 max HP (real progression-derived max HP via `lifeCrystals`, not a poked
-field — see `docs/HANDOFF-W27-performance.md`), scaling ratio 3.70x → 1.22x.
-Items 3–4 (composed HUD-strip caching, `UI.layout()` memoization) are **not
-done** — deferred as a smaller residual win with more surface area for subtle
-state-invalidation bugs; not attempted without visual verification available.
+**Status: PARTIALLY DONE.** Item 1 (heart baking) and half of item 2 (shield
+glyph + breath bubbles; `drawSlotBox`/`drawFavPin` were **not** baked — the
+plan text bundled them with item 2 but they weren't attempted this pass)
+landed and are measured: `UI.draw` 612 → 67 ops/frame at 100 max HP, 2,262 →
+82 at 400 max HP (real progression-derived max HP via `lifeCrystals`, not a
+poked field — see `docs/HANDOFF-W27-performance.md`), scaling ratio 3.70x →
+1.22x. Items 3–4 (composed HUD-strip caching, `UI.layout()` memoization) are
+**not done** — deferred as a smaller residual win with more surface area for
+subtle state-invalidation bugs; not attempted without visual verification
+available.
 
 1. Bake heart sprites into pre-rendered offscreen canvases, following the
    `WALL_VARIANTS` precedent in `js/tiles.js`: 8 variants keyed by the existing

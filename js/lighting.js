@@ -361,13 +361,17 @@
     counters.cellsRecomputed += rw * rh;
   };
 
-  // Legacy full-window entry point (kept for embeds/tests).
+  // Legacy full-window entry point (kept for embeds/tests). Writes into
+  // out* the same as update()'s fullDirty branch, so it must set
+  // _overlayDirty the same way — an embed calling this directly instead of
+  // through update() would otherwise leave draw() blitting a stale overlay.
   Lighting.recompute = function (cam) {
     if (!this.ensureWindow(cam)) return;
     this.recomputeRect(this.x0, this.y0, this.x0 + this.w - 1, this.y0 + this.h - 1);
     counters.fullRecomputes++;
     this.syncOut(this.x0, this.y0, this.x0 + this.w - 1, this.y0 + this.h - 1);
     this.fullDirty = false;
+    this._overlayDirty = true;
   };
 
   // Copy field -> out for a rect (display baseline before dynamics).

@@ -1233,6 +1233,16 @@
   const HEART_VARIANTS = 8; // cols 0..7 — drawHeart already quantizes to this
   let heartCache = null;
 
+  // The widest painted rect is the last column's shadow: x = 6*px + 1,
+  // width = ceil(px). A canvas exactly HEART_SIZE square clips it (e.g. at
+  // HEART_SIZE=22, px=22/7≈3.143, that rect's right edge is ≈23.86 — past a
+  // 22px canvas). Size the bake to the actual painted extent, not the
+  // nominal heart size.
+  function heartCanvasSize() {
+    const px = HEART_SIZE / 7;
+    return Math.max(HEART_SIZE, Math.ceil(6 * px + 1 + Math.ceil(px)));
+  }
+
   function paintHeart(g, cols) {
     const px = HEART_SIZE / 7;
     for (let r = 0; r < HEART_MAP.length; r++) {
@@ -1255,7 +1265,7 @@
     const arr = new Array(HEART_VARIANTS);
     for (let cols = 0; cols < HEART_VARIANTS; cols++) {
       const cv = document.createElement('canvas');
-      cv.width = cv.height = HEART_SIZE;
+      cv.width = cv.height = heartCanvasSize();
       paintHeart(cv.getContext('2d'), cols);
       arr[cols] = cv;
     }
