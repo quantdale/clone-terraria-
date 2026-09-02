@@ -120,8 +120,10 @@ below) — read that section for actual presentation-layer evidence. See
   currency here, since real browser frame-time could not be measured in the
   environment this tool was written in (Canvas 2D and `requestAnimationFrame`
   do not function in that headless Chromium instance; see
-  `docs/W27-PERFORMANCE-PLAN.md` §4). A real-browser frame-time gate
-  (`tests/browser/perf.spec.js`) is still open — see that plan's WS0.2.
+  `docs/W27-PERFORMANCE-PLAN.md` §4). The real-browser gate
+  (`tests/browser/perf.spec.js`, WS0.2) now exists and is green on the
+  reference machine below — it measures both rAF frame-time percentiles
+  and instrumented canvas-op budgets against the live game.
 
 Reference numbers (2026-08, Node 24, Windows, this repo, headless):
 
@@ -152,3 +154,31 @@ sky parallax baking is W27 WS2, not yet implemented (see
 Simulation-only benchmarks (`bench-runtime`, `bench-scenarios`) are unaffected
 by either change (within normal run-to-run noise) — both fixes are strictly
 presentation-layer.
+
+### Real-browser gate (`tests/browser/perf.spec.js`, WS0.2, W27)
+
+Reference machine: Windows 11 x64, headless Chromium software raster
+(Playwright 1.62.1 / Chromium 151.0.7922.34), 1280×720 viewport.
+Scene: deterministic world (seed 4242), player idle at spawn, 180-frame
+settle (chunk-rebuild backlog drain + camera easing), 300-frame sample.
+Counters are snapshotted AFTER the settle — snapshotting before it folds
+the startup rebuild burst (~2,000 drawImages/frame) into the average and
+was the first calibration bug in this gate's history.
+
+| | Measured | Budget | Headroom |
+| --- | ---: | ---: | ---: |
+| Total ops/frame @100 max HP | 691 | 800 | 16% |
+| Total ops/frame @400 max HP (15 life crystals) | 728 | 860 | 18% |
+| UI-attributed ops/frame @100hp | 75 | 100 | 33% |
+| UI-attributed ops/frame @400hp | 90 | 120 | 33% |
+| UI-attributed growth 100hp→400hp | +15.0 ops | 30 | 2× |
+| Frame time p95 / p99 / mean | < 33 / < 50 / < 33 ms | same | vsync-bound |
+
+The flatness check is UI-drawer-attributed (absolute delta), not a relative
+whole-frame ratio: the spawn director keeps spawning during sampling, so
+whole-frame totals wander and a tight relative gate would flake. The
+attributed gate is strictly more sensitive to the §3.1 regression —
+a negative control injecting the old per-pixel heart cost (+55 ops/heart)
+breaches every leg (totals 968/1,827 vs 800/860; UI delta +837 vs 30).
+The old `fps > 10` liveness assertion in `boot.spec.js` was removed when
+this gate landed (promoted, not duplicated).

@@ -42,9 +42,10 @@ test.describe("boot gate", () => {
       expect(v, "module API missing: TC." + k).toBe(true);
     }
 
-    // exercise many real frames through the live rAF loop
+    // exercise many real frames through the live rAF loop. Frame-time budgets
+    // live in perf.spec.js (W27 WS0.2 promotion) — this gate stays a boot /
+    // error gate and asserts no second fps floor here by design.
     await H.runFrames(page, 120);
-    expect(await page.evaluate(() => window.TC.fps)).toBeGreaterThan(10);
 
     H.assertNoErrors(errors, "boot");
   });
