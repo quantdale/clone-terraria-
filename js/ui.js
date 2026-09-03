@@ -1398,26 +1398,60 @@
     }
   }
 
-  function drawHearts(ctx, w) {
-    const p = TC.player;
-    if (!p) return;
-    const hp = Math.max(0, p.hp | 0);
-    const maxHp = Math.max(1, p.maxHp | 0);
+  // PERF (W27 WS1.3): composed HUD-strip bakes. The heart row (hearts +
+  // shield + defense number) and the hotbar (10 slot boxes + icons +
+  // counts + selection + pins) are pure functions of small integer state
+  // that changes on gameplay EVENTS (damage/heal/crystal, pickup/use/
+  // select), not per frame — so bake each strip once per distinct state
+  // and blit 1 op/frame. Paint runs through the SAME functions as the
+  // direct path (translated by an integer offset, which composes exactly),
+  // and every call site uses integer coordinates (see the WS1 note above),
+  // so baked and direct pixels are identical. Breath bubbles stay direct:
+  // their fade (breathT) is continuous. Tooltips still evaluate per frame
+  // (hover UX draws nothing). All downstream drawers set their own font/
+  // fill state, so skipping the direct path leaks nothing.
+  const HEART_ROW_Y = 14, HEART_ROW_H = 30; // covers hearts 16..40 + def text
+  let heartRowBake = null; // {key, cv}
+
+  // Visuals only (no bubbles): shared by the bake and the direct fallback.
+  function paintHeartRow(g, w, hp, maxHp, def) {
     const n = Math.ceil(maxHp / 20);
     const startX = w - 14 - n * (HEART_SIZE + 5) + 5;
     const y = 16;
     let x = startX;
     for (let i = 0; i < n; i++) {
-      drawHeart(ctx, x, y, (hp - i * 20) / 20);
+      drawHeart(g, x, y, (hp - i * 20) / 20);
       x += HEART_SIZE + 5;
     }
-    const def = totalDefense();          // shield glyph + number left of hearts
     if (def > 0) {
       const gy = y + HEART_SIZE / 2;
-      drawShieldGlyph(ctx, startX - 24, gy, 13);
-      txtShadow(ctx, String(def), startX - 38, gy + 1, 15, '#c0c0cc', 'center');
+      drawShieldGlyph(g, startX - 24, gy, 13);
+      txtShadow(g, String(def), startX - 38, gy + 1, 15, '#c0c0cc', 'center');
+    }
+  }
+
+  function drawHearts(ctx, w) {
+    const p = TC.player;
+    if (!p) return;
+    const hp = Math.max(0, p.hp | 0);
+    const maxHp = Math.max(1, p.maxHp | 0);
+    const def = totalDefense();
+    const key = w + '|' + hp + '|' + maxHp + '|' + def;
+    if (canCacheSprites()) {
+      if (!heartRowBake || heartRowBake.key !== key) {
+        const cv = document.createElement('canvas');
+        cv.width = Math.ceil(w); cv.height = HEART_ROW_H;
+        const g = cv.getContext('2d');
+        g.translate(0, -HEART_ROW_Y);
+        paintHeartRow(g, w, hp, maxHp, def);
+        heartRowBake = { key, cv };
+      }
+      ctx.drawImage(heartRowBake.cv, 0, HEART_ROW_Y);
+    } else {
+      paintHeartRow(ctx, w, hp, maxHp, def);
     }
     // breath bubbles under the hearts while air is draining (player.js sets .breath)
+    const y = 16;
     if (breathT > 0 && typeof p.breath === 'number') {
       const filled = Math.ceil(clamp(p.breath, 0, 1) * BUBBLE_N);
       const bw = BUBBLE_N * BUBBLE_R * 2 + (BUBBLE_N - 1) * BUBBLE_GAP;
@@ -1432,16 +1466,64 @@
     }
   }
 
-  function drawHotbar(ctx, L, mx, my) {
-    const inv = getInv(false);
+  let hotbarBake = null; // {key, cv, x, y}
+
+  // Visuals only (no tooltips): shared by the bake and the direct fallback.
+  function paintHotbar(g, L, inv) {
     for (let i = 0; i < L.hotbar.length; i++) {
       const r = L.hotbar[i];
       const s = inv ? slotAt(inv, i) : null;
-      drawSlotBox(ctx, r, s, { selected: UI.selected === i, label: String((i + 1) % 10) });
+      drawSlotBox(g, r, s, { selected: UI.selected === i, label: String((i + 1) % 10) });
       const pin = inv && typeof inv.isFavorite === 'function' && inv.isFavorite(i);
-      if (pin) drawFavPin(ctx, r);
-      if (s && inRect(mx, my, r)) slotTooltip(mx, my, s.id, !!pin);
+      if (pin) drawFavPin(g, r);
     }
+  }
+
+  function hotbarSignature(L, inv) {
+    let s = UI.selected + '|';
+    for (let i = 0; i < L.hotbar.length; i++) {
+      const r = L.hotbar[i];
+      const st = inv ? slotAt(inv, i) : null;
+      const pin = inv && typeof inv.isFavorite === 'function' && inv.isFavorite(i);
+      s += r.x + ',' + r.y + ',' + r.w + ',' + r.h + ':' +
+        (st ? st.id + ',' + st.count : '-') + (pin ? '!' : '') + ';';
+    }
+    return s;
+  }
+
+  function drawHotbar(ctx, L, mx, my) {
+    const inv = getInv(false);
+    // Hover tooltips evaluate per frame regardless of the bake (no drawing).
+    for (let i = 0; i < L.hotbar.length; i++) {
+      const r = L.hotbar[i];
+      const s = inv ? slotAt(inv, i) : null;
+      if (s && inRect(mx, my, r)) {
+        const pin = inv && typeof inv.isFavorite === 'function' && inv.isFavorite(i);
+        slotTooltip(mx, my, s.id, !!pin);
+      }
+    }
+    if (!canCacheSprites() || !L.hotbar.length) { paintHotbar(ctx, L, inv); return; }
+    // Strip bounds from live rects; integer origins only (fractional blit
+    // offsets can resample — fall back to direct if layout ever emits them).
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < L.hotbar.length; i++) {
+      const r = L.hotbar[i];
+      if (r.x < x0) x0 = r.x;
+      if (r.y < y0) y0 = r.y;
+      if (r.x + r.w > x1) x1 = r.x + r.w;
+      if (r.y + r.h > y1) y1 = r.y + r.h;
+    }
+    if (!Number.isInteger(x0) || !Number.isInteger(y0)) { paintHotbar(ctx, L, inv); return; }
+    const key = hotbarSignature(L, inv);
+    if (!hotbarBake || hotbarBake.key !== key || hotbarBake.x !== x0 || hotbarBake.y !== y0) {
+      const cv = document.createElement('canvas');
+      cv.width = Math.ceil(x1 - x0) + 2; cv.height = Math.ceil(y1 - y0) + 2;
+      const g = cv.getContext('2d');
+      g.translate(-x0, -y0);
+      paintHotbar(g, L, inv);
+      hotbarBake = { key, cv, x: x0, y: y0 };
+    }
+    ctx.drawImage(hotbarBake.cv, hotbarBake.x, hotbarBake.y);
   }
 
   function drawInventory(ctx, L, mx, my) {

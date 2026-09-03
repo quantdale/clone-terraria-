@@ -16,9 +16,10 @@
       machine: Windows 11 x64, headless Chromium software raster
       (Playwright 1.62.1 / Chromium 151.0.7922.34), 1280x720 viewport.
       W27 settled baseline (seed 4242, cleared enemies, 180-frame settle,
-      300-frame sample), after the WS1+WS2 bakes (was 691/728 before WS2):
-        total ops/frame ~280 @100hp / ~310-410 @400hp;
-        UI-attributed 75 / 90 (rock-stable across runs).
+      300-frame sample), after the WS1+WS1.3+WS2 bakes:
+        total ops/frame ~225 @100hp / ~230 @400hp (flat);
+        UI-attributed 4 / 4 (rock-stable across runs; was 75/90 before the
+        WS1.3 composed strips, 612/2,262 before any W27 HUD work).
       Whole-frame totals wander ±30% run to run (respawn composition during
       the window) while attributed HUD numbers repeat to the decimal — so
       the TOTAL budgets below are deliberately loose (they catch every prior
@@ -216,17 +217,19 @@ test.describe("W27 performance gate", () => {
     expect(at100.total, `idle-100hp ops/frame ${at100.total.toFixed(0)} must stay under 500`).toBeLessThan(500);
     expect(at400.total, `idle-400hp ops/frame ${at400.total.toFixed(0)} must stay under 550`).toBeLessThan(550);
 
-    // HUD budgets (baseline UI-attributed 75 @100hp / 90 @400hp).
-    expect(at100.ui, `UI-attributed ops/frame @100hp ${at100.ui.toFixed(1)} must stay under 100`).toBeLessThan(100);
-    expect(at400.ui, `UI-attributed ops/frame @400hp ${at400.ui.toFixed(1)} must stay under 120`).toBeLessThan(120);
+    // HUD budgets (baseline UI-attributed 4 @100hp / 4 @400hp — the whole
+    // closed-inventory HUD is two strip blits; a per-pixel-heart regression
+    // would read ~+825 here).
+    expect(at100.ui, `UI-attributed ops/frame @100hp ${at100.ui.toFixed(1)} must stay under 20`).toBeLessThan(20);
+    expect(at400.ui, `UI-attributed ops/frame @400hp ${at400.ui.toFixed(1)} must stay under 20`).toBeLessThan(20);
 
-    // Max-HP flatness on the HUD itself: baked hearts cost 1 drawImage each
-    // (measured +15.0 for +15 hearts). Per-pixel hearts would add ~+825.
+    // Max-HP flatness on the HUD itself: the composed heart row costs 1
+    // blit at any max HP (measured +0.0). Per-pixel hearts would add ~+825.
     const uiDelta = at400.ui - at100.ui;
     expect(
       uiDelta,
-      `UI-attributed growth 100hp->400hp ${uiDelta.toFixed(1)} must stay within 30 ops`,
-    ).toBeLessThan(30);
+      `UI-attributed growth 100hp->400hp ${uiDelta.toFixed(1)} must stay within 10 ops`,
+    ).toBeLessThan(10);
 
     H.assertNoErrors(errors, "perf op budget");
   });
