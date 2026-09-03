@@ -15,8 +15,16 @@
       measured here against the REAL game in the REAL browser. Reference
       machine: Windows 11 x64, headless Chromium software raster
       (Playwright 1.62.1 / Chromium 151.0.7922.34), 1280x720 viewport.
-      W27 settled baseline (seed 4242, 180-frame settle, 300-frame sample):
-        total ops/frame 691 @100hp / 728 @400hp; UI-attributed 75 / 90.
+      W27 settled baseline (seed 4242, cleared enemies, 180-frame settle,
+      300-frame sample), after the WS1+WS2 bakes (was 691/728 before WS2):
+        total ops/frame ~280 @100hp / ~310-410 @400hp;
+        UI-attributed 75 / 90 (rock-stable across runs).
+      Whole-frame totals wander ±30% run to run (respawn composition during
+      the window) while attributed HUD numbers repeat to the decimal — so
+      the TOTAL budgets below are deliberately loose (they catch every prior
+      render-path stage: pre-W27 1,229/2,900, pre-WS2 691/728, injected
+      per-pixel hearts 968/1,827) and the TIGHT gate is the attributed HUD
+      triple.
       Budgets below are baseline + headroom. A breach means the render path
       grew — investigate before shipping. Recalibrate deliberately (update
       this file + docs), never by relaxing a failing gate.
@@ -159,9 +167,15 @@ test.describe("W27 performance gate", () => {
 
     // Sample op deltas across two windows: 100 max HP, then 400 max HP
     // (life crystals — the real mechanism), same settled idle scene.
-    // Two-phase: settle `warm` frames FIRST (chunk-rebuild backlog drain +
-    // camera easing), snapshot the counters, then average over `n` frames.
+    // Two-phase: clear spawned enemies (the director accumulates them over
+    // game time, so the later window would otherwise measure a bigger crowd
+    // than the earlier one), settle `warm` frames (chunk-rebuild backlog
+    // drain + camera easing), snapshot the counters, then average over `n`
+    // frames. Respawn during the window is the residual wander (see below).
     async function opWindow() {
+      await page.evaluate(() => {
+        if (window.TC.Enemies && window.TC.Enemies.clear) window.TC.Enemies.clear();
+      });
       return page.evaluate(
         ([warm, n]) =>
           new Promise((resolve) => {
@@ -178,6 +192,7 @@ test.describe("W27 performance gate", () => {
                       total: (window.__ops.total - t0) / n,
                       heavy: ((window.__ops.heavy || 0) - h0) / n,
                       ui: (window.__uiOps - u0) / n,
+                      foes: window.TC.Enemies ? window.TC.Enemies.list.length : -1,
                     });
                     return;
                   }
@@ -196,10 +211,10 @@ test.describe("W27 performance gate", () => {
     await page.evaluate(() => { window.TC.player.lifeCrystals = 15; });
     const at400 = await opWindow();
 
-    // Whole-frame budgets (baseline 691/728 + headroom). The pre-W27 render
-    // path (1,229 ops/frame idle, ~2,900 at 400 HP) breaches these widely.
-    expect(at100.total, `idle-100hp ops/frame ${at100.total.toFixed(0)} must stay under 800`).toBeLessThan(800);
-    expect(at400.total, `idle-400hp ops/frame ${at400.total.toFixed(0)} must stay under 860`).toBeLessThan(860);
+    // Whole-frame budgets: loose by design (see header). Later workstreams
+    // only lower totals; WS7 recalibrates once at close.
+    expect(at100.total, `idle-100hp ops/frame ${at100.total.toFixed(0)} must stay under 500`).toBeLessThan(500);
+    expect(at400.total, `idle-400hp ops/frame ${at400.total.toFixed(0)} must stay under 550`).toBeLessThan(550);
 
     // HUD budgets (baseline UI-attributed 75 @100hp / 90 @400hp).
     expect(at100.ui, `UI-attributed ops/frame @100hp ${at100.ui.toFixed(1)} must stay under 100`).toBeLessThan(100);

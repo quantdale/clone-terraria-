@@ -370,10 +370,14 @@ work at 100 HP and ~75% at 400 HP.
 
 ### WS2 — Sky: bake the parallax bands
 
-**Status: NOT STARTED.** Deferred — see `docs/HANDOFF-W27-performance.md` for
-why (color depends continuously on daylight, not just geometry; a correct
-cache needs either a stated daylight quantization or a mask/color split, and
-neither was attempted blind without visual verification).
+**Status: DONE** (2026-09-03 session; the deferred mask/color-split design
+was superseded — see `docs/HANDOFF-W27-performance.md`). Silhouettes are
+cached as `Path2D` geometry (color is not geometry: palette drift costs one
+`fillStyle` write, never a rebuild — no daylight quantization needed, no
+banding possible); clouds/orbs/gradient are baked sprites; stars are one
+baked sprite with the fade envelope (twinkle dropped and star tint
+decoupled to white — both stated in the handoff with pixel-diff evidence).
+Day 435 → 19.1, night (previously unmeasured) 842 → 22.3.
 
 Render each background layer silhouette into an offscreen strip keyed by
 `(biome, layer, daylight quantum)`; blit with a horizontal scroll offset;

@@ -170,8 +170,29 @@ function loadGame(opts) {
     body: { style: {} },
   };
 
+  // W27 WS2: minimal Path2D stand-in. Construction/mutation methods are
+  // pure JS geometry with no rasterizer traffic, so they no-op untallied —
+  // mirroring real browsers, where the canvas-op counters wrap
+  // CanvasRenderingContext2D.prototype only (ctx.fill(path) still tallies
+  // exactly 1 there and here). Lets headless suites exercise the same
+  // Path2D fast paths production uses instead of silently covering only
+  // the no-Path2D fallbacks.
+  const Path2DStub = class Path2DStub {
+    constructor() {}
+    moveTo() {}
+    lineTo() {}
+    closePath() {}
+    arc() {}
+    ellipse() {}
+    rect() {}
+    bezierCurveTo() {}
+    quadraticCurveTo() {}
+    addPath() {}
+  };
+
   const sandbox = {
     console,
+    Path2D: Path2DStub,
     performance: { now: () => simTime },
     Math,
     Date,

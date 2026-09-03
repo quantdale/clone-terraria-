@@ -63,6 +63,17 @@ function makeCountingCtx(canvas, tally) {
     textBaseline: 'alphabetic', imageSmoothingEnabled: true, shadowBlur: 0,
     shadowColor: 'transparent'
   };
+  // W27 WS2: save/restore carry the style stack like a real context. Without
+  // this, alpha writes that browsers elide (restored, then re-set to the
+  // same value) would be over-counted here — measurement honesty.
+  const stack = [];
+  const snap = () => ({
+    fillStyle, strokeStyle, globalAlpha, globalCompositeOperation,
+  });
+  const restoreSnap = (s) => {
+    fillStyle = s.fillStyle; strokeStyle = s.strokeStyle;
+    globalAlpha = s.globalAlpha; globalCompositeOperation = s.globalCompositeOperation;
+  };
   for (const m of METHODS) {
     if (m === 'measureText') { t[m] = () => { tally.note(m); return { width: 0 }; }; continue; }
     if (m === 'createLinearGradient' || m === 'createRadialGradient') {
@@ -77,6 +88,8 @@ function makeCountingCtx(canvas, tally) {
       t[m] = (w, h) => { tally.note(m); return { data: new Uint8ClampedArray((w || 1) * (h || 1) * 4), width: w, height: h }; };
       continue;
     }
+    if (m === 'save') { t[m] = () => { tally.note(m); stack.push(snap()); }; continue; }
+    if (m === 'restore') { t[m] = () => { tally.note(m); const s = stack.pop(); if (s) restoreSnap(s); }; continue; }
     t[m] = () => tally.note(m);
   }
   // Style/composite-mode writes are real rasterizer state transitions, not

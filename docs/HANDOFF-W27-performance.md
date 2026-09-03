@@ -305,6 +305,84 @@ npm run build                     # succeeds; verify:build/test:browser need a d
 ```
 
 ---
+
+## Continuation session (2026-09-03, Windows 11 + working headless Chromium)
+
+This machine CAN run the browser gate (unlike the WSL2 box above), so the
+campaign resumed here. Read the EXECUTION_PROMPT (W27 ACTIVE) first.
+
+### WS0.2 landed (`b17bf72`)
+
+- `tests/browser/perf.spec.js` (new): rAF frame-time percentiles
+  (p95<33ms, p99<50ms, mean<33ms) + instrumented canvas-op budgets on the
+  live game (seed 4242, 180-frame settle, 300-frame sample, counters
+  snapshotted AFTER the settle). Two methodology bugs were caught by
+  measurement, not review: (1) snapshotting before the warmup folded the
+  startup chunk-rebuild burst (~2,000 drawImages/frame) into the average
+  (2,306 vs the true ~691); (2) whole-frame relative growth gates flake on
+  spawn-director wander, so flatness is UI-drawer-attributed (absolute
+  +15.0 for +15 hearts vs budget 30). Whole-frame budgets set LOOSE at
+  500/550 total (were 800/860 at WS0.2 landing) after measuring ±30%
+  respawn wander; UI 100/120 + delta 30 unchanged (rock-stable).
+- Negative control: injected per-pixel-heart waste breaches every leg
+  (968/1,827 vs 800/860 at the time; UI-delta +837 vs 30) — the gate is
+  live, not decorative.
+- `boot.spec.js`: `fps > 10` removed (promoted to perf.spec, not duplicated).
+- Frame-time-leg status: PASSED repeatedly, then FAILED under sustained
+  third-party host load (p95 60→111ms, op counts flat, op leg green;
+  pre-WS2 control failed identically at p95 92.5ms). Recorded as an
+environment blocker per ONBOARDING §8 — budgets NOT weakened.
+Re-verify on a quiet host at close.
+- Scratch `tools/.w27-*.tmp.js` debug scripts deleted, not committed.
+
+### WS2 landed (this commit)
+
+- `js/sky.js`: silhouettes → `Path2D` geometry cache (exact floats in the
+  key; color NOT geometry); clouds/orbs/gradient → baked sprites with
+  integer blits (<=0.5px, stated); stars → one white sprite + fade
+  envelope (twinkle dropped, tint decoupled from the far-silhouette color
+  — both stated). Shared paint functions feed bake + no-`document`/
+  no-`Path2D` fallbacks. Day 435 → 19.1 (all bench scenes ≤19.8),
+  night (never measured before: 842) → 22.3 (38×; +2.3 over the round ≤20
+  target — accepted residual: star-fade save/blit/restore, irreducible
+  without hand-rolled alpha state; analyzed in session).
+- The handoff's recommended mask/color-split was evaluated and REJECTED
+  after arithmetic: steady-state 28 ops/frame (worse than the 22 the
+  strip design measured) for a gain (no palette re-bakes) that Path2D
+  gets for free. `Path2D` dominates strips on every axis (exact, no
+  quantization, no 8.6MB strip memory, rebuilds are uncounted JS math).
+  An intermediate strip implementation was built, measured, then replaced
+  — it never left the working tree.
+- Visual proof: deterministic in-page sky-only renders (fixed cam/time/
+  biome, identical inputs asserted, no lighting/entities) before-vs-after:
+  day 3.4% Δ (mean 0.08, max 81, diffuse only); night/cave residuals are
+  stars-by-design + soft-edge rounding. Full-scene screenshots were
+  attempted first but confounded by run-to-run timing nondeterminism
+  (identical-code A/B diff: 21% — torch/particles/camera ticks), which is
+  itself a useful warning: never gate on full-frame pixels.
+- `tests/helpers/load-game.js`: minimal `Path2D` stub (construction
+  untallied, mirroring unwrapped `Path2D.prototype` in browsers) so
+  headless suites exercise the production fast path, not just fallbacks.
+- `tools/bench-render.js`: save/restore *style stack* in the counting
+  context (restores reset tracked styles silently, like the native stack
+  bypassing wrapped setters). This FIXED a two-way miscount: previously
+  re-set-after-restore writes were under-counted (lighting gCO now
+  honestly reads 5 not 4 — not a regression).
+- `docs/PERFORMANCE.md`: WS2 evidence table (incl. the first-ever night
+  numbers), new Sky-backdrop invariant section, harness fidelity notes.
+- Full `npm test` 625/625 green after every step. Browser op-budget leg
+  green post-WS2 (290/340 vs 340/400). Frame-time leg: see blocker above.
+- Upstream `origin/main` gained `ONBOARDING.md` (61ba3fb) mid-session —
+  benign; integrate via rebase before push (local commits unpublished).
+- TEMP-DIR WARNING for the next session on shared Windows boxes: files in
+  `%TEMP%` vanished mid-session (aggressive janitor or sandbox overlay).
+  Keep same-session artifacts in memory (in-page diffs) or in the repo
+  (delete after); re-create `$env:TEMP\pw-reuse.config.js` if the browser
+gate errors on a missing config.
+- Budget tightening policy: op budgets now 340/400. WS3/WS5/WS6 only lower
+  totals — do NOT loosen; WS7 recalibrates once at close.
+
+---
 *Session-scoped handoff for W27 partial execution. `docs/W27-PERFORMANCE-PLAN.md`
 carries the full plan and per-workstream status; this file carries what
 actually happened, why the deferred items were deferred, and what the next
