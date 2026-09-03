@@ -112,10 +112,49 @@
     }
     // W21: liquid motion invalidates its region in the shared authority so
     // the minimap (and any other presentation consumer) repaints exactly
-    // the affected area.
+    // the affected area. Immediate (on-demand API paths: buckets, pumps,
+    // displace, direct writes) — see noteSettleChange for the settle loop.
     if (TC.WorldRegions && typeof TC.WorldRegions.markCell === "function") {
       TC.WorldRegions.markCell(i % w.width, (i / w.width) | 0, "liquid");
     }
+  }
+
+  // W27 WS6: settle-loop coalescing. The budgeted settle pass can touch
+  // hundreds of cells per tick (~563 region marks/frame measured), but
+  // consumers only ever observe REGIONS: one bump per distinct region per
+  // tick carries exactly the same invalidation (same stale set, same
+  // 'liquid' kinds, same per-consumer delivery) for a fraction of the
+  // authority traffic. The per-cell frameChanges payload for net events is
+  // untouched — only the region marks coalesce. Settle ORDER is unchanged
+  // (ascending-index snapshot iteration); this affects mark volume only,
+  // never which cells move or when. Flushed once per update() below.
+  const settleMarks = new Set();
+  function noteSettleChange(i) {
+    const w = worldRef;
+    if (frameChanges.length < 128) { // hard cap; payload trims to 32
+      frameChanges.push([
+        i % w.width,
+        (i / w.width) | 0,
+        liquidType[i],
+        liquidAmount[i],
+      ]);
+    }
+    const WR = TC.WorldRegions;
+    if (WR && typeof WR.chunkOf === "function") {
+      settleMarks.add(WR.chunkOf(i % w.width, (i / w.width) | 0));
+    } else if (WR && typeof WR.markCell === "function") {
+      WR.markCell(i % w.width, (i / w.width) | 0, "liquid");
+    }
+  }
+  function flushSettleMarks() {
+    if (!settleMarks.size) return;
+    const WR = TC.WorldRegions;
+    if (WR && typeof WR.markChunk === "function" && WR.chunksX) {
+      for (const idx of settleMarks) {
+        WR.markChunk(idx % WR.chunksX, (idx / WR.chunksX) | 0, "liquid");
+      }
+    }
+    settleMarks.clear();
   }
 
   // ---- settle sim ----
@@ -138,8 +177,8 @@
       const m = Math.min(a, pour(t, d >> 1));
       liquidAmount[s] += m;
       liquidAmount[i] = a - m;
-      noteChange(s);
-      noteChange(i);
+      noteSettleChange(s);
+      noteSettleChange(i);
       return m;
     }
     if (st !== TYPE.NONE) return 0; // immiscible; contact is vertical-only
@@ -151,8 +190,8 @@
     liquidAmount[s] = m;
     liquidAmount[i] = a - m;
     if (liquidAmount[i] === 0) liquidType[i] = TYPE.NONE;
-    noteChange(s);
-    noteChange(i);
+    noteSettleChange(s);
+    noteSettleChange(i);
     wakeIdx(s);
     wakeAroundIdx(s);
     return m;
@@ -166,8 +205,8 @@
     liquidAmount[src] = 0;
     liquidType[dst] = TYPE.NONE;
     liquidAmount[dst] = 0;
-    noteChange(src);
-    noteChange(dst);
+    noteSettleChange(src);
+    noteSettleChange(dst);
     if (frameContacts.length < EVENT_CAP) frameContacts.push([dx, dy]);
     const w = worldRef;
     if (w && typeof w.setRaw === "function") {
@@ -204,8 +243,8 @@
         liquidAmount[below] = a;
         liquidType[i] = TYPE.NONE;
         liquidAmount[i] = 0;
-        noteChange(below);
-        noteChange(i);
+        noteSettleChange(below);
+        noteSettleChange(i);
         wakeIdx(below);
         wakeAroundIdx(below);
         wakeAroundIdx(i); // the column above follows
@@ -216,15 +255,15 @@
         const m = Math.min(a, pour(t, want));
         liquidAmount[below] += m;
         a -= m;
-        noteChange(below);
+        noteSettleChange(below);
         if (a === 0) {
           liquidType[i] = TYPE.NONE;
           liquidAmount[i] = 0;
-          noteChange(i);
+          noteSettleChange(i);
           return false;
         }
         liquidAmount[i] = a;
-        noteChange(i);
+        noteSettleChange(i);
         return true;
       }
       if (bt !== t) {
@@ -249,7 +288,7 @@
       if (a < MIN_VOLUME) {
         liquidType[i] = TYPE.NONE;
         liquidAmount[i] = 0;
-        noteChange(i);
+        noteSettleChange(i);
       }
       return false;
     }
@@ -301,6 +340,7 @@
     acc = 0;
     frameChanges = [];
     frameContacts = [];
+    settleMarks.clear();
     if (!w) return false;
     liquidType = new Uint8Array(w.width * w.height);
     liquidAmount = new Uint8Array(w.width * w.height);
@@ -339,6 +379,7 @@
       if (budget-- <= 0) break;
       if (!settleCell(list[k])) active.delete(list[k]);
     }
+    flushSettleMarks();
     flushEvents();
   }
 
