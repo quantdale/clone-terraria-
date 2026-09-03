@@ -380,9 +380,54 @@ Re-verify on a quiet host at close.
   (delete after); re-create `$env:TEMP\pw-reuse.config.js` if the browser
 gate errors on a missing config.
 - Budget tightening policy: op budgets now 500/550 totals (loose by
-  measured ±30% respawn wander) + tight 100/120/delta-30 attributed HUD
-  triple. WS3/WS5/WS6 only lower totals — do NOT loosen; WS7 recalibrates
-  once at close.
+  measured ±30% respawn wander) + tight attributed HUD triple (now 20/20/
+  delta-10 after WS1.3, measured 4/4/0.0). WS3/WS6 only lower totals — do
+  NOT loosen; WS7 recalibrates once at close.
+
+### WS1.3 landed (same session)
+
+- `js/ui.js`: composed heart-row strip (hearts + shield + def number;
+  bubbles stay direct) keyed exact `[w, hp, maxHp, def]`, and 10-slot
+  hotbar strip (boxes + icons + counts + selection + pins) keyed on the
+  exact per-slot signature + selection, integer origins only. Same paint
+  functions feed bake + direct fallbacks; tooltips still evaluate per
+  frame; all downstream drawers set their own state (audited).
+- Numbers: closed-inventory `UI.draw` 67/82 → 4.0/4.0 (ratio exactly
+  1.00x — §7.3 at 0.0%); idle total 267/282 → 204/204 (both ≤250 — §7.2
+  met); browser 223/228, UI 4/4, dUi 0.0. Inventory-open UI 207 → 144
+  (bag/craft stay direct, correctly).
+- Visual proof: browser screenshots (10 hearts incl. crystal row, slot-5
+  selection highlight, icons + counts, open inventory/equip/craft) all
+  render correctly, zero page errors. WS1.4 (`UI.layout()` memoization)
+  explicitly NOT done: CPU/GC, not raster — plan updated.
+
+### WS6 landed (same session)
+
+- `js/liquids.js`: `noteSettleChange` (settle loop only) records distinct
+  region indices per tick; `flushSettleMarks()` emits one
+  `markChunk(..., 'liquid')` each at the end of `update()`; `reset()`
+  clears the set. On-demand paths (buckets/pumps/displace/direct-write/
+  net mirror) still mark immediately — same-tick visibility unchanged.
+- Numbers: fresh-120 liquid marks 24,968 → 352 (71×, ~3 regions/tick);
+  liquid digest bit-identical (3936172620) — evolution, events, saves
+  untouched. Cost profile: markCell ≈ sub-µs, was ~7-30% of the 300µs
+  tick during active settling.
+- Suites: worldregions/buckets/minimap/liquids-x3/liquid-replication/
+  save all green (minimap per-region repaint + replication cursor
+  independence specifically re-verified — coalescing preserves the stale
+  SET, only the bump volume changes).
+
+### WS5 deferred (same session, principled)
+
+- Enemy/player/NPC art animates continuously (squish k, wing flap, walk
+  step from clock + physics) at fractional world coords. Baking needs
+  per-archetype animation quantization AND integer blits (judder) or
+  fractional blits (resample blur) — a visual-fidelity project, not a
+  safe bake. It moves NO gate number (every gate is idle-scene; the
+  24-enemy scene stays diagnostic at 531 enemy ops). Deferred to a
+  follow-up with per-archetype screenshot-gated quantization. The ~25%
+  within-draw grouping alternative was rejected as insufficient for its
+  touch surface. Plan §6 WS5 marked accordingly.
 
 ### WS3 landed (same session)
 

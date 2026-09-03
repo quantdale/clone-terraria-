@@ -282,7 +282,7 @@ Requirements:
 
 ## 12. Rendering
 
-Canvas 2D remains the default renderer until profiling demonstrates a renderer bottleneck.
+Canvas 2D remains the default renderer until profiling demonstrates a renderer bottleneck. (W27 measured the presentation layer hardware-independently and stayed Canvas 2D: no WebGL rewrite — see §30.)
 
 Target render layers:
 
@@ -1312,3 +1312,48 @@ loot through canonical seams -> save/reload/continue coherence -> zero page
 errors. Performance: fixture activation ~1.9 ms one-time (~0.13 ms
 idempotent), save metadata +96 bytes, registry lookup parity at 200k-query
 scale, gameplay scenario medians unchanged (see docs/PERFORMANCE.md).
+
+## 30. Campaign contracts (W27 — Presentation Performance Recovery)
+
+Presentation-only campaign: zero gameplay/determinism/save/protocol/pack
+change (registry fingerprint `1b1d7c15` intact, liquid digests bit-identical).
+The established optimization pattern is **exact-input bake + blit**: a cache
+key holding every input the pixels depend on (exact values, never
+quantized unless stated), the same paint functions feeding bake and
+fallback, integer blits, `save`/`restore` discipline around alpha use.
+`TC.RenderLayers` remains the sole draw authority; `TC.WorldRegions`
+multi-consumer invariant holds (no consumer observes/clears another's
+queue; eviction never re-marks).
+
+- HUD (`js/ui.js`): heart/shield/bubble sprites, composed heart-row strip
+  (exact `[w, hp, maxHp, defense]` key), 10-slot hotbar strip (exact
+  per-slot signature + selection). Closed-inventory `UI.draw` 612 → 4
+  ops/frame, max-HP scaling exactly 1.00x.
+- Sky (`js/sky.js`): silhouette layers as `Path2D` geometry cache (color
+  is not geometry); clouds/orbs/gradient as baked sprites; stars as one
+  baked sprite with the fade envelope (twinkle dropped, tint decoupled to
+  white — the two stated simplifications). Day 435 → 19, night 842 → 22.
+- Renderer (`js/world.js`): camera-windowed rebuilds (visible+1, ≤3/tick)
+  + observe-only far drain (same contract as lighting's outside-window
+  observe); `draw()` repairs visible-dirty synchronously; eviction in the
+  update phase behind an O(1) size check with a viewport-derived ceiling
+  (`chunkCap()`: visible + 2 margin per side, [24, 160]). Startup 494
+  rebuilds + 336 evictions → 5 + 9; steady cache ~26/30 at 1280×720 zoom 2.
+- Liquids (`js/liquids.js`): settle-loop region marks coalesce per region
+  per tick (on-demand paths still mark immediately). Fresh-120 marks
+  24,968 → 352 with identical settle evolution.
+- Lighting (`js/lighting.js`): skip unchanged overlay rebuild/upload
+  (`_overlayDirty` over every `out*` write path). `putImageData` 1 → 0 on
+  static scenes.
+- Measurement (`tools/bench-render.js` counting context with save/restore
+  style-stack fidelity; `Path2D` construction untallied pure-JS geometry
+  in both harnesses; `tests/browser/perf.spec.js` rAF percentiles +
+  instrumented op budgets with a UI-attributed flatness triple and a
+  verified negative control). Idle frame 1,229 → 204 ops, flat in max HP.
+- Deferred with analysis: entity sprite batching (continuous
+  clock/physics animation + fractional coords — a visual-fidelity
+  project, moves no idle-scene gate), `UI.layout()` memoization (CPU/GC,
+  not raster), night-sky 2-op residual over the round ≤20 target.
+- Save impact: none (no provider/format change). Tests: 625/625 node +
+  browser boot/journeys/perf gate green (frame-time leg subject to a
+  recorded host-contention blocker, budgets unweakened).

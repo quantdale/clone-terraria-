@@ -355,14 +355,21 @@ available.
    `WALL_VARIANTS` precedent in `js/tiles.js`: 8 variants keyed by the existing
    `cols = round(frac * 7)` quantization (which the current code *already*
    applies — so this introduces **no** new visual quantization). One
-   `drawImage` per heart replaces 55 `fillRect` + 55 `fillStyle`.
+   `drawImage` per heart replaces 55 `fillRect` + 55 `fillStyle`. — DONE (WS1)
 2. Same treatment for `drawShieldGlyph`, `drawBubble` and `drawSlotBox` /
-   `drawFavPin` chrome.
+   `drawFavPin` chrome. — DONE (WS1: shield + bubbles; slot boxes ride the
+   WS1.3 hotbar strip below instead).
 3. Cache the composed static HUD strip to an offscreen canvas, invalidated only
    when its inputs change (`hp`, `maxHp`, defense, selected slot, hotbar
    contents, breath, locale, viewport size). Blit one image per frame.
+   — DONE as two strips (WS1.3, 2026-09-03): heart row keyed exact
+   `[w, hp, maxHp, def]` (bubbles stay direct), 10-slot hotbar keyed on the
+   exact per-slot signature + selection. Closed-inventory `UI.draw` 67/82
+   → 4/4, scaling exactly 1.00x. See handoff.
 4. Hoist `UI.layout()` (§3.4) into a memoized structure recomputed on resize
-   and on panel/inventory state change — not per frame.
+   and on panel/inventory state change — not per frame. — DEFERRED (WS1.4):
+   CPU/GC pressure, not raster ops; invalidation surface (resize × panels
+   × inventory × locale) outweighs the win without a wall-clock gate.
 
 **Target:** `UI.draw` from 612 ops/frame → **< 40**, and **flat in max HP**
 (400 HP must cost the same as 100 HP). This alone removes ~50% of all canvas
@@ -441,6 +448,16 @@ particles by color before drawing.
 
 **Target:** per-enemy cost from ~17 ops → **≤ 3** (one `drawImage` plus overlay).
 
+**Status: DEFERRED with analysis (2026-09-03, see handoff).** Every
+archetype animates continuously (squish/flap/walk-phase from clock and
+physics) and entities sit at fractional world coords — sprite baking
+needs stated animation quantization per archetype AND either integer
+blits (locomotion judder at slow speeds) or fractional blits (resample
+blur vs today's crisp fractional fillRects). That is a visual-fidelity
+project, not a safe bake, and it moves NO gate number (all gates are
+idle-scene; combat scenes stay diagnostic). Deferred to a follow-up with
+screenshot-gated quantization per archetype.
+
 ### WS6 — Coalesce liquid invalidation
 
 **Status: NOT STARTED.** Deferred to a follow-up pass — see
@@ -453,6 +470,11 @@ post-reload continuation) and the multi-consumer invariant.
 
 **Target:** liquid marks from ≈563/frame → within a small constant of the
 number of distinct dirty regions.
+
+**Status: DONE** (2026-09-03): settle-loop marks coalesce per region per
+tick (`noteSettleChange` + per-update flush; on-demand paths still mark
+immediately). Fresh-120 marks 24,968 → 352 (71×) with a bit-identical
+liquid digest — order/volumes/events/saves untouched. See handoff.
 
 ### WS7 — Validation, gate and truth-sync
 

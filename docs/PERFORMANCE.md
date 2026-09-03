@@ -82,6 +82,17 @@ below) — read that section for actual presentation-layer evidence. See
 - The initial world drain (worldgen pools settling) legitimately takes tens of
   thousands of cells over ~1–2 minutes of sim time; it is bounded work, not a
   leak. With the renderer skip above it costs ~0.2 ms/tick while active.
+- **(W27 WS6) Settle-loop region marks coalesce per region per tick.** The
+  budgeted settle pass touched hundreds of cells per tick (~25k region
+  marks over the first 120 ticks of a fresh world); consumers only ever
+  observe REGIONS, so `noteSettleChange` records distinct region indices
+  in a per-tick set and flushes one `markChunk(..., 'liquid')` each.
+  Fresh-120 marks went 24,968 → 352 (71×) with a bit-identical liquid
+  digest (3936172620 both ways) — settle order, volumes, events and
+  saves are untouched; only mark volume changed. On-demand paths
+  (buckets, pumps, displace, direct writes, net mirror) still mark
+  immediately — coalescing covers the settle loop only, so same-tick
+  visibility for player actions is unchanged.
 
 ## Noise (`js/utils.js`)
 
@@ -161,10 +172,26 @@ below) — read that section for actual presentation-layer evidence. See
   layout is built from integer canvas dimensions and integer tunables), so
   baking at local origin and blitting with `drawImage(cache, x, y)` (or
   `drawImage(cache, cx - anchor, cy - anchor)` for the anchor-centered shield
-  glyph) reproduces the exact same absolute pixels — no new visual
-  quantization, no resampling. If a future change makes call-site coordinates
-  fractional, revisit this — `drawImage` at a fractional destination can
-  resample differently than the original fractional `fillRect` did.
+glyph) reproduces the exact same absolute pixels — no new visual
+quantization, no resampling. If a future change makes call-site coordinates
+fractional, revisit this — `drawImage` at a fractional destination can
+resample differently than the original fractional `fillRect` did.
+
+- **(W27 WS1.3) The heart row and the hotbar are composed strips.** The
+  heart row (hearts + shield + defense number; breath bubbles stay direct,
+  their fade is continuous) bakes to one full-width strip keyed on exact
+  `[w, hp, maxHp, defense]` — 1 blit/frame at ANY max HP (400 HP costs
+  exactly what 100 HP costs: scaling ratio 1.00x). The 10-slot hotbar
+  (boxes + icons + counts + selection + pins) bakes to one strip keyed on
+  the exact per-slot `[rect, id, count, pin]` signature + selection; hover
+  tooltips still evaluate per frame (they draw nothing). Both paint
+  through the SAME functions as the direct path under an integer
+  translation (exact composition); the hotbar refuses the strip unless
+  its origin is integer. Result: closed-inventory `UI.draw` 67/82 → 4/4.
+  `UI.layout()` per-frame rebuild (WS1.4) is intentionally NOT memoized:
+  it is CPU/GC pressure, not raster ops, and the invalidation surface
+  (resize × panels × inventory × locale) outweighs the win without a
+  wall-clock profiling gate to prove it.
 
 ## Measurement
 
@@ -208,12 +235,12 @@ Reference numbers (2026-08, Node 24, Windows, this repo, headless):
 
 Idle scene, 1280×720, zoom 2, stationary camera, settled world:
 
-| | Before | After WS1+WS4 | After WS2 |
-| --- | ---: | ---: | ---: |
-| Total ops/frame | 1,229 | 682 | 267 |
-| `UI.draw` ops/frame (100 max HP) | 612 | 67 | 67 |
-| `UI.draw` ops/frame (400 max HP, 15 life crystals) | 2,262 | 82 | 82 |
-| HUD max-HP scaling ratio (400hp / 100hp; 1.00x = flat, the target) | 3.70x | 1.22x | 1.22x |
+| | Before | After WS1+WS4 | After WS2 | After WS1.3 |
+| --- | ---: | ---: | ---: | ---: |
+| Total ops/frame | 1,229 | 682 | 267 | 204 |
+| `UI.draw` ops/frame (100 max HP) | 612 | 67 | 67 | 4 |
+| `UI.draw` ops/frame (400 max HP, 15 life crystals) | 2,262 | 82 | 82 | 4 |
+| HUD max-HP scaling ratio (400hp / 100hp; 1.00x = flat, the target) | 3.70x | 1.22x | 1.22x | 1.00x |
 | `putImageData`/frame (lighting overlay upload) | 1.0 | 0 | 0 |
 | `Lighting.draw` ops/frame | 5 | 4 | 5* |
 | `Sky.draw` ops/frame (day scenes) | 435 | 435 | 19.1 |
@@ -245,8 +272,8 @@ was the first calibration bug in this gate's history.
 
 | | Measured (post-WS2) | Budget | Headroom |
 | --- | ---: | ---: | ---: |
-| Total ops/frame @100 max HP | ~280 | 500 | loose* |
-| Total ops/frame @400 max HP (15 life crystals) | ~310-410 | 550 | loose* |
+| Total ops/frame @100 max HP | ~225 | 500 | loose* |
+| Total ops/frame @400 max HP (15 life crystals) | ~230 | 550 | loose* |
 | UI-attributed ops/frame @100hp | 75 | 100 | 33% |
 | UI-attributed ops/frame @400hp | 90 | 120 | 33% |
 | UI-attributed growth 100hp→400hp | +15.0 ops | 30 | 2× |
