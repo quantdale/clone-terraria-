@@ -389,12 +389,14 @@ daylight quantization explicitly.
 
 ### WS3 — Renderer: end the treadmill, bound the memory
 
-**Status: NOT STARTED.** Deferred — see `docs/HANDOFF-W27-performance.md` for
-the specific risk found while designing this: gating `World.update()` to a
-camera-radius window means regions outside it are never `cons.observe()`'d,
-so the renderer's per-consumer pending queue can grow unboundedly for a
-roaming session with off-camera world edits. Needs a bounding design (e.g. a
-low-rate service pass for far regions) before landing, not attempted blind.
+**Status: DONE** (2026-09-03 session — see `docs/HANDOFF-W27-performance.md`).
+Camera-windowed rebuilds (visible+1) + observe-only far drain every tick
+(the required bounding design: the queue only shrinks, no canvas churn),
+`draw()` repairs visible-dirty synchronously, eviction moved to the update
+phase with a viewport-derived cap (30 / ~30 MB at 1280×720 zoom 2, was a
+fixed 160 / ~160 MB). Startup 494 rebuilds + 336 evictions → 5 + 9 (all
+startup camera sweep, zero re-rebuild churn); stationary 300-frame cache
+26/30.
 
 1. Gate `World.update()` rebuilds to a camera-radius window. Regions outside it
    stay stale in the renderer's own cursor and are rebuilt on demand by

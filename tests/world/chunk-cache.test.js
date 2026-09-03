@@ -28,11 +28,14 @@ test('chunk canvas cache stays bounded and evicted chunks redraw cleanly', () =>
   for (let key = 0; key < total; key++) w.rebuildChunk(key);
   assert.strictEqual(w.chunks.size, total);
 
-  // Camera sits at spawn; eviction must cap the cache and spare the screen.
+  // Camera sits at spawn; the update phase must cap the cache (eviction
+  // lives in update(), not on the per-frame draw() path — W27 WS3) and
+  // spare the screen. The ceiling is viewport-derived (see chunkCap()).
   const cam = TC.camera;
   cam.zoom = 2;
-  w.draw(makeCtxStub(), cam);
-  assert.ok(w.chunks.size <= 160, 'cache capped, size=' + w.chunks.size);
+  for (let i = 0; i < 5; i++) w.update(1 / 60);
+  const cap = w.chunkCap().cap;
+  assert.ok(w.chunks.size <= cap, 'cache capped, size=' + w.chunks.size + ' cap=' + cap);
   const span = w.CHUNK * TC.CONST.TS;
   const ccx = Math.floor((cam.x + TC.canvas.width / (2 * cam.zoom)) / span);
   const ccy = Math.floor((cam.y + TC.canvas.height / (2 * cam.zoom)) / span);
@@ -45,7 +48,8 @@ test('chunk canvas cache stays bounded and evicted chunks redraw cleanly', () =>
   }
   const sizeAfterFirstEvict = w.chunks.size;
 
-  // No churn: repeated draws at the same camera must not change the cache.
+  // No churn: repeated draws at the same camera must not change the cache
+  // (visible chunks are present and clean, so draw() repairs nothing).
   w.draw(makeCtxStub(), cam);
   w.draw(makeCtxStub(), cam);
   assert.strictEqual(w.chunks.size, sizeAfterFirstEvict, 'no rebuild/evict churn');
@@ -71,11 +75,22 @@ test('eviction does not disturb other region consumers', () => {
   const w = TC.world;
   for (let key = 0; key < w.chunksX * w.chunksY; key++) w.rebuildChunk(key);
   const cons = w._regions;
-  const pendingBefore = cons.pendingCount();
   const cam = TC.camera;
   cam.zoom = 2;
-  w.draw(makeCtxStub(), cam);
-  assert.ok(w.chunks.size <= 160, 'eviction ran');
-  assert.strictEqual(cons.pendingCount(), pendingBefore,
+  // Eviction itself (direct call): caps the cache without touching any
+  // region queue — it only drops canvases, never re-marks. consume() is
+  // idempotent: returns the live lighting cursor when registered.
+  const lighting = TC.WorldRegions.consume('lighting');
+  const rpBefore = cons.pendingCount();
+  const lpBefore = lighting.pendingCount();
+  w.evictFarChunks();
+  assert.ok(w.chunks.size <= w.chunkCap().cap, 'eviction ran');
+  assert.strictEqual(cons.pendingCount(), rpBefore,
     'renderer consumer queue untouched by eviction');
+  assert.strictEqual(lighting.pendingCount(), lpBefore,
+    'lighting consumer queue untouched by eviction');
+  // And the update phase drives eviction on its own once over capacity.
+  for (let key = 0; key < w.chunksX * w.chunksY; key++) w.rebuildChunk(key);
+  for (let i = 0; i < 5; i++) w.update(1 / 60);
+  assert.ok(w.chunks.size <= w.chunkCap().cap, 'update-phase eviction capped the cache');
 });

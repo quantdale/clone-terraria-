@@ -379,8 +379,34 @@ Re-verify on a quiet host at close.
   Keep same-session artifacts in memory (in-page diffs) or in the repo
   (delete after); re-create `$env:TEMP\pw-reuse.config.js` if the browser
 gate errors on a missing config.
-- Budget tightening policy: op budgets now 340/400. WS3/WS5/WS6 only lower
-  totals — do NOT loosen; WS7 recalibrates once at close.
+- Budget tightening policy: op budgets now 500/550 totals (loose by
+  measured ±30% respawn wander) + tight 100/120/delta-30 attributed HUD
+  triple. WS3/WS5/WS6 only lower totals — do NOT loosen; WS7 recalibrates
+  once at close.
+
+### WS3 landed (same session)
+
+- `js/world.js`: `update()` rebuilds ≤3/tick inside visible+1 and
+  observe-drains everything outside it (no canvas allocation for unseen
+  terrain) — the exact bounding design the first handoff demanded, same
+  contract as `Lighting.regionRefresh`'s outside-window observe. `draw()`
+  repairs visible chunks that are missing OR still renderer-dirty (closes
+  the stale-canvas-on-roam hole the naive radius gate would have opened).
+  Eviction moved off the per-frame `draw()` path into `update()` behind
+  an O(1) size check; ceiling is viewport-derived (`chunkCap()`: visible
+  + 2 margin per side, [24, 160], FLOOR 75%) — 30 (~30 MB) at 1280×720
+  zoom 2, steady cache ~26. Rebuild window ⊂ keep-set: no treadmill by
+  construction. `regionStats()` gains `farDrained` + `chunkCap` (additive).
+- Numbers (`bench-render.js`, seed 12345): startup rebuilt 511 → 5,
+  evicted 377 → 27 (whole run incl. teleports); stationary 300-frame:
+  rebuilt 5, evicted 9 (all one-time startup camera sweep, zero
+  re-rebuild churn), cache 26/30. Steady-state frame ops unchanged
+  (267) — WS3 buys memory + startup, not per-frame ops, as predicted.
+- `tests/world/chunk-cache.test.js` updated to the plan-mandated contract
+  (eviction driven by `update()`, ceiling from `chunkCap()`): same intents
+  — bounded, spares the screen, no churn, reveal-rebuilds on the spot,
+  no queue disturbance (now asserted for the renderer AND lighting
+  cursors). 2/2 green; full world suites green.
 
 ---
 *Session-scoped handoff for W27 partial execution. `docs/W27-PERFORMANCE-PLAN.md`

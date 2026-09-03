@@ -16,18 +16,43 @@ below) — read that section for actual presentation-layer evidence. See
 
 ## Chunk renderer (`js/world.js`, consumer `'renderer'`)
 
-- **Chunk canvases are a bounded cache (CAP 160 / FLOOR 120).** Each canvas is
-  `CHUNK*TS` square (~1 MB raster). Before bounding, long sessions retained
-  every revealed chunk (~500 MB ceiling on the standard world). Eviction drops
-  farthest-from-camera chunks that are not on screen.
+- **(W27 WS3) Rebuilds are camera-windowed; far regions drain without
+  canvases.** `update()` rebuilds at most 3/tick inside the rebuild window
+  (visible chunks + 1-chunk margin) and OBSERVES everything outside it
+  without allocating a canvas — the same observe-without-rebuild contract
+  `Lighting.regionRefresh` uses, so the per-consumer queue can never grow
+  unboundedly on roaming sessions. Startup burst went 494 rebuilds +
+  336 evictions → 5 rebuilds; a stationary 300-frame run evicts 9 (all
+  from the one-time startup camera sweep, zero re-rebuild churn).
+  `markAll('bulk')` at world creation stays: other consumers need it, and
+  the renderer now drains it for free.
+- **Chunk canvases are a bounded cache with a viewport-derived ceiling**
+  (`chunkCap()`: visible footprint + 2-chunk margin per side, clamped to
+  [24, 160]; FLOOR = 75% of CAP). Each canvas is `CHUNK*TS` square
+  (~1 MB raster). Before bounding, long sessions retained every revealed
+  chunk (~500 MB ceiling on the standard world); the fixed 160 cap that
+  replaced it still retained ~160 MB for a 2×2 working set. At 1280×720
+  zoom 2 the cap is 30 (~30 MB) with the steady cache at ~26. The rebuild
+  window (visible+1) is strictly inside the keep-set (visible+2), so a
+  rebuilt canvas is never evicted: no treadmill by construction.
+  Recomputed per eviction, so resizes/zooms apply immediately.
+- **Eviction runs in the update phase, never in `draw()`.** The size check
+  is O(1) per tick; the full scan+sort only runs while over capacity
+  (then drops to FLOOR). `draw()` stays a pure blit + synchronous repair
+  path and never iterates the whole cache per frame.
+- **`draw()` repairs visible-dirty chunks, not just missing ones.** A
+  roamed-into chunk can hold a stale canvas (far-drained without rebuild);
+  if it is visible AND still dirty in the renderer's cursor it is
+  observed + rebuilt on the spot — the visible set is always fresh.
+  Observing here is cursor-correct (update() would do the same a tick
+  later; draw() can't wait). Without a camera (headless embeds) every
+  region counts as near: old behavior.
 - **Eviction must NOT re-mark WorldRegions.** The region authority is shared;
   a global re-mark forces the minimap and lighting consumers to redo
   still-valid work (this was tried and broke "no perpetual repainting"
-  guarantees). Instead, `draw()` rebuilds any *visible* chunk whose canvas is
-  missing — synchronously, on the spot. Do not "optimize" this into a
-  proactive background rebuild queue: merging missing chunks into the update()
-  candidate list creates a rebuild↔evict treadmill (~3 wasted rebuilds/tick,
-  measured).
+  guarantees). Do not "optimize" visible repair into a proactive
+  background rebuild queue: merging missing chunks into the update()
+  candidate list re-creates the rebuild↔evict treadmill.
 - **Liquid-only region invalidations are skipped by the renderer**
   (`WorldRegions.LIQUID_BIT`). Chunk canvases hold walls+tiles only; liquid
   paints live through `TC.Liquids.draw`. Settling pools previously forced the
