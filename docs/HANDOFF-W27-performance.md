@@ -454,6 +454,39 @@ gate errors on a missing config.
   cursors). 2/2 green; full world suites green.
 
 ---
+
+## WS7 close (same session)
+
+- Truth-sync committed: ARCHITECTURE.md §30 + §12 pointer, TASK_BOARD.md
+  W27 snapshot row, plan statuses (WS1.3/WS2/WS3/WS6 DONE; WS1.4/WS5
+  deferred with analysis), this handoff.
+- `npm run build` + `verify:build` green (verify-dist boots the production
+  output in a real browser: new-game + continue, zero errors).
+- Full `npm test` 625/625 green (final tree, after rebase).
+- Full browser suite: 29/32 green. The 3 failures triaged:
+  - journey O (liquids pumps, debug-HTTP timeout): PASSES in isolation
+    (34.7s) — host-load flake, not WS6 (WS6's liquid suites + replication
+    + minimap + save suites all green; digest identical).
+  - journey K (localization, 150s timeout): fails IDENTICALLY on a
+    pre-W27 worktree (`da66581` + own server port) — environmental, not a
+    W27 regression (K's 3.7MB frame readbacks can't fit 150s on this box
+    right now). Control worktree removed afterwards.
+  - perf frame-time leg (p95 83.5 vs 33): fails identically on pre-WS2
+    code (p95 92.5) — host contention (box carries a disk scan, a WSL VM,
+    3 browsers, qemu, and a second agent session; CPU ~64%). Passed
+    twice on this same box when quiet. Budgets unweakened per ONBOARDING.
+- `node_modules` was wiped externally mid-session (second parallel
+  session's `npm ci`, presumably); restored with pinned `npm ci` — if
+  browser tests suddenly fail with MODULE_NOT_FOUND, reinstall, don't
+  debug the game.
+- Rebase onto `origin/main` (`61ba3fb` ONBOARDING.md — benign) clean,
+  pushed; HEAD == origin/main.
+- RERUN ON A QUIET HOST to flip the two environmental qualifications:
+  `npx playwright test perf -g frame-time` and
+  `npx playwright test journey-k-localization` (then the full suite).
+  No code change should be needed — op counts prove the render path.
+
+---
 *Session-scoped handoff for W27 partial execution. `docs/W27-PERFORMANCE-PLAN.md`
 carries the full plan and per-workstream status; this file carries what
 actually happened, why the deferred items were deferred, and what the next

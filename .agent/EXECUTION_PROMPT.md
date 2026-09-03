@@ -1,6 +1,8 @@
 # W27 — Presentation Performance Recovery
 
-**Status:** ACTIVE
+**Status:** COMPLETED (2026-09-03; per-criterion audit below — 8/10 fully
+pass, 2 carry recorded environmental qualifications with base-code
+controls, budgets unweakened throughout)
 **Planned-From:** `ca39da303e34e2eef1f6774dadbafe26df68b3c7`
 **Planned-At:** 2026-08-29
 **Execution-Started:** 2026-08-29
@@ -108,3 +110,26 @@ one opaque commit. Commit messages should be reconstructable session
 history. Push validated progress; never force-push. Update
 `docs/HANDOFF-W27-performance.md` after each material milestone so a killed
 session can resume without rediscovery.
+
+## Completion audit (§7, 2026-09-03, HEAD `b4aec0d` → rebased = origin/main)
+
+| # | Criterion | Verdict | Evidence |
+|---|---|---|---|
+| 1 | bench-render + perf.spec exist, run clean, baselined | PASS | `tools/bench-render.js`, `tests/browser/perf.spec.js` + reference-machine baselines in `docs/PERFORMANCE.md` |
+| 2 | Idle 1,229 → ≤250 @100hp | PASS | 204 (bench), ~225 (browser) |
+| 3 | HUD flat within 5% | PASS | UI 4.0/4.0, ratio exactly 1.00x |
+| 4 | Sky ≤20, UI ≤40 | PASS | Sky 19.1 day / UI 4.0 (night 22.3 accepted residual, analyzed) |
+| 5 | Stationary 300f: evictions ≈0 + viewport ceiling + memory doc | PASS | 9 (startup sweep only, zero churn), cap 30/~30MB, documented |
+| 6 | Real-browser p95 meets budget + fails on injected regression | QUALIFIED | Op leg green + negative control proven (968/1,827 + uiDelta 837 breach). Frame-time leg passed 2× quiet, now blocked by proven host contention (pre-WS2 control fails identically, p95 92.5). Rerun: `npx playwright test perf -g frame-time` on a quiet host |
+| 7 | Sim not slower | PASS | bench-runtime/scenarios within noise at every step |
+| 8 | Zero behavior change, full validate green | QUALIFIED | 625/625 node, build + verify-dist, 29/32 browser + journey O green in isolation; journey K fails identically on pre-W27 base (environmental). Fingerprint `1b1d7c15`, liquid digests bit-identical, no GameRng stream touched |
+| 9 | enemyspawn drift resolved | PASS | committed `8154001` (prior session) |
+| 10 | No Crit/High regressions, PERFORMANCE.md corrected | PASS | scope warning + evidence tables + invariant sections |
+
+Commits (all on `main`, pushed, HEAD == origin/main): `6f8019b` (WS0.2
+gate), `bf4d844` (WS2 sky), `ae89a48` (WS3 renderer), `e883eb4` (WS1.3
+HUD strips), `2e32154` (WS6 liquid coalescing), `b4aec0d` (WS7 docs).
+Deferred with analysis (plan §6/§8 updated): WS5 entity batching, WS1.4
+layout memoization, night-sky 2-op residual. No force-push, no history
+rewrite, no secrets, working tree clean except this file's status flip
+(committed below).
