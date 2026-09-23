@@ -65,12 +65,15 @@ test("mp packs: digest mismatch rejects before binding a player", () => {
 });
 
 test("mp packs: resource-only difference stays compatible end to end", () => {
-  const host = bootHost();
-  host.TC.Packs.provide({
+  const { TC } = loadGame({});
+  TC.Packs.provide({
     manifest: 1, id: "skins", name: "Skins", version: "1.0.0", type: "resource",
     resources: { locale: { en: { ui: { menu: { new_world: "NEW!" } } } } },
   });
-  host.TC.Packs.setActive(["testpack", "skins"]);
+  TC.Packs.setActive(["skins", "testpack"]);
+  const server = TC.NetServer.create({ seed: 4242 });
+  assert.ok(server.start().ok, "server start failed");
+  const host = { TC, server };
   const clientRealm = loadGame({});
   const TCc = clientRealm.TC;
   // client runs the same GAMEPLAY set but WITHOUT the resource pack

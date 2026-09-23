@@ -60,6 +60,9 @@
   const GAME_VERSION = "0.9"; // compat target for requires.game ranges
 
   const MAX_MANIFEST_BYTES = 256 * 1024; // serialized JSON size cap
+  const MAX_SNAPSHOT_NODES = 16384;
+  const MAX_SNAPSHOT_PROPERTIES = 4096;
+  const MAX_SCAN_ERRORS = 32;
   const MAX_DEPTH = 12; // nested object/array depth cap
   const MAX_NAME = 48;
   const MAX_DESC = 200;
@@ -206,45 +209,118 @@
   // Walks ANY provided structure before schema validation enforces the
   // global invariants that must hold everywhere (types, finiteness, depth,
   // prototype-pollution keys). Schema checks then constrain placement.
-  function safeScan(v, path, depth, errs) {
-    if (depth > MAX_DEPTH) {
-      errs.push(path + ": nesting deeper than " + MAX_DEPTH);
-      return;
+  function scanError(errs, message) {
+    if (errs.length < MAX_SCAN_ERRORS) errs.push(message);
+  }
+
+  function snapshotData(v, path, depth, errs, budget) {
+    budget.nodes++;
+    if (budget.nodes > MAX_SNAPSHOT_NODES) {
+      scanError(errs, path + ": snapshot node limit exceeded");
+      return null;
     }
-    if (v === null || typeof v === "boolean") return;
+    if (depth > MAX_DEPTH) {
+      scanError(errs, path + ": nesting deeper than " + MAX_DEPTH);
+      return null;
+    }
+    if (v === null || typeof v === "boolean") return v;
     const t = typeof v;
     if (t === "number") {
-      if (!isFinite(v)) errs.push(path + ": non-finite number");
-      return;
+      if (!isFinite(v)) {
+        scanError(errs, path + ": non-finite number");
+        return null;
+      }
+      return v;
     }
     if (t === "string") {
-      if (v.length > 4096) errs.push(path + ": string longer than 4096 chars");
-      return;
+      if (v.length > 4096) scanError(errs, path + ": string longer than 4096 chars");
+      return v;
     }
     if (t !== "object") {
-      errs.push(path + ": unsupported value type '" + t + "'");
-      return;
+      scanError(errs, path + ": unsupported value type '" + t + "'");
+      return null;
     }
     if (Array.isArray(v)) {
-      if (v.length > 4096) errs.push(path + ": array longer than 4096");
-      for (let i = 0; i < v.length; i++)
-        safeScan(v[i], path + "[" + i + "]", depth + 1, errs);
-      return;
+      if (v.length > MAX_SNAPSHOT_PROPERTIES) {
+        scanError(errs, path + ": snapshot property limit exceeded");
+        return Object.freeze([]);
+      }
+      const names = Object.getOwnPropertyNames(v);
+      const symbols = typeof Object.getOwnPropertySymbols === "function"
+        ? Object.getOwnPropertySymbols(v)
+        : [];
+      if (names.length > MAX_SNAPSHOT_PROPERTIES + 1 || symbols.length > MAX_SNAPSHOT_PROPERTIES) {
+        scanError(errs, path + ": snapshot property limit exceeded");
+        return Object.freeze([]);
+      }
+      for (const name of names) {
+        if (name === "length") continue;
+        const index = Number(name);
+        if (String(index) !== name || index < 0 || index >= v.length) {
+          scanError(errs, path + "." + name + ": unexpected array property");
+        }
+      }
+      for (const symbol of symbols) scanError(errs, path + ": symbol-keyed field");
+      const out = new Array(v.length);
+      for (let i = 0; i < v.length; i++) {
+        const descriptor = Object.getOwnPropertyDescriptor(v, String(i));
+        if (!descriptor) {
+          scanError(errs, path + "[" + i + "]: sparse array");
+          out[i] = null;
+        } else if (!descriptor.enumerable || descriptor.get || descriptor.set) {
+          scanError(errs, path + "[" + i + "]: accessor or non-enumerable array value");
+          out[i] = null;
+        } else {
+          out[i] = snapshotData(descriptor.value, path + "[" + i + "]", depth + 1, errs, budget);
+        }
+      }
+      return Object.freeze(out);
     }
-    for (const k in v) {
-      if (FORBIDDEN_KEYS[k]) {
-        errs.push(path + "." + k + ": forbidden key (prototype pollution)");
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== null) {
+      const constructor = Object.getOwnPropertyDescriptor(proto, "constructor");
+      if (Object.getPrototypeOf(proto) !== null || !constructor ||
+          typeof constructor.value !== "function" || constructor.value.name !== "Object") {
+        scanError(errs, path + ": unsupported object prototype");
+        return null;
+      }
+    }
+    const names = Object.getOwnPropertyNames(v);
+    const symbols = typeof Object.getOwnPropertySymbols === "function"
+      ? Object.getOwnPropertySymbols(v)
+      : [];
+    if (names.length > MAX_SNAPSHOT_PROPERTIES || symbols.length > MAX_SNAPSHOT_PROPERTIES) {
+      scanError(errs, path + ": snapshot property limit exceeded");
+      return null;
+    }
+    const out = {};
+    for (const name of names) {
+      if (FORBIDDEN_KEYS[name]) {
+        scanError(errs, path + "." + name + ": forbidden key (prototype pollution)");
         continue;
       }
-      safeScan(v[k], path + "." + k, depth + 1, errs);
+      const descriptor = Object.getOwnPropertyDescriptor(v, name);
+      if (!descriptor || !descriptor.enumerable) {
+        scanError(errs, path + "." + name + ": non-enumerable field");
+        continue;
+      }
+      if (descriptor.get || descriptor.set) {
+        scanError(errs, path + "." + name + ": accessor field");
+        continue;
+      }
+      out[name] = snapshotData(descriptor.value, path + "." + name, depth + 1, errs, budget);
     }
+    if (typeof Object.getOwnPropertySymbols === "function") {
+      for (const symbol of symbols) {
+        scanError(errs, path + ": symbol-keyed field");
+      }
+    }
+    return Object.freeze(out);
   }
 
   // ---- versions -----------------------------------------------------------
-  // Versions are dotted integers 'X[.Y[.Z]]' (each 0..999). Ranges:
-  //   '1.2.3'    exact
-  //   '^1.2.3'   same major, >= version
-  //   '>=1.2'    at least
+  // Versions are dotted integers 'X[.Y[.Z]]' (each 0..999). Ranges accept
+  //   exact, caret, and bounded comparator clauses such as '>=1.2 <2'.
   function parseVersion(s) {
     if (typeof s !== "string") return null;
     const parts = s.split(".");
@@ -265,40 +341,88 @@
     return 0;
   }
 
-  function rangeError(range) {
-    if (typeof range !== "string" || range.length > 24) return "bad range";
-    let mode = "exact";
-    let body = range;
-    if (range.slice(0, 2) === ">=") {
-      mode = "min";
-      body = range.slice(2);
-    } else if (range.slice(0, 1) === "^") {
-      mode = "caret";
-      body = range.slice(1);
+  function parseRange(range) {
+    if (typeof range !== "string") return null;
+    const text = range.trim();
+    if (!text.length || text.length > 48) return null;
+    const parts = text.split(/\s+/);
+    if (parts.length > 3) return null;
+    const clauses = [];
+    for (let i = 0; i < parts.length; i++) {
+      const token = parts[i];
+      let op = "=";
+      let body = token;
+      if (token.slice(0, 2) === ">=") { op = ">="; body = token.slice(2); }
+      else if (token.slice(0, 2) === "<=") { op = "<="; body = token.slice(2); }
+      else if (token.slice(0, 1) === ">") { op = ">"; body = token.slice(1); }
+      else if (token.slice(0, 1) === "<") { op = "<"; body = token.slice(1); }
+      else if (token.slice(0, 1) === "^") {
+        if (i !== 0) return null;
+        op = "^";
+        body = token.slice(1);
+      } else if (i !== 0) return null;
+      const version = parseVersion(body);
+      if (!version) return null;
+      clauses.push({ op, version });
     }
-    const v = parseVersion(body);
-    if (!v) return "unparseable version in range";
-    return null;
+    return clauses;
+  }
+
+  function canonicalRange(range) {
+    const clauses = parseRange(range);
+    if (!clauses || clauses.length < 2) return range;
+    const rank = { ">=": 0, ">": 1, "<=": 2, "<": 3, "=": 4, "^": 5 };
+    const anchored = clauses[0].op === "=" || clauses[0].op === "^";
+    const tail = anchored ? clauses.slice(1) : clauses.slice();
+    tail.sort((a, b) => rank[a.op] - rank[b.op] || cmpVersion(a.version, b.version));
+    const ordered = anchored ? [clauses[0]].concat(tail) : tail;
+    return ordered.map((clause) => {
+      const version = clause.version.join(".");
+      return clause.op === "=" ? version : clause.op + version;
+    }).join(" ");
+  }
+
+  function canonicalManifestRanges(manifest) {
+    const out = Object.assign({}, manifest);
+    if (manifest.requires && manifest.requires.packs) {
+      const packs = {};
+      for (const id of Object.keys(manifest.requires.packs)) {
+        packs[id] = canonicalRange(manifest.requires.packs[id]);
+      }
+      out.requires = Object.assign({}, manifest.requires, { packs });
+    }
+    if (manifest.optional && manifest.optional.packs) {
+      const packs = {};
+      for (const id of Object.keys(manifest.optional.packs)) {
+        packs[id] = canonicalRange(manifest.optional.packs[id]);
+      }
+      out.optional = Object.assign({}, manifest.optional, { packs });
+    }
+    return out;
+  }
+
+  function manifestDigest(manifest) {
+    return digestOf(canonicalManifestRanges(manifest));
+  }
+
+  function rangeError(range) {
+    return parseRange(range) ? null : "unparseable version in range";
   }
 
   function versionSatisfies(verStr, range) {
-    if (rangeError(range)) return false;
-    const v = parseVersion(verStr);
-    if (!v) return false;
-    let mode = "exact";
-    let body = range;
-    if (range.slice(0, 2) === ">=") {
-      mode = "min";
-      body = range.slice(2);
-    } else if (range.slice(0, 1) === "^") {
-      mode = "caret";
-      body = range.slice(1);
+    const clauses = parseRange(range);
+    const version = parseVersion(verStr);
+    if (!clauses || !version) return false;
+    for (const clause of clauses) {
+      const compared = cmpVersion(version, clause.version);
+      if (clause.op === "=" && compared !== 0) return false;
+      if (clause.op === ">" && compared <= 0) return false;
+      if (clause.op === ">=" && compared < 0) return false;
+      if (clause.op === "<" && compared >= 0) return false;
+      if (clause.op === "<=" && compared > 0) return false;
+      if (clause.op === "^" && (version[0] !== clause.version[0] || compared < 0)) return false;
     }
-    const r = parseVersion(body);
-    const c = cmpVersion(v, r);
-    if (mode === "min") return c >= 0;
-    if (mode === "caret") return v[0] === r[0] && c >= 0;
-    return c === 0;
+    return true;
   }
 
   // ======================================================================
@@ -394,14 +518,30 @@
     }
     if (m.optional !== undefined) {
       if (!isObj(m.optional)) errs.push("optional must be an object");
-      else if (m.optional.packs !== undefined) {
-        if (!isObj(m.optional.packs)) errs.push("optional.packs must be an object");
-        else {
-          optionalDeps = {};
-          for (const id in m.optional.packs) {
-            const e = rangeError(m.optional.packs[id]);
-            if (e) errs.push("optional.packs.'" + id + "': " + e);
-            else optionalDeps[id] = m.optional.packs[id];
+      else {
+        const knownOptional = { packs: 1 };
+        for (const k in m.optional) {
+          if (!knownOptional[k]) errs.push("unknown optional field '" + k + "'");
+        }
+        if (m.optional.packs !== undefined) {
+          if (!isObj(m.optional.packs)) errs.push("optional.packs must be an object");
+          else {
+            const n = Object.keys(m.optional.packs).length;
+            if (n > MAX_DEPS) errs.push("too many optional packs (max " + MAX_DEPS + ")");
+            optionalDeps = {};
+            for (const id in m.optional.packs) {
+              if (!PACK_ID_RE.test(id)) {
+                errs.push("optional.packs.'" + id + "': bad pack id");
+                continue;
+              }
+              if (id === m.id) {
+                errs.push("pack cannot optionally depend on itself");
+                continue;
+              }
+              const e = rangeError(m.optional.packs[id]);
+              if (e) errs.push("optional.packs.'" + id + "': " + e);
+              else optionalDeps[id] = m.optional.packs[id];
+            }
           }
         }
       }
@@ -511,6 +651,8 @@
   const provided = new Map(); // id -> frozen normalized record
   let activeList = []; // activated pack ids in deterministic order
   let activeRecords = []; // parallel records
+  let activeDigestCache = null;
+  let activeContentDigestCache = null;
   const committed = new Map(); // id -> rawDigest of the LIVE committed content
   let spawnRules = []; // compiled global spawn rules in committed pack order
   let spawnRuleCounter = 0; // deterministic order tick
@@ -528,6 +670,12 @@
   function normalizeRecord(m, parsed) {
     const type = m.type === "resource" ? "resource" : "data";
     const version = m.version == null ? "1.0.0" : m.version;
+    const deps = {};
+    const optionalDeps = {};
+    for (const id of Object.keys(parsed.deps)) deps[id] = canonicalRange(parsed.deps[id]);
+    for (const id of Object.keys(parsed.optionalDeps)) {
+      optionalDeps[id] = canonicalRange(parsed.optionalDeps[id]);
+    }
     return Object.freeze({
       id: m.id,
       name: m.name || m.id,
@@ -535,11 +683,11 @@
       type: type,
       description: m.description || "",
       gameRange: (m.requires && m.requires.game) || null,
-      deps: Object.freeze(Object.assign({}, parsed.deps)),
-      optionalDeps: Object.freeze(Object.assign({}, parsed.optionalDeps)),
+      deps: Object.freeze(deps),
+      optionalDeps: Object.freeze(optionalDeps),
       content: m.content || null,
       resources: m.resources || null,
-      rawDigest: digestOf(m),
+      rawDigest: manifestDigest(m),
     });
   }
 
@@ -548,8 +696,9 @@
   // mutations of the original object cannot mutate registered truth.
   function provide(manifest) {
     const scanErrs = [];
+    let frozen = null;
     try {
-      safeScan(manifest, "manifest", 0, scanErrs);
+      frozen = snapshotData(manifest, "manifest", 0, scanErrs, { nodes: 0 });
     } catch (e) {
       scanErrs.push("scan failed: " + (e && e.message));
     }
@@ -557,16 +706,16 @@
       lastError = PackError("security", "manifest rejected by safety scan", scanErrs);
       throw lastError;
     }
-    const parsed = validateManifestShape(manifest);
-    if (provided.has(manifest.id)) {
-      const prev = provided.get(manifest.id);
-      if (prev.rawDigest === digestOf(manifest)) return prev; // idempotent
+    const parsed = validateManifestShape(frozen);
+    if (provided.has(frozen.id)) {
+      const prev = provided.get(frozen.id);
+      if (prev.rawDigest === manifestDigest(frozen)) return prev; // idempotent
       fail(
         "duplicate",
-        "pack id '" + manifest.id + "' already provided with different content",
+        "pack id '" + frozen.id + "' already provided with different content",
       );
     }
-    const rec = normalizeRecord(manifest, parsed);
+    const rec = normalizeRecord(frozen, parsed);
     provided.set(rec.id, rec);
     statsCounters.provided++;
     return rec;
@@ -614,16 +763,17 @@
         fail("manifest", "malformed pack JSON: " + (e && e.message));
       }
       const scanErrs = [];
+      let frozen = null;
       try {
-        safeScan(data, "manifest", 0, scanErrs);
+        frozen = snapshotData(data, "manifest", 0, scanErrs, { nodes: 0 });
       } catch (e) {
         scanErrs.push("scan failed: " + (e && e.message));
       }
       if (scanErrs.length) {
         fail("security", "manifest rejected by safety scan", scanErrs);
       }
-      validateManifestShape(data);
-      return { id: data.id, rawDigest: digestOf(data) };
+      validateManifestShape(frozen);
+      return { id: frozen.id, rawDigest: manifestDigest(frozen) };
     } catch (e) {
       statsCounters.rejectedJson++;
       throw e;
@@ -708,6 +858,24 @@
       }
     }
 
+    for (const id of chosen) {
+      const rec = provided.get(id);
+      for (const d of Object.keys(rec.optionalDeps)) {
+        if (!chosen.has(d)) continue;
+        const dep = provided.get(d);
+        if (!versionSatisfies(dep.version, rec.optionalDeps[d])) {
+          fail(
+            "version",
+            "incompatible optional dependency version",
+            [
+              "'" + id + "' optionally requires " + d + "@" + rec.optionalDeps[d] +
+                ", available version is " + dep.version,
+            ],
+          );
+        }
+      }
+    }
+
     // Game compat range.
     for (const id of chosen) {
       const gr = provided.get(id).gameRange;
@@ -719,7 +887,7 @@
       }
     }
 
-    // Kahn's algorithm over required edges only; tie-break ascending id so
+    // Kahn's algorithm over active dependency edges; tie-break ascending id so
     // the order depends ONLY on the graph shape, never on provide/request
     // order (WS4 determinism).
     const ids = Array.from(chosen).sort();
@@ -727,9 +895,13 @@
     const dependents = new Map();
     for (const id of ids) {
       const rec = provided.get(id);
-      const reqs = Object.keys(rec.deps).filter((d) => chosen.has(d)).sort();
-      remaining.set(id, reqs);
-      for (const r of reqs) {
+      const before = Object.keys(rec.deps).filter((d) => chosen.has(d));
+      for (const d of Object.keys(rec.optionalDeps)) {
+        if (chosen.has(d) && before.indexOf(d) < 0) before.push(d);
+      }
+      before.sort();
+      remaining.set(id, before);
+      for (const r of before) {
         if (!dependents.has(r)) dependents.set(r, []);
         dependents.get(r).push(id);
       }
@@ -769,21 +941,29 @@
 
   // Reference resolution against the UNION of built-in registry content and
   // already-staged pack content. Bare keys resolve only when unambiguous.
-  function makeResolver(kind, stagedMaps) {
+  function makeResolver(kind, stagedMaps, depender) {
     // stagedMaps: [{key -> stableId}] in staging order.
+    function gate(sid) {
+      if (!depender || typeof sid !== "string") return sid;
+      const ns = sid.indexOf(":") >= 0 ? sid.slice(0, sid.indexOf(":")) : "core";
+      if (ns === "core" || ns === depender.id ||
+          hasOwn(depender.deps, ns) || hasOwn(depender.optionalDeps, ns)) return sid;
+      return { undeclared: sid, pack: ns };
+    }
     return function resolve(ref, what) {
       if (ref == null) return null;
       if (typeof ref === "number") {
-        // Numeric refs mean legacy built-in ids — resolve through registry.
-        return TC.Registry ? TC.Registry.legacyToStable(kind, ref) : null;
+        // Numeric refs mean legacy dense ids — resolve through registry.
+        const sid = TC.Registry ? TC.Registry.legacyToStable(kind, ref) : null;
+        return sid ? gate(sid) : null;
       }
       if (typeof ref !== "string" || !ref.length) return null;
       if (ref.indexOf(":") >= 0) {
         // Explicitly namespaced: built-in registry knows core:*; staged
         // entries know their own ns:name.
-        if (TC.Registry && TC.Registry.has(kind, ref)) return ref;
+        if (TC.Registry && TC.Registry.has(kind, ref)) return gate(ref);
         for (const sm of stagedMaps) {
-          if (sm && hasOwn(sm, ref)) return sm[ref];
+          if (sm && hasOwn(sm, ref)) return gate(sm[ref]);
         }
         return null;
       }
@@ -795,7 +975,7 @@
           if (candidates.indexOf(sm[ref]) < 0) candidates.push(sm[ref]);
         }
       }
-      if (candidates.length === 1) return candidates[0];
+      if (candidates.length === 1) return gate(candidates[0]);
       if (candidates.length > 1) {
         return { ambiguous: candidates }; // caller reports
       }
@@ -807,6 +987,13 @@
     const r = resolve(ref, kind);
     if (r == null) {
       problems.push(who + ": " + field + " '" + ref + "' does not resolve to a registered " + kind);
+      return null;
+    }
+    if (r && r.undeclared) {
+      problems.push(
+        who + ": " + field + " '" + ref + "' cross-pack reference requires declared dependency on '" +
+          r.pack + "'",
+      );
       return null;
     }
     if (r && r.ambiguous) {
@@ -889,6 +1076,11 @@
     if (!content) return out;
     const ns = rec.id;
     const P = [];
+    const resolveItem = makeResolver("item", ctx.stagedMapsItems, rec);
+    const resolveEnemy = makeResolver("enemy", ctx.stagedMapsEnemies, rec);
+    const resolveTile = makeResolver("tile", ctx.stagedMapsTiles, rec);
+    const resolveWall = makeResolver("wall", ctx.stagedMapsWalls, rec);
+    const resolveLootTable = makeResolver("lootTable", ctx.stagedMapsLootTables, rec);
 
     // Reserve identities first so intra-pack references resolve below.
     reserveNames(rec, ctx, P);
@@ -945,7 +1137,7 @@
         }
         def.light = t.light || 0;
         if (t.drop != null) {
-          const dropId = needRef(ctx.resolveItem, "item", t.drop, who, "drop", P);
+          const dropId = needRef(resolveItem, "item", t.drop, who, "drop", P);
           if (dropId == null) continue;
           def.drop = t.drop; // consumers resolve through the same union
         }
@@ -1040,12 +1232,12 @@
           // indices exist only once the dense tables grow); keep the
           // validated ref until then.
           if (hasTileRef) {
-            const tsid = needRef(ctx.resolveTile, "tile", it.tile, who, "tile", P);
+            const tsid = needRef(resolveTile, "tile", it.tile, who, "tile", P);
             if (tsid == null) continue;
             def._tileRef = it.tile;
           }
           if (hasWallRef) {
-            const wsid = needRef(ctx.resolveWall, "wall", it.wall, who, "wall", P);
+            const wsid = needRef(resolveWall, "wall", it.wall, who, "wall", P);
             if (wsid == null) continue;
             def._wallRef = it.wall;
           }
@@ -1079,7 +1271,7 @@
             P.push(who + ": summon items must reference a boss/enemy");
             continue;
           }
-          const eid = needRef(ctx.resolveEnemy, "enemy", it.boss, who, "boss", P);
+          const eid = needRef(resolveEnemy, "enemy", it.boss, who, "boss", P);
           if (eid == null) continue;
           // Target-def policy checks are DEFERRED until every family of
           // every pack is staged (intra-pack forward references are legal:
@@ -1240,7 +1432,7 @@
           def.boss = en.boss;
         }
         if (en.lootTable != null) {
-          const lsid = needRef(ctx.resolveLootTable, "lootTable", en.lootTable, who, "lootTable", P);
+          const lsid = needRef(resolveLootTable, "lootTable", en.lootTable, who, "lootTable", P);
           if (lsid == null) continue;
           def.lootTable = en.lootTable;
         }
@@ -1264,7 +1456,7 @@
                 P.push(dwho + ": unknown field '" + k + "'");
               }
             }
-            const iid = needRef(ctx.resolveItem, "item", dr.id, dwho, "id", P);
+            const iid = needRef(resolveItem, "item", dr.id, dwho, "id", P);
             if (iid == null) {
               ok = false;
               break;
@@ -1350,7 +1542,7 @@
         }
         def.hardness = wl.hardness == null ? 0.5 : wl.hardness;
         if (wl.drop != null) {
-          const dropId = needRef(ctx.resolveItem, "item", wl.drop, who, "drop", P);
+          const dropId = needRef(resolveItem, "item", wl.drop, who, "drop", P);
           if (dropId == null) continue;
           def.drop = wl.drop;
         }
@@ -1402,7 +1594,7 @@
               P.push(ewho + ": unknown field '" + k + "'");
             }
           }
-          const iid = needRef(ctx.resolveItem, "item", en.id, ewho, "id", P);
+          const iid = needRef(resolveItem, "item", en.id, ewho, "id", P);
           if (iid == null) { ok = false; break; }
           const mn = en.min == null ? 1 : en.min;
           const mx = en.max == null ? mn : en.max;
@@ -1457,7 +1649,7 @@
           }
         }
         if (sr.enemy == null) { P.push(who + ": enemy required"); continue; }
-        const eid = needRef(ctx.resolveEnemy, "enemy", sr.enemy, who, "enemy", P);
+        const eid = needRef(resolveEnemy, "enemy", sr.enemy, who, "enemy", P);
         if (eid == null) continue;
         // Boss check: must not reference boss machinery
         let edef = null;
@@ -1465,11 +1657,6 @@
         if (!edef && ctx.stagedEnemyDefs) edef = ctx.stagedEnemyDefs[eid] || null;
         if (edef && edef.boss === true) { P.push(who + ": enemy '" + eid + "' is boss machinery (not spawnable)"); continue; }
         if (edef && edef.ai && BOSS_AI[edef.ai]) { P.push(who + ": enemy '" + eid + "' uses boss AI '" + edef.ai + "'"); continue; }
-        const enemyPack = eid.indexOf(':') >= 0 ? eid.split(':')[0] : 'core';
-        if (enemyPack !== ns && enemyPack !== 'core' && !rec.deps[enemyPack] && !(rec.optionalDeps && rec.optionalDeps[enemyPack])) {
-          P.push(who + ": enemy '" + eid + "' cross-pack reference requires declared dependency");
-          continue;
-        }
         if (typeof sr.zone !== "string" || !ALLOWED_ZONES[sr.zone]) { P.push(who + ": zone must be one of day|night|cave|underworld"); continue; }
         if (!boundedNum(sr.weight, 0.01, 10)) { P.push(who + ": weight must be a number within 0.01..10"); continue; }
         if (sr.biome != null && (typeof sr.biome !== "string" || !ALLOWED_BIOMES[sr.biome])) { P.push(who + ": biome must be one of forest|desert|snow|jungle|ocean|corruption"); continue; }
@@ -1520,7 +1707,7 @@
           P.push(who + ": output item required");
           continue;
         }
-        if (needRef(ctx.resolveItem, "item", outRef, who, "out", P) == null) continue;
+        if (needRef(resolveItem, "item", outRef, who, "out", P) == null) continue;
         const n = rc.n == null ? 1 : rc.n;
         if (!boundedInt(n, 1, 999)) {
           P.push(who + ": yield must be an integer within 1..999");
@@ -1537,7 +1724,7 @@
         }
         let ok = true;
         for (const ck of costKeys) {
-          if (needRef(ctx.resolveItem, "item", ck, who, "cost ingredient", P) == null) {
+          if (needRef(resolveItem, "item", ck, who, "cost ingredient", P) == null) {
             ok = false;
             break;
           }
@@ -1698,9 +1885,11 @@
           TC.Registry.forgetLast(j.regDefs[i].kind, j.regDefs[i].id);
         }
       }
-      for (const h of j.locHandles) {
+      for (let i = j.locHandles.length - 1; i >= 0; i--) {
+        const h = j.locHandles[i];
         if (h && typeof h.undo === "function") h.undo();
       }
+      statsCounters.committedEntries = j.committedEntries;
       statsCounters.rollbacks++;
     } catch (e) {
       // Rollback itself failed: leave nothing half-done silently.
@@ -1923,9 +2112,8 @@
     }
 
     // Session permanence: committed pack content extends dense tables that
-    // saves and hot paths index into — it cannot be withdrawn without
-    // shifting identities. A request therefore must KEEP every committed
-    // pack (same content digest), and may only ADD new ones.
+    // saves and hot paths index into — it cannot be withdrawn or reordered.
+    // A request may only APPEND new packs after the live canonical prefix.
     for (const id of Array.from(committed.keys()).sort()) {
       if (ordered.indexOf(id) < 0) {
         statsCounters.failed++;
@@ -1936,6 +2124,17 @@
         );
         throw lastError;
       }
+    }
+
+    for (let i = 0; i < activeList.length; i++) {
+      if (ordered[i] === activeList[i]) continue;
+      statsCounters.failed++;
+      lastError = PackError(
+        "commit",
+        "activation would reorder already-live pack '" + activeList[i] +
+          "'; changing the active order requires a fresh session",
+      );
+      throw lastError;
     }
 
     // Fast path: identical active set -> no-op.
@@ -1968,12 +2167,6 @@
       stagedEnemyDefs: {},
       pendingSummonChecks: [],
     };
-    ctx.resolveItem = makeResolver("item", ctx.stagedMapsItems);
-    ctx.resolveEnemy = makeResolver("enemy", ctx.stagedMapsEnemies);
-    ctx.resolveTile = makeResolver("tile", ctx.stagedMapsTiles);
-    ctx.resolveWall = makeResolver("wall", ctx.stagedMapsWalls);
-    ctx.resolveLootTable = makeResolver("lootTable", ctx.stagedMapsLootTables);
-
     const stagedByPack = [];
     try {
       for (const id of ordered) {
@@ -2039,6 +2232,7 @@
       enemyKeys: [],
       regDefs: [],
       locHandles: [],
+      committedEntries: statsCounters.committedEntries,
     };
     try {
       for (const { rec, staged } of stagedByPack) {
@@ -2072,6 +2266,8 @@
 
     activeList = ordered;
     activeRecords = ordered.map((id) => provided.get(id));
+    activeDigestCache = null;
+    activeContentDigestCache = null;
     statsCounters.ok++;
 
     if (opts.persist !== false && TC.Settings) {
@@ -2111,24 +2307,24 @@
   // lines over DATA packs only. Resource packs NEVER change it, so two
   // peers differing only in presentation packs stay multiplayer-compatible.
   function digest() {
+    if (activeDigestCache !== null) return activeDigestCache;
     const lines = [];
     for (const r of activeRecords) {
       if (r.type !== "data") continue;
       lines.push(r.id + "@" + r.version + "@" + r.rawDigest);
     }
-    if (!lines.length) return "";
-    lines.sort();
-    return fnv1a(lines.join("\n")).toString(16);
+    activeDigestCache = lines.length ? fnv1a(lines.sort().join("\n")).toString(16) : "";
+    return activeDigestCache;
   }
 
   function contentDigest() {
+    if (activeContentDigestCache !== null) return activeContentDigestCache;
     const lines = [];
     for (const r of activeRecords) {
       lines.push(r.id + "@" + r.version + "@" + r.type + "@" + r.rawDigest);
     }
-    if (!lines.length) return "";
-    lines.sort();
-    return fnv1a(lines.join("\n")).toString(16);
+    activeContentDigestCache = lines.length ? fnv1a(lines.sort().join("\n")).toString(16) : "";
+    return activeContentDigestCache;
   }
 
   // Envelope metadata payload; null when no packs are active (pre-W25
@@ -2189,7 +2385,8 @@
     for (const r of activeRecords) activeById.set(r.id, r);
     const seenIds = new Set();
     for (const p of meta.packs) {
-      if (!isObj(p) || typeof p.id !== "string" || typeof p.version !== "string") {
+      if (!isObj(p) || typeof p.id !== "string" || typeof p.version !== "string" ||
+          (p.type !== "data" && p.type !== "resource")) {
         return {
           ok: false,
           status: "malformed-metadata",
@@ -2212,11 +2409,32 @@
           "incompatible version: save has '" + p.id + "'@" + p.version +
             " but active version is " + cur.version,
         );
+      } else if (cur.type !== p.type) {
+        problems.push(
+          "incompatible pack type: save has '" + p.id + "' as " + p.type +
+            " but active type is " + cur.type,
+        );
       }
+    }
+    if (meta.fp !== contentDigest()) {
+      problems.push(
+        "content fingerprint mismatch: save has " + meta.fp +
+          " but active content digest is " + contentDigest(),
+      );
+    }
+    if (meta.gfp !== digest()) {
+      problems.push(
+        "gameplay fingerprint mismatch: save has " + meta.gfp +
+          " but active gameplay digest is " + digest(),
+      );
     }
     for (const r of activeRecords) {
       if (!seenIds.has(r.id)) {
-        warnings.push("active pack not present in save: " + r.id);
+        if (r.type === "data") {
+          problems.push("active data pack not present in save: " + r.id);
+        } else {
+          warnings.push("active pack not present in save: " + r.id);
+        }
       }
     }
     if (problems.length) {

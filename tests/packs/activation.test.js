@@ -54,13 +54,13 @@ test('activation: failed multi-pack transaction leaves zero mutation (rollback)'
   const itemKeys = Object.keys(TC.ITEM_DEFS).length;
 
   TC.Packs.provide({
-    manifest: 1, id: 'halftone', name: 'Half Tone', version: '1.0.0', type: 'data',
+    manifest: 1, id: 'zhalftone', name: 'Half Tone', version: '1.0.0', type: 'data',
     content: {
       items: [{ key: 'tone_a', name: 'Tone A', kind: 'material' }],
       recipes: [{ rid: 'bad', out: 'ghost_item_never_defined', cost: { stone: 1 } }],
     },
   });
-  assert.throws(() => TC.Packs.setActive(['testpack', 'halftone']),
+  assert.throws(() => TC.Packs.setActive(['testpack', 'zhalftone']),
     /content failed validation/, 'invalid pack #2 fails the whole transaction');
   assert.strictEqual(Object.keys(TC.ITEM_DEFS).length, itemKeys,
     'no half-installed content remains');
@@ -83,22 +83,68 @@ test('activation: session-permanent content cannot be silently dropped or change
     'no double-commit on re-activation');
 });
 
+test('activation: overlapping resource rollback restores localization exactly', () => {
+  const TC = fresh();
+  const resource = (id, value) => ({
+    manifest: 1, id, name: id, version: '1.0.0', type: 'resource',
+    resources: { locale: { en: { ui: { menu: { new_world: value } } } } },
+  });
+  TC.Packs.provide(resource('loc_one', 'One'));
+  TC.Packs.provide(resource('loc_two', 'Two'));
+  const before = TC.Localization.t('ui.menu.new_world');
+  const validate = TC.Registry.validate;
+  TC.Registry.validate = () => { throw new Error('forced commit failure'); };
+  try {
+    assert.throws(() => TC.Packs.setActive(['loc_one', 'loc_two']), /forced commit failure/);
+  } finally {
+    TC.Registry.validate = validate;
+  }
+  assert.strictEqual(TC.Localization.t('ui.menu.new_world'), before);
+  assert.strictEqual(TC.Packs.active().length, 0);
+  assert.strictEqual(TC.Packs.digest(), '');
+  assert.strictEqual(TC.Packs.contentDigest(), '');
+  assert.strictEqual(TC.Packs.stats().committedEntries, 0);
+});
+
+test('activation: live packs may append but never reorder canonical identity', () => {
+  const TC = fresh();
+  TC.Packs.provide({ manifest: 1, id: 'zold', name: 'ZO', version: '1.0.0', type: 'data',
+    content: { items: [{ key: 'old_item', name: 'Old', kind: 'material' }] } });
+  TC.Packs.provide({ manifest: 1, id: 'zznew', name: 'ZN', version: '1.0.0', type: 'data',
+    content: { items: [{ key: 'new_item', name: 'New', kind: 'material' }] } });
+  TC.Packs.provide({ manifest: 1, id: 'anew', name: 'AN', version: '1.0.0', type: 'data',
+    content: { items: [{ key: 'ahead_item', name: 'Ahead', kind: 'material' }] } });
+  TC.Packs.setActive(['zold']);
+  assert.throws(() => TC.Packs.setActive(['zold', 'anew']), /fresh session/);
+  assert.strictEqual(TC.Packs.active().join(','), 'zold');
+  TC.Packs.setActive(['zold', 'zznew']);
+
+  const freshOrder = fresh();
+  freshOrder.Packs.provide({ manifest: 1, id: 'zold', name: 'ZO', version: '1.0.0', type: 'data',
+    content: { items: [{ key: 'old_item', name: 'Old', kind: 'material' }] } });
+  freshOrder.Packs.provide({ manifest: 1, id: 'zznew', name: 'ZN', version: '1.0.0', type: 'data',
+    content: { items: [{ key: 'new_item', name: 'New', kind: 'material' }] } });
+  freshOrder.Packs.setActive(['zold', 'zznew']);
+  assert.strictEqual(TC.Registry.fingerprint(), freshOrder.Registry.fingerprint());
+  assert.strictEqual(TC.Packs.digest(), freshOrder.Packs.digest());
+});
+
 test('identity: digests are deterministic across realms and repeat activations', () => {
   const a = fresh(); a.Packs.setActive(['testpack']);
   const b = fresh(); b.Packs.setActive(['testpack']);
   assert.strictEqual(a.Packs.digest(), b.Packs.digest());
   assert.strictEqual(a.Packs.contentDigest(), b.Packs.contentDigest());
   assert.notStrictEqual(a.Packs.digest(), '', 'gameplay digest non-empty');
-  // resource-only difference keeps the GAMEPLAY digest identical
-  a.Packs.provide({
+  const c = fresh();
+  c.Packs.provide({
     manifest: 1, id: 'skinonly', name: 'Skin Only', version: '1.0.0',
     type: 'resource',
     resources: { locale: { en: { ui: { menu: { new_world: 'NEW WORLD!!!' } } } } },
   });
-  a.Packs.setActive(['testpack', 'skinonly']);
-  assert.strictEqual(a.Packs.digest(), b.Packs.digest(),
+  c.Packs.setActive(['skinonly', 'testpack']);
+  assert.strictEqual(c.Packs.digest(), b.Packs.digest(),
     'resource packs never change gameplay identity');
-  assert.notStrictEqual(a.Packs.contentDigest(), b.Packs.contentDigest(),
+  assert.notStrictEqual(c.Packs.contentDigest(), b.Packs.contentDigest(),
     'but they do change content identity');
 });
 
@@ -113,15 +159,13 @@ test('identity: dependency order is topological with ascending-id tie-breaks', (
   TC.Packs.provide({ manifest: 1, id: 'ytop', name: 'YT', version: '1.0.0', type: 'data',
     requires: { packs: { amid: '^1.0.0', zbase: '^1.0.0' } },
     content: { items: [{ key: 'yt_item', name: 'YTI', kind: 'material' }] } });
-  const r = TC.Packs.setActive(['ytop']); // request order irrelevant
-  assert.strictEqual(r.activated.join(''), ['zbase','amid','ytop'].join(''),
-    'deps before dependents, ascending ids among equals');
-  // cross-pack reference: ytop recipe costing zbase's bare key resolves
   TC.Packs.provide({
     manifest: 1, id: 'acook', name: 'AC', version: '1.0.0', type: 'data',
     requires: { packs: { zbase: '^1.0.0' } },
     content: { recipes: [{ rid: 'mix', out: 'zb_item', cost: { stone: 1 } }] } });
-  TC.Packs.setActive(['ytop', 'acook']);
+  const r = TC.Packs.setActive(['ytop', 'acook']);
+  assert.strictEqual(r.activated.join(''), ['zbase','acook','amid','ytop'].join(''),
+    'deps before dependents, ascending ids among equals');
   const rec = TC.RECIPES[TC.RECIPES.length - 1];
   assert.strictEqual(rec.out, 'zb_item', 'cross-pack out normalized to canonical key');
 });

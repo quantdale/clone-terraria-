@@ -52,7 +52,7 @@ test('classify: full compatibility matrix', () => {
     'legacy save + active packs warns informatively');
 
   // exact match
-  const meta = { v: 1, fp: 'x', gfp: 'y', packs: [{ id: 'testpack', version: '1.0.0', type: 'data' }] };
+  const meta = TC.Packs.saveMetadata();
   cls = TC.Packs.classifySave(meta);
   assert.ok(cls.ok && cls.status === 'compatible' && cls.problems.length === 0);
 
@@ -65,23 +65,52 @@ test('classify: full compatibility matrix', () => {
 
   // incompatible version
   const TCc = fresh();
-  TCc.Packs.setActive(['testpack']);
   TCc.Packs.provide({
     manifest: 1, id: 'otherpack', name: 'O', version: '9.9.9', type: 'data',
     content: { items: [{ key: 'op_item', name: 'OP', kind: 'material' }] },
   });
-  TCc.Packs.setActive(['testpack', 'otherpack']);
-  cls = TCc.Packs.classifySave({
-    v: 1, fp: 'x', gfp: 'y',
+  TCc.Packs.setActive(['otherpack', 'testpack']);
+  cls = TCc.Packs.classifySave(Object.assign({}, meta, {
     packs: [{ id: 'testpack', version: '2.0.0', type: 'data' }],
-  });
+  }));
   assert.ok(!cls.ok && cls.problems[0].indexOf('incompatible version') >= 0);
+
+  const contentMismatch = TC.Packs.classifySave(Object.assign({}, meta, { fp: 'deadbeef' }));
+  assert.ok(!contentMismatch.ok && contentMismatch.problems.some((p) => /content fingerprint mismatch/.test(p)));
+  const gameplayMismatch = TC.Packs.classifySave(Object.assign({}, meta, { gfp: 'deadbeef' }));
+  assert.ok(!gameplayMismatch.ok && gameplayMismatch.problems.some((p) => /gameplay fingerprint mismatch/.test(p)));
+  const omitted = TC.Packs.classifySave(Object.assign({}, meta, { packs: [] }));
+  assert.ok(!omitted.ok && omitted.problems.some((p) => /active data pack not present/.test(p)));
+  const wrongType = TC.Packs.classifySave(Object.assign({}, meta, {
+    packs: [{ id: 'testpack', version: '1.0.0', type: 'resource' }],
+  }));
+  assert.ok(!wrongType.ok && wrongType.problems.some((p) => /incompatible pack type/.test(p)));
 
   // malformed metadata
   for (const bad of [42, {}, { v: 1 }, { v: 1, fp: '', gfp: '', packs: 'no' }]) {
     cls = TCc.Packs.classifySave(bad);
     assert.ok(!cls.ok && cls.status === 'malformed-metadata', JSON.stringify(bad));
   }
+});
+
+test('classify: same id and version with changed content is fingerprint-incompatible', () => {
+  function pack(value) {
+    return {
+      manifest: 1, id: 'changedpack', name: 'Changed', version: '1.0.0', type: 'data',
+      content: { items: [{ key: 'token', name: value, kind: 'material' }] },
+    };
+  }
+  const a = fresh();
+  a.Packs.provide(pack('Original'));
+  a.Packs.setActive(['changedpack']);
+  const meta = a.Packs.saveMetadata();
+  const b = fresh();
+  b.Packs.provide(pack('Changed'));
+  b.Packs.setActive(['changedpack']);
+  const cls = b.Packs.classifySave(meta);
+  assert.ok(!cls.ok);
+  assert.ok(cls.problems.some((problem) => /content fingerprint mismatch/.test(problem)));
+  assert.ok(cls.problems.some((problem) => /gameplay fingerprint mismatch/.test(problem)));
 });
 
 test('cycle: save with pack -> fresh realm without it refuses cleanly; restore succeeds', () => {

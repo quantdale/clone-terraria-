@@ -109,6 +109,140 @@ test('loader: security scan rejects prototype pollution, functions, non-finites'
   assert.throws(() => TC.Packs.provide(goodManifest({ content: { items: [deep] } })), /nesting deeper/);
 });
 
+test('loader: provided manifests are detached and deeply frozen', () => {
+  const TC = fresh();
+  const manifest = goodManifest({ id: 'detached' });
+  TC.Packs.provide(manifest);
+  manifest.content.items[0].value = 999;
+  manifest.content.items.push({ key: 'sneaky', name: 'Sneaky', kind: 'material' });
+  const record = TC.Packs.getManifest('detached');
+  assert.ok(Object.isFrozen(record));
+  assert.ok(Object.isFrozen(record.content));
+  assert.ok(Object.isFrozen(record.content.items));
+  assert.ok(Object.isFrozen(record.content.items[0]));
+  assert.throws(() => { record.content.items[0].value = 1; }, TypeError);
+  TC.Packs.setActive(['detached']);
+  assert.strictEqual(TC.ITEM_DEFS.good_gem.value, 5);
+  assert.strictEqual(Object.values(TC.ITEM_DEFS).filter((def) => def.name === 'Sneaky').length, 0);
+});
+
+test('loader: programmatic manifests reject hidden, inherited, and accessor fields', () => {
+  const TC = fresh();
+  const before = TC.Packs.available().length;
+
+  const nonEnumerable = goodManifest({ id: 'hidden' });
+  Object.defineProperty(nonEnumerable, 'optional', {
+    value: { packs: {} }, enumerable: false,
+  });
+  assert.throws(() => TC.Packs.provide(nonEnumerable), /non-enumerable field/);
+
+  const symbolKeyed = goodManifest({ id: 'symbolic' });
+  symbolKeyed[Symbol('hidden')] = true;
+  assert.throws(() => TC.Packs.provide(symbolKeyed), /symbol-keyed field/);
+
+  const dateTyped = goodManifest({ id: 'dated', optional: new Date() });
+  assert.throws(() => TC.Packs.provide(dateTyped), /unsupported object/);
+
+  let touched = false;
+  const accessor = goodManifest({ id: 'accessor' });
+  Object.defineProperty(accessor, 'optional', {
+    enumerable: true,
+    get() { touched = true; return { packs: {} }; },
+  });
+  assert.throws(() => TC.Packs.provide(accessor), /accessor field/);
+  assert.strictEqual(touched, false);
+
+  const arrayProperty = goodManifest({ id: 'arrayprop' });
+  Object.defineProperty(arrayProperty.content.items, 'extra', { value: true, enumerable: false });
+  assert.throws(() => TC.Packs.provide(arrayProperty), /unexpected array property/);
+
+  let arrayTouched = false;
+  const arrayAccessor = goodManifest({ id: 'arrayaccess' });
+  Object.defineProperty(arrayAccessor.content.items, '0', {
+    enumerable: true,
+    get() { arrayTouched = true; return { key: 'x', name: 'X', kind: 'material' }; },
+  });
+  assert.throws(() => TC.Packs.provide(arrayAccessor), /accessor or non-enumerable array value/);
+  assert.strictEqual(arrayTouched, false);
+
+  let tagTouched = false;
+  const symbolTag = goodManifest({ id: 'symboltag' });
+  Object.defineProperty(symbolTag, Symbol.toStringTag, {
+    enumerable: true,
+    get() { tagTouched = true; return 'Object'; },
+  });
+  assert.throws(() => TC.Packs.provide(symbolTag), /symbol-keyed field/);
+  assert.strictEqual(tagTouched, false);
+
+  const inherited = Object.assign(Object.create({ optional: { packs: {} } }), goodManifest({ id: 'inherited' }));
+  assert.throws(() => TC.Packs.provide(inherited), /inherited field|unsupported object prototype/);
+
+  const hiddenProto = {};
+  Object.defineProperty(hiddenProto, 'optional', { value: { packs: {} }, enumerable: false });
+  const hiddenInherited = Object.assign(Object.create(hiddenProto), goodManifest({ id: 'hiddeninherit' }));
+  assert.throws(() => TC.Packs.provide(hiddenInherited), /unsupported object prototype|inherited field/);
+
+  assert.strictEqual(TC.Packs.available().length, before);
+});
+
+test('loader: proxy descriptors cannot inject unvalidated manifest data', () => {
+  const TC = fresh();
+  const before = TC.Packs.available().length;
+  const target = goodManifest({ id: 'proxied' });
+  const proxy = new Proxy(target, {
+    getOwnPropertyDescriptor(object, property) {
+      if (property === 'content') {
+        return {
+          value: { constructor() {}, callback() {} },
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        };
+      }
+      return Object.getOwnPropertyDescriptor(object, property);
+    },
+  });
+  assert.throws(() => TC.Packs.provide(proxy), /safety scan|security|invalid manifest/);
+  assert.strictEqual(TC.Packs.available().length, before);
+  assert.strictEqual(TC.Packs.getManifest('proxied'), null);
+});
+
+test('loader: ambient non-enumerable Object.prototype extensions remain compatible', () => {
+  const TC = fresh();
+  Object.defineProperty(Object.prototype, 'ambientPackPolyfill', {
+    value: true,
+    configurable: true,
+  });
+  try {
+    const record = TC.Packs.provide(goodManifest({ id: 'ambient' }));
+    assert.strictEqual(record.id, 'ambient');
+  } finally {
+    delete Object.prototype.ambientPackPolyfill;
+  }
+});
+
+test('loader: programmatic size limits fail with bounded diagnostics', () => {
+  const TC = fresh();
+  const before = TC.Packs.available().length;
+  const oversizedArray = goodManifest({ id: 'oversizedarray' });
+  oversizedArray.content.items = new Array(5000);
+  let arrayError = null;
+  try { TC.Packs.provide(oversizedArray); } catch (error) { arrayError = error; }
+  assert.ok(arrayError);
+  assert.match(arrayError.message, /snapshot property limit/);
+  assert.ok(arrayError.details.length <= 32);
+
+  const wideEntry = goodManifest({ id: 'wideentry' });
+  for (let i = 0; i < 5000; i++) wideEntry.content.items[0]['field' + i] = i;
+  let objectError = null;
+  try { TC.Packs.provide(wideEntry); } catch (error) { objectError = error; }
+  assert.ok(objectError);
+  assert.match(objectError.message, /snapshot property limit/);
+  assert.ok(objectError.details.length <= 32);
+
+  assert.strictEqual(TC.Packs.available().length, before);
+});
+
 test('loader: reserved namespaces cannot be hijacked', () => {
   const TC = fresh();
   for (const id of ['core', 'tc', 'system']) {
