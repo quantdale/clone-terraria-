@@ -371,7 +371,7 @@
 
   // PERF (W27 WS2): orb/cloud/star bakes. Shapes are static (seeded once per
   // boot); only position/alpha move per frame, so bake the pixels once and
-  // blit (save + alpha + drawImage + restore). All paint functions below
+  // blit (alpha + drawImage + alpha restore). All paint functions below
   // take explicit (g, cx, cy) targets and are shared verbatim between the
   // bake and the no-document fallback — baked and direct pixels match.
   function paintSun(g, x, y) {
@@ -452,10 +452,10 @@
       // Integer blit (<=0.5px): invisible on a 90px glow. Alpha is exact.
       const sp = orbSprites(isSun);
       const cv = isSun ? sp.cv : sp.cv[mph];
-      c.save();
+      const prevAlpha = c.globalAlpha;
       c.globalAlpha = a;
       c.drawImage(cv, Math.round(x - sp.c), Math.round(y - sp.c));
-      c.restore();
+      c.globalAlpha = prevAlpha;
       return;
     }
     c.save();
@@ -521,8 +521,8 @@
     if (!canBake()) { paintCloudsDirect(c, w, h, cam, timeNow, style); return; }
     if (!cloudSprites) buildCloudSprites();
     const span = w + 320;
-    c.save();
     // Same 3-decimal alpha the direct path's fillStyle carries — exact.
+    const prevAlpha = c.globalAlpha;
     c.globalAlpha = +(0.30 + 0.42 * dl).toFixed(3);
     for (let i = 0; i < cloudSprites.length; i++) {
       const sp = cloudSprites[i];
@@ -531,7 +531,7 @@
       const y = cl.v * h - cam.y * 0.05;
       c.drawImage(sp.cv, Math.round(x + sp.ox), Math.round(y + sp.oy));
     }
-    c.restore();
+    c.globalAlpha = prevAlpha;
   }
 
   // Star field as ONE baked sprite. The original drew each star with
@@ -573,10 +573,10 @@
     }
     const key = Math.ceil(w) + 'x' + Math.ceil(h);
     if (!starSprite || starSprite.key !== key) starSprite = buildStarSprite(w, h);
-    c.save();
+    const prevAlpha = c.globalAlpha;
     c.globalAlpha = sa;
     c.drawImage(starSprite.cv, 0, 0);
-    c.restore();
+    c.globalAlpha = prevAlpha;
   }
 
   // Sky gradient as one baked fullscreen canvas. The palette is a pure

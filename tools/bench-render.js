@@ -244,6 +244,12 @@ results.push(measure('24-enemies-on-screen', () => {
     for (let i = 0; i < 24; i++) TC.Enemies.spawnEnemy('green_slime', p.x + (i % 12) * 20 - 120, p.y - 40);
   }
 }));
+results.push(measure('idle-night', () => {
+  TC.Runtime.createWorld(SEED);
+  wrapDrawer(TC, tally, attr, 'player', 'draw');
+  wrapDrawer(TC, tally, attr, 'world', 'draw');
+  TC.Sky.time = TC.CONST.DAY_LENGTH + TC.CONST.NIGHT_LENGTH * 0.5;
+}));
 
 for (const r of results) printResult(r);
 
@@ -258,7 +264,10 @@ console.log('  ratio:', baseUi > 0 ? (scaledUi / baseUi).toFixed(2) + 'x' : 'n/a
   '(1.00x = flat / fixed; the plan target)');
 
 console.log('\n-- engine stats (idle-100hp scene) --');
-measure('idle-100hp (canonical scene)', () => { TC.player.lifeCrystals = 0; TC.player.hp = 100; });
+measure('idle-100hp (canonical scene)', () => {
+  TC.Sky.time = TC.CONST.DAY_LENGTH * 0.15;
+  TC.player.lifeCrystals = 0; TC.player.hp = 100;
+});
 const s = (o) => { try { return o && o.stats ? JSON.stringify(o.stats()) : null; } catch (e) { return null; } };
 console.log('  regions :', s(TC.WorldRegions));
 console.log('  lighting:', TC.Lighting && TC.Lighting.counters ? JSON.stringify(TC.Lighting.counters()) : null);
