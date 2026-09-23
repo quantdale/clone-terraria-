@@ -243,8 +243,8 @@ Idle scene, 1280×720, zoom 2, stationary camera, settled world:
 | HUD max-HP scaling ratio (400hp / 100hp; 1.00x = flat, the target) | 3.70x | 1.22x | 1.22x | 1.00x |
 | `putImageData`/frame (lighting overlay upload) | 1.0 | 0 | 0 |
 | `Lighting.draw` ops/frame | 5 | 4 | 5* |
-| `Sky.draw` ops/frame (day scenes) | 435 | 435 | 19.1 |
-| `Sky.draw` ops/frame (night, previously unmeasured) | 842 | 842 | 22.3 |
+| `Sky.draw` ops/frame (day scenes) | 435 | 435 | 16.1 |
+| `Sky.draw` ops/frame (night, previously unmeasured) | 842 | 842 | 17.0 |
 
 * `Lighting.draw` reads 5 in `bench-render.js` only because the tool now
 models the save/restore style stack honestly (the lighting pass re-sets
@@ -274,18 +274,17 @@ was the first calibration bug in this gate's history.
 | --- | ---: | ---: | ---: |
 | Total ops/frame @100 max HP | ~225 | 500 | loose* |
 | Total ops/frame @400 max HP (15 life crystals) | ~230 | 550 | loose* |
-| UI-attributed ops/frame @100hp | 75 | 100 | 33% |
-| UI-attributed ops/frame @400hp | 90 | 120 | 33% |
-| UI-attributed growth 100hp→400hp | +15.0 ops | 30 | 2× |
+| UI-attributed ops/frame @100hp | 4 | 20 | 80% |
+| UI-attributed ops/frame @400hp | 4 | 20 | 80% |
+| UI-attributed growth 100hp→400hp | +0.0 ops | 10 | flat |
 | Frame time p95 / p99 / mean | < 33 / < 50 / < 33 ms | same | vsync-bound |
 
 *Whole-frame totals wander ±30% between runs (respawn composition during
 the sampling window — enemies are cleared at each window start but the
 director respawns a few mid-window) while UI-attributed numbers repeat to
-the decimal (75/90/delta 15.0 three runs straight). The total budgets are
-therefore deliberately loose: they catch every prior render-path stage
-(pre-W27, pre-WS2, injected per-pixel control — all 2×+ over budget) and
-the tight gate is the attributed HUD triple (100/120/delta 30). Do not
+the decimal (4/4/delta 0.0 after WS1.3). The total budgets are deliberately
+loose: they catch every prior render-path stage while the tight gate is the
+attributed HUD triple (20/20/delta 10). Do not
 "fix" a total-budget breach by clearing more scene — investigate the
 render path first.
 
@@ -298,6 +297,10 @@ failure is host contention, not a render regression. Per ONBOARDING §8 the
 absolute budgets stand; the contention episode is recorded, not
 accommodated. Re-verify the frame-time leg on a quiet host at campaign
 close.)
+
+Final reconciliation (2026-09-24): the frame-time leg and full browser suite
+passed cleanly. The historical contention episode remains useful evidence
+that the budget is absolute rather than silently relaxed.
 
 The flatness check is UI-drawer-attributed (absolute delta), not a relative
 whole-frame ratio: the spawn director keeps spawning during sampling, so

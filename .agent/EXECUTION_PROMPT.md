@@ -30,43 +30,18 @@ changing any gameplay behavior, determinism, save format, protocol identity,
 or visual output — behind a real measurement gate so this can't silently
 regress again.
 
-## Current truth (2026-08-29, end of first execution session)
+## Current truth (2026-09-24)
 
-- **Landed and verified** (full detail + evidence in the handoff):
-  - `tools/bench-render.js` — hardware-independent canvas-operation counter,
-    the WS0.1 measurement gate. **WS0.2 (real-browser frame-time journey) is
-    still open** — this execution environment cannot run a browser at all
-    (`requestAnimationFrame` never fires, Canvas 2D raster hangs; confirmed
-    independent of any game code). Do WS0.2 first on a machine with a working
-    display before further render-path work.
-  - WS1 (HUD sprite baking, `js/ui.js`): `UI.draw` 612→67 ops/frame @ 100
-    max HP, 2,262→82 @ 400 max HP (3.70x→1.22x scaling ratio). Safe by
-    construction — same draw calls, cached and blitted at integer
-    coordinates, no new visual quantization. WS1.3–1.4 (layout memoization,
-    composed HUD strip) not done — smaller win, deferred.
-  - WS4 (lighting skip-unchanged, `js/lighting.js`): `putImageData`
-    (GPU texture upload) 1/frame → 0/frame on a static scene.
-  - `js/enemyspawn.js` pre-existing uncommitted drift (a W26-era pack
-    spawn-rule zone index) resolved: tested, committed separately.
-- **Explicitly deferred, with reasons already investigated** (do not
-  re-derive — read `docs/HANDOFF-W27-performance.md` first):
-  - **WS2** (sky baking): naive baking is wrong because fill color depends
-    continuously on daylight, not just cached geometry. A mask/color-split
-    design was identified as the correct approach — not yet implemented.
-  - **WS3** (renderer treadmill): a real correctness risk was found while
-    designing the naive fix (radius-gating `World.update()` leaves far
-    off-camera dirty regions permanently unobserved — unbounded queue
-    growth, not a win). Needs a bounded low-rate service-pass design before
-    implementation.
-  - **WS5** (entity draw batching), **WS6** (liquid mark coalescing): not
-    started, lower priority per plan ordering.
-  - **WS7** truth-sync of `docs/ARCHITECTURE.md`/`docs/TASK_BOARD.md`: held
-    until remaining workstreams land.
-- Full `npm test` was 625/625 green after each landed change. `npm run build`
-  succeeds standalone. `npm run verify:build` / `npm run test:browser` could
-  not be run in this environment (both boot a real browser) — **must be run
-  on a machine with a display before this campaign can be marked
-  `COMPLETED`.**
+- WS0–WS4 and WS6–WS7 are landed. HUD is 4/4 ops and flat in max HP; sky is
+  16.1 day / 17.0 night; lighting skips unchanged uploads; renderer and liquid
+  invalidation targets are measured and documented.
+- WS0.2's real-browser frame-time and operation gates pass, including the
+  historical injected-regression negative control. The full browser suite is
+  32/32 green.
+- WS5 entity sprite batching and WS1.4 `UI.layout()` memoization remain
+  explicitly deferred for the visual-fidelity/CPU reasons in the handoff.
+- Final `npm run validate` at `a905126`: 653/653 Node, 32/32 browser,
+  build + verify-dist, check 58/58, and i18n/fingerprint clean.
 
 ## Resuming this campaign
 
@@ -118,17 +93,19 @@ session can resume without rediscovery.
 | 1 | bench-render + perf.spec exist, run clean, baselined | PASS | `tools/bench-render.js`, `tests/browser/perf.spec.js` + reference-machine baselines in `docs/PERFORMANCE.md` |
 | 2 | Idle 1,229 → ≤250 @100hp | PASS | 204 (bench), ~225 (browser) |
 | 3 | HUD flat within 5% | PASS | UI 4.0/4.0, ratio exactly 1.00x |
-| 4 | Sky ≤20, UI ≤40 | PASS | Sky 19.1 day / UI 4.0 (night 22.3 accepted residual, analyzed) |
+| 4 | Sky ≤20, UI ≤40 | PASS | Sky 16.1 day / 17.0 night / UI 4.0 |
 | 5 | Stationary 300f: evictions ≈0 + viewport ceiling + memory doc | PASS | 9 (startup sweep only, zero churn), cap 30/~30MB, documented |
-| 6 | Real-browser p95 meets budget + fails on injected regression | QUALIFIED | Op leg green + negative control proven (968/1,827 + uiDelta 837 breach). Frame-time leg passed 2× quiet, now blocked by proven host contention (pre-WS2 control fails identically, p95 92.5). Rerun: `npx playwright test perf -g frame-time` on a quiet host |
+| 6 | Real-browser p95 meets budget + fails on injected regression | PASS | Quiet-host rerun and full 32/32 browser suite green; historical negative control still breaches every leg |
 | 7 | Sim not slower | PASS | bench-runtime/scenarios within noise at every step |
-| 8 | Zero behavior change, full validate green | QUALIFIED | 625/625 node, build + verify-dist, 29/32 browser + journey O green in isolation; journey K fails identically on pre-W27 base (environmental). Fingerprint `1b1d7c15`, liquid digests bit-identical, no GameRng stream touched |
+| 8 | Zero behavior change, full validate green | PASS | 653/653 node + 32/32 browser + build/verify/i18n; fingerprint `1b1d7c15`, no GameRng stream touched |
 | 9 | enemyspawn drift resolved | PASS | committed `8154001` (prior session) |
 | 10 | No Crit/High regressions, PERFORMANCE.md corrected | PASS | scope warning + evidence tables + invariant sections |
 
-Commits (all on `main`, pushed, HEAD == origin/main): `6f8019b` (WS0.2
-gate), `bf4d844` (WS2 sky), `ae89a48` (WS3 renderer), `e883eb4` (WS1.3
-HUD strips), `2e32154` (WS6 liquid coalescing), `b4aec0d` (WS7 docs).
+Commits (all on `main`, pushed): `6f8019b` (WS0.2 gate), `bf4d844`
+(WS2 sky), `ae89a48` (WS3 renderer), `e883eb4` (WS1.3 HUD strips),
+`2e32154` (WS6 liquid coalescing), `b4aec0d` (WS7 docs), `7f32b1a`
+(final night-sky budget/parity gate), `15bd4cc` (W26 dependency/security
+hardening), `a905126` (W26 boot/wall/spawn hardening).
 Deferred with analysis (plan §6/§8 updated): WS5 entity batching, WS1.4
 layout memoization, night-sky 2-op residual. No force-push, no history
 rewrite, no secrets, working tree clean except this file's status flip

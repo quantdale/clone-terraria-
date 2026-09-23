@@ -1332,7 +1332,7 @@ queue; eviction never re-marks).
 - Sky (`js/sky.js`): silhouette layers as `Path2D` geometry cache (color
   is not geometry); clouds/orbs/gradient as baked sprites; stars as one
   baked sprite with the fade envelope (twinkle dropped, tint decoupled to
-  white — the two stated simplifications). Day 435 → 19, night 842 → 22.
+  white — the two stated simplifications). Day 435 → 16.1, night 842 → 17.0.
 - Renderer (`js/world.js`): camera-windowed rebuilds (visible+1, ≤3/tick)
   + observe-only far drain (same contract as lighting's outside-window
   observe); `draw()` repairs visible-dirty synchronously; eviction in the
@@ -1352,8 +1352,7 @@ queue; eviction never re-marks).
   verified negative control). Idle frame 1,229 → 204 ops, flat in max HP.
 - Deferred with analysis: entity sprite batching (continuous
   clock/physics animation + fractional coords — a visual-fidelity
-  project, moves no idle-scene gate), `UI.layout()` memoization (CPU/GC,
-  not raster), night-sky 2-op residual over the round ≤20 target.
-- Save impact: none (no provider/format change). Tests: 625/625 node +
-  browser boot/journeys/perf gate green (frame-time leg subject to a
-  recorded host-contention blocker, budgets unweakened).
+  project, moves no idle-scene gate) and `UI.layout()` memoization (CPU/GC,
+  not raster).
+- Save impact: none (no provider/format change). Final gate at `a905126`:
+  653/653 Node, 32/32 browser, build/verify/i18n green.

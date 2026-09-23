@@ -1,10 +1,9 @@
 # HANDOFF — W27 Presentation Performance Recovery
 
-**Status:** ACTIVE (partial execution — see per-workstream status below)
+**Status:** COMPLETED (2026-09-24 final validation reconciliation)
 **Planned-From:** `ca39da303e34e2eef1f6774dadbafe26df68b3c7`
 **Execution-Started:** 2026-08-29
-**This-Handoff-HEAD:** pending (see "Commits in this session" below; push
-follows this handoff commit)
+**This-Handoff-HEAD:** `a905126` (implementation; reconciliation docs follow)
 **Plan:** `docs/W27-PERFORMANCE-PLAN.md`
 
 ## Summary
@@ -487,7 +486,20 @@ gate errors on a missing config.
   No code change should be needed — op counts prove the render path.
 
 ---
-*Session-scoped handoff for W27 partial execution. `docs/W27-PERFORMANCE-PLAN.md`
-carries the full plan and per-workstream status; this file carries what
-actually happened, why the deferred items were deferred, and what the next
-session needs to know before touching WS2/WS3.*
+*Session-scoped handoff for W27 execution. `docs/W27-PERFORMANCE-PLAN.md`
+carries the full plan and acceptance criteria; this file carries the landed
+history and deferred-item rationale.*
+
+## Final reconciliation (2026-09-24)
+
+- The previously qualified frame-time and localization tests passed in
+  isolation, then the complete browser suite passed 32/32.
+- `7f32b1a` removed three unnecessary alpha `save`/`restore` pairs from baked
+  sky paths. A deterministic Chromium A/B against `96a6012` produced the same
+  night-sky SHA-256 and alpha state; `bench-render` now measures 16.1 day /
+  17.0 night ops and a Node gate enforces both ≤20.
+- Full `npm run validate` at `a905126`: check 58/58, i18n clean, 653/653 Node,
+  build + verify-dist green, 32/32 browser. Registry fingerprint remains
+  `1b1d7c15`; no GameRng stream or save/protocol identity changed.
+- Later W26 hardening (`15bd4cc`, `a905126`) is recorded in the W26 handoff;
+  it does not weaken any W27 invariant.

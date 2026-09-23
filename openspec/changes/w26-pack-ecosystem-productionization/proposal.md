@@ -2,7 +2,10 @@
 
 ## Status
 
-ACTIVE — planning package only. Implementation begins through `.agent/EXECUTION_PROMPT.md`.
+IMPLEMENTED + HARDENED — original W26 landed; 2026-09-24 reconciliation
+closed the optional-dependency, headless boot-order, wall gameplay, loot
+bounds, and forest/ocean spawn gaps. Remaining limitations are recorded in
+`docs/HANDOFF-W26-pack-ecosystem-productionization.md`.
 
 ## Planned From
 

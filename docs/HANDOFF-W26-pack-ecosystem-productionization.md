@@ -1,9 +1,9 @@
 # W26 Handoff — Pack Ecosystem Productionization
 
-**Status:** COMPLETED — full gate green (30/30 browser journeys, 624 node tests, fuzz 0 escapes)
+**Status:** COMPLETED + HARDENED (2026-09-24: 653/653 Node, 32/32 browser, full validate green)
 **Started from:** `6aed702` (post-W25 docs, includes W26 OpenSpec package)
 **WS1 commit:** `f5b05d5` — declarative wall + standalone loot-table families
-**Final HEAD:** (this commit) — PackStore + spawn grammar + dedicated host + version/docs
+**Final HEAD:** `a905126` (+ reconciliation docs) — dependency/security, boot order, wall gameplay, loot/spawn hardening
 **Execution prompt:** `.agent/EXECUTION_PROMPT.md` (ACTIVE → VERIFY)
 **OpenSpec change:** `openspec/changes/w26-pack-ecosystem-productionization/`
 
@@ -37,7 +37,7 @@ Turn the W25 safe-extensibility foundation into a production-usable pack ecosyst
 
 **Wall** (`content.walls[]`): `{key, name, color:"#rrggbb", hardness:0..10, drop?:itemRef}` — color required, hardness defaults 0.5, drop references an item (same-pack or dependency). Appends to `WALL_DEFS`, alias `wall:sid -> index`.
 
-**Loot table** (`content.lootTables[]`): `{key, name, entries:[{id:itemRef, min:0..999,max:0..999,chance:0.0001..1,requires?:progressionCond}]}` max 64 entries, 64 tables per pack. Registers `lootTable` kind, rolled via `LootTables.rollById` / `rollEntity` loot stream.
+**Loot table** (`content.lootTables[]`): `{key, name, entries:[{id:itemRef, min:1..999,max:1..999,chance:0.0001..1,requires?:progressionCond}]}` max 64 entries, 64 tables per pack. Registers `lootTable` kind, rolled via `LootTables.rollById` / `rollEntity` loot stream.
 
 **Spawn rule** (`content.spawnRules[]`): `{enemy:itemRef, zone:day|night|cave|underworld, weight:0.01..10, biome?:forest|desert|snow|jungle|ocean|corruption, depthMin?:0..500, depthMax?:0..500, time?:day|night, requires?:progressionCond}` max 64. Compiled at activation into global `spawnRules[]` ordered by pack topo + manifest order, filtered in `zoneTable` by zone/biome/depth/time/requires, weight merged into weightedPick via GameRng.spawn.
 
@@ -55,14 +55,13 @@ Turn the W25 safe-extensibility foundation into a production-usable pack ecosyst
 
 - `npm run check` — 58 files, 0 failures
 - `npm run check:i18n` — 568 fallback keys, 269 registry names resolved, fingerprint `1b1d7c15` match, 374 stable ids, 368 pre-W24 unchanged
-- `npm test` (node:test) — **624 pass, 0 fail** (was 607; +10 w26-content +10 packstore +7 spawn = 27 new, but some overlap; net +17)
-  - packs: 43 (loader 8, activation 8, content-families 10, packstore 10, spawn 7) — all pass
-  - core/save/world/net/combat/player/npc/worldgen: 581 — all pass
+- `npm test` (node:test) — **653 pass, 0 fail** at `a905126`
+  - packs: 77/77; full browser: 32/32; build/verify/i18n green
 - `node tools/fuzz-packs.js` — 400 rounds seed 20260826, accepted 17, rejected 782, **escapes 0**
 - `node tools/bench-packs.js` — boot zero 46.6ms vs fixture 47.7ms (+1.09ms), activation 1.488ms, save delta +96 bytes, pack hello 141 bytes
 - `npm run build` — 58 js files, 60 assets, commit f5b05d5a85
 - `npm run verify:build` — boots, renders, new-game and continue work, zero browser errors
-- `npm run test:browser` — **30 passed (6.1m)** on Chromium (boot, journeys A-P, multiplayer M/N/O, runtime authority), including W26 PackStore UI (Install/Export/Remove) and existing pack journey P; W26 import→persist→activate→play→export flow is headless-proven via PackStore tests and UI-present for manual verification.
+- `npm run test:browser` — **32 passed** on Chromium at `a905126`; includes the W27 frame-time gate and all runtime-authority journeys.
 
 ## Benchmarks
 
@@ -88,7 +87,9 @@ See `tools/bench-packs.js` above; `tools/bench-runtime.js` unchanged (W21/W25 op
 ## Commits in this campaign
 
 - `f5b05d5` — feat(w26): declarative wall + standalone loot-table pack families (WS1)
-- `(pending)` — feat(w26): PackStore + spawn grammar + dedicated host + version/docs (WS2-WS5)
+- `f5b05d5` / W26 final implementation (PackStore + spawn grammar + dedicated host + version/docs)
+- `15bd4cc` — optional dependency semantics, immutable manifest snapshots, save fingerprint enforcement, atomic rollback hardening
+- `a905126` — canonical headless/browser boot order, wall placement/drop/byte bounds, loot bounds, forest/ocean spawn rules
 
 ## Reproduction
 
@@ -99,4 +100,36 @@ npm run test:browser
 ```
 
 ---
-*Generated for W26 pack-ecosystem productionization; all changes are additive and preserve zero-pack equivalence.*
+
+## 2026-09-24 continuation reconciliation
+
+Commits `15bd4cc` and `a905126` closed concrete gaps found by comparing this
+OpenSpec package with current code/tests:
+
+- `optional.packs` is now explicit and deterministic: installed-but-inactive
+  sources never auto-activate; active optional edges version-check and order
+  before dependers; inactive references fail closed; cycles reject; compound
+  ranges canonicalize to stable identity.
+- Programmatic manifests are snapshotted/frozen in one bounded pass; caller
+  mutation, accessors, hidden/symbol fields, prototype tricks, Proxy descriptor
+  substitution, and oversized sparse/wide inputs fail closed.
+- Live activation may append only after the canonical prefix; save metadata
+  enforces content/gameplay fingerprints, types, and active data-pack presence.
+- Localization rollback is reverse-ordered; registry/core-before-wiring boot
+  order is identical in browser/headless/dedicated paths; pack recipe ownership
+  survives registry mirroring.
+- Walls cannot overflow 8-bit world ids; wall-only blocks use `UseItem` →
+  `PlaceWall`; declared wall drops emit exactly once; standalone loot minimums
+  match `TC.LootTables`; forest/ocean spawn rules are reachable.
+- `classifySave` fingerprint caches restore benchmark performance to 44.2 ms /
+  50k, below the historical 56 ms baseline.
+
+Final proof at `a905126`: `npm run validate` green — 653/653 Node, 32/32
+Chromium, build + verify-dist, i18n, fingerprint `1b1d7c15`; review found no
+Critical/High issues. Known remaining limitations are intentionally not
+overstated: exact UTF-8 store accounting, unmaterialized `resources.files`,
+large pack-panel UX, dedicated-host real-WebSocket automation, W26-family fuzz
+coverage, and a durable exhaustive file-coverage ledger remain follow-ups.
+
+---
+*Generated for W26 pack-ecosystem productionization; additive changes preserve zero-pack equivalence.*

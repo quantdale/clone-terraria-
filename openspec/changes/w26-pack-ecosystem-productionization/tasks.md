@@ -1,6 +1,10 @@
 # W26 Tasks — Pack Ecosystem Productionization
 
-This task list is execution order, not merely a feature checklist. Keep it updated during the campaign. Mark an item complete only with evidence.
+This task list is the historical execution order, not a live completion
+ledger: the original executor left checkboxes unchecked while the handoff and
+implementation advanced. Verified 2026-09-24 closures and remaining product
+limitations are recorded in `docs/HANDOFF-W26-pack-ecosystem-productionization.md`;
+do not infer completion from a checkbox alone.
 
 ## 0. Reconcile and baseline
 

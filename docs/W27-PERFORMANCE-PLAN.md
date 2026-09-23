@@ -1,6 +1,6 @@
 # W27 — Presentation Performance Recovery
 
-**Status:** ACTIVE (WS0.1, WS1, WS4 landed; WS0.2, WS2, WS3, WS5, WS6, WS7 remain — see `docs/HANDOFF-W27-performance.md`)
+**Status:** COMPLETED (2026-09-24 final quiet-host/full-gate reconciliation)
 **Planned-From:** `ca39da303e34e2eef1f6774dadbafe26df68b3c7`
 **Planned-At:** 2026-08-29
 **Execution-Started:** 2026-08-29
@@ -313,11 +313,8 @@ possible outcome.
 
 ### WS0 — Make rendering measurable (blocking)
 
-**Status: PARTIALLY DONE.** Items 1, 4, 5 landed. Item 2 (real-browser
-frame-time journey) is **not done** — this execution environment cannot run
-it (see §4); it needs a follow-up pass on a machine with a working browser.
-Item 3's "real hardware" half is therefore also outstanding — the Node-side
-half is in `docs/PERFORMANCE.md`. See `docs/HANDOFF-W27-performance.md`.
+**Status: DONE.** Node and real-browser gates are documented; the quiet-host
+frame-time rerun and full 32/32 browser suite passed on 2026-09-24.
 
 1. Add `tools/bench-render.js`: the counting-context harness from §4, promoted
    to a first-class tool. Reports total ops/frame, heavy-raster ops/frame, a
@@ -340,16 +337,11 @@ regression (e.g. temporarily doubling heart draws) makes the browser gate fail.
 
 ### WS1 — HUD: stop re-rasterizing the health bar (largest win)
 
-**Status: PARTIALLY DONE.** Item 1 (heart baking) and half of item 2 (shield
-glyph + breath bubbles; `drawSlotBox`/`drawFavPin` were **not** baked — the
-plan text bundled them with item 2 but they weren't attempted this pass)
-landed and are measured: `UI.draw` 612 → 67 ops/frame at 100 max HP, 2,262 →
-82 at 400 max HP (real progression-derived max HP via `lifeCrystals`, not a
-poked field — see `docs/HANDOFF-W27-performance.md`), scaling ratio 3.70x →
-1.22x. Items 3–4 (composed HUD-strip caching, `UI.layout()` memoization) are
-**not done** — deferred as a smaller residual win with more surface area for
-subtle state-invalidation bugs; not attempted without visual verification
-available.
+**Status: DONE.** Heart/shield/bubble bakes and WS1.3 composed heart-row +
+hotbar strips are landed. Closed-inventory `UI.draw` is 612 → 4 ops/frame at
+both 100 and 400 max HP (1.00x scaling). WS1.4 `UI.layout()` memoization is
+deferred as a CPU/GC optimization; see the handoff for its invalidation-risk
+analysis.
 
 1. Bake heart sprites into pre-rendered offscreen canvases, following the
    `WALL_VARIANTS` precedent in `js/tiles.js`: 8 variants keyed by the existing
@@ -384,7 +376,7 @@ cached as `Path2D` geometry (color is not geometry: palette drift costs one
 banding possible); clouds/orbs/gradient are baked sprites; stars are one
 baked sprite with the fade envelope (twinkle dropped and star tint
 decoupled to white — both stated in the handoff with pixel-diff evidence).
-Day 435 → 19.1, night (previously unmeasured) 842 → 22.3.
+Day 435 → 16.1, night (previously unmeasured) 842 → 17.0.
 
 Render each background layer silhouette into an offscreen strip keyed by
 `(biome, layer, daylight quantum)`; blit with a horizontal scroll offset;
@@ -460,8 +452,7 @@ screenshot-gated quantization per archetype.
 
 ### WS6 — Coalesce liquid invalidation
 
-**Status: NOT STARTED.** Deferred to a follow-up pass — see
-`docs/HANDOFF-W27-performance.md`.
+**Status: DONE.**
 
 Accumulate liquid marks per region per tick and bump each affected region once,
 instead of once per cell. Must preserve the settle-order determinism contract in
@@ -478,13 +469,8 @@ liquid digest — order/volumes/events/saves untouched. See handoff.
 
 ### WS7 — Validation, gate and truth-sync
 
-**Status: PARTIAL.** Full `npm test` (625/625), `npm run check`,
-`bench-runtime`, `bench-scenarios` all green/unaffected at each landed step;
-`docs/PERFORMANCE.md` updated with WS1/WS4 evidence and the simulation-only
-scope warning; `docs/HANDOFF-W27-performance.md` written. **Not done:**
-`npm run build` / `verify:build` / `test:browser` (needs a display — could not
-run in this environment), `docs/ARCHITECTURE.md` / `docs/TASK_BOARD.md`
-truth-sync (deferred to campaign close, once the remaining workstreams land).
+**Status: DONE.** Full `npm run validate` at `a905126`: 653/653 Node,
+32/32 browser, build + verify-dist, i18n, and all W27 gates green.
 
 Full `npm run validate` including `test:browser` on real hardware. Update
 `docs/PERFORMANCE.md` (before/after, both harnesses, machine stated),
