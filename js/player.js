@@ -1110,7 +1110,7 @@
     }
 
     // Background-wall mining: picks only, and only where no minable tile sits.
-    // Walls drop nothing in v1; progress reuses the mineTarget pattern.
+    // Progress reuses the mineTarget pattern.
     doMineWall(def, _m, dt, tx, ty, id, td) {
       const world = TC.world;
       const wdefs = TC.WALL_DEFS;
@@ -1175,6 +1175,9 @@
           world.clearWallDamage(tx, ty);
         } catch (e) {}
         pBurst(tcx, tcy, 10, [wd.color], 120);
+        if (wd.drop != null && TC.Items && typeof TC.Items.spawnDrop === "function") {
+          try { TC.Items.spawnDrop(tcx, tcy, wd.drop, 1); } catch (e) {}
+        }
       }
     }
 
@@ -1284,7 +1287,6 @@
         } catch (w) {}
         return;
       }
-      if (def.tile == null) return;
       const world = TC.world;
       if (
         !world ||
@@ -1296,6 +1298,23 @@
       const tx = Math.floor(m.worldX / TS),
         ty = Math.floor(m.worldY / TS);
       if (!this.inReach(tx, ty)) return;
+      if (def.tile == null) {
+        if (def.wall == null) return;
+        if (TC.Commands && typeof TC.Commands.submit === "function") {
+          TC.Commands.submit("PlaceWall", {
+            tx, ty, item: itemId, player: this, slot: this.hotbarIndex,
+          });
+          return;
+        }
+        const wallId = def.wall;
+        if (!TC.WALL_DEFS || !(wallId > 0) || wallId >= TC.WALL_DEFS.length ||
+            typeof world.getWall !== "function" || typeof world.setWall !== "function" ||
+            world.getWall(tx, ty) !== TC.WALL.NONE) return;
+        if (world.setWall(tx, ty, wallId) === false) return;
+        consumeFromSlot(this.inventory, this.hotbarIndex, itemId, 1);
+        sfx("place");
+        return;
+      }
       const cur = world.get(tx, ty);
       const cd = tDef(cur);
       if (!(cur === TILE.AIR || (cd && cd.replaceable))) return;

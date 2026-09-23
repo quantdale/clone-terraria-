@@ -64,6 +64,32 @@ test('ws1: wall family commits append-only after built-ins', () => {
   assert.doesNotThrow(() => TC.Registry.validate());
 });
 
+test('ws1: aggregate wall definitions cannot overflow world byte ids', () => {
+  const TC = fresh();
+  const beforeWalls = TC.WALL_DEFS.length;
+  const beforeRegistry = TC.Registry.count('wall');
+  const manifests = [];
+  for (let pack = 0; pack < 4; pack++) {
+    const walls = [];
+    for (let i = 0; i < 64; i++) {
+      walls.push({
+        key: 'w' + pack + '_' + i,
+        name: 'Wall ' + pack + '-' + i,
+        color: '#223344',
+        hardness: 0.5,
+      });
+    }
+    manifests.push({
+      manifest: 1, id: 'wallcap' + pack, name: 'Wall Cap ' + pack,
+      version: '1.0.0', type: 'data', content: { walls },
+    });
+  }
+  assert.throws(() => activate(TC, manifests), /8-bit world wall id capacity/);
+  assert.strictEqual(TC.WALL_DEFS.length, beforeWalls);
+  assert.strictEqual(TC.Registry.count('wall'), beforeRegistry);
+  assert.strictEqual(TC.Packs.active().length, 0);
+});
+
 test('ws1: invalid wall schema rejected (color/hardness/unknown field)', () => {
   const TC = fresh();
   assert.throws(() => activate(TC, [{
@@ -116,6 +142,54 @@ test('ws1: wall item places and mines through canonical commands', () => {
     { tx, ty, player: p, tool: 'pick', toolPower: 100000 });
   assert.strictEqual(mine.ok, true, 'wall mined via canonical transaction');
   assert.strictEqual(w.getWall(tx, ty), TC.WALL.NONE, 'wall removed after mining');
+});
+
+test('ws1: wall-only item uses held-item path and returns its declared drop', () => {
+  const TC = fresh();
+  activate(TC, [{
+    manifest: 1, id: 'heldwall', name: 'Held Wall', version: '1.0.0', type: 'data',
+    content: {
+      walls: [{
+        key: 'held_wall', name: 'Held Wall', color: '#3355aa', hardness: 0.4,
+        drop: 'held_wall_item',
+      }],
+      items: [{
+        key: 'held_wall_item', name: 'Held Wall Item', kind: 'block', wall: 'heldwall:held_wall',
+      }],
+    },
+  }]);
+  TC.Runtime.createWorld(778);
+  const p = TC.player;
+  const TS = TC.CONST.TS;
+  const tx = Math.floor(p.x / TS);
+  const ty = Math.floor(p.y / TS) + 1;
+  TC.world.set(tx, ty, TC.TILE.AIR);
+  TC.world.setWall(tx, ty, TC.WALL.NONE);
+  p.inventory.add('held_wall_item', 1);
+  const wallSlot = p.inventory.slots.findIndex((slot) => slot && slot.id === 'held_wall_item');
+  const aimX = tx * TS + TS / 2;
+  const aimY = ty * TS + TS / 2;
+  const placed = TC.Commands.submit('UseItem', {
+    player: p, slot: wallSlot, aimX, aimY,
+  });
+  assert.ok(placed.ok && placed.result.used);
+  assert.strictEqual(placed.result.action, 'place-wall');
+  const wallId = TC.Registry.stableToIndex('wall', 'heldwall:held_wall');
+  assert.strictEqual(TC.world.getWall(tx, ty), wallId);
+  assert.strictEqual(p.inventory.count('held_wall_item'), 0);
+
+  p.inventory.add('copper_pickaxe', 1);
+  const pickSlot = p.inventory.slots.findIndex((slot) => slot && slot.id === 'copper_pickaxe');
+  const before = TC.Items.drops.length;
+  const mined = TC.Commands.submit('UseItem', {
+    player: p, slot: pickSlot, aimX, aimY, dt: 10,
+  });
+  assert.ok(mined.ok && mined.result.used);
+  assert.strictEqual(mined.result.action, 'mine-wall');
+  assert.strictEqual(mined.result.mine.broken, true);
+  assert.strictEqual(TC.world.getWall(tx, ty), TC.WALL.NONE);
+  const dropped = TC.Items.drops.slice(before).filter((drop) => drop.id === 'held_wall_item');
+  assert.strictEqual(dropped.reduce((sum, drop) => sum + drop.count, 0), 1);
 });
 
 test('ws1: loot-table family commits and rolls deterministically', () => {
@@ -213,7 +287,22 @@ test('ws1: loot table with unknown item / bad entry rejects before commit', () =
     content: {
       lootTables: [{ key: 'x', name: 'X', entries: [{ id: 'stone', min: 2, max: 1, chance: 1 }] }],
     },
-  }]), /min\/max must be integers 0\.\.999 with max >= min/);
+  }]), /min\/max must be integers 1\.\.999 with max >= min/);
+});
+
+test('ws1: standalone loot minimums match the canonical evaluator', () => {
+  const TC = fresh();
+  assert.throws(() => activate(TC, [{
+    manifest: 1, id: 'zeroloot', name: 'Zero Loot', version: '1.0.0', type: 'data',
+    content: {
+      items: [{ key: 'zero_item', name: 'Zero', kind: 'material' }],
+      lootTables: [{
+        key: 'zero_table', name: 'Zero Table',
+        entries: [{ id: 'zero_item', min: 0, max: 0, chance: 1 }],
+      }],
+    },
+  }]), /min\/max must be integers 1\.\.999/);
+  assert.strictEqual(TC.Packs.active().length, 0);
 });
 
 test('ws1: bad loot table in an otherwise-valid pack rolls back walls too', () => {

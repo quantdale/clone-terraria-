@@ -335,7 +335,7 @@
   }
 
   // ======================================================================
-  // MineWall — picks only, only where no minable tile sits; walls drop nothing
+  // MineWall — picks only, only where no minable tile sits
   // ======================================================================
 
   function validateMineWall(c) {
@@ -373,10 +373,13 @@
     try { w.clearWallDamage(tx, ty); } catch (e) {}
     sfx('break');
     pBurst((tx + 0.5) * TS, (ty + 0.5) * TS, 10, [wd.color], 120);
+    if (wd.drop != null && TC.Items && typeof TC.Items.spawnDrop === 'function') {
+      try { TC.Items.spawnDrop((tx + 0.5) * TS, (ty + 0.5) * TS, wd.drop, 1); } catch (e) {}
+    }
     // No TileChanged here: World.setWall intentionally emits nothing and the
     // live doMineWall path matches — a wall-only payload without `id` would
     // corrupt wiring.js's plate/timer registry keyed off tile events.
-    return { broken: true, wall: wallId };
+    return { broken: true, wall: wallId, drop: wd.drop == null ? null : wd.drop };
   }
 
   // ======================================================================
@@ -432,8 +435,7 @@
   }
 
   // ======================================================================
-  // PlaceWall — no live gameplay caller yet (walls are worldgen-only today);
-  // defined so wall placement has a canonical home when it ships.
+  // PlaceWall — canonical wall-item transaction
   // ======================================================================
 
   function resolveWallId(c) {
@@ -456,6 +458,7 @@
     const wallId = resolveWallId(c);
     if (wallId === null) return 'bad-wall-id';
     if (w.getWall(pos[0], pos[1]) !== TC.WALL.NONE) return 'wall-occupied';
+    if (c.player && !inReach(c.player, pos[0], pos[1])) return 'out-of-reach';
     if (c.player && c.item) {
       if (!c.player.inventory) return 'no-inventory';
       const paySlot = resolveConsumeSlot(c.player.inventory, c.item, c.slot);
@@ -889,6 +892,11 @@
           return { used: true, action: 'actuator' };
         }
         const tx = Math.floor(m.worldX / TS), ty = Math.floor(m.worldY / TS);
+        if (def.tile == null && def.wall != null) {
+          const wr = submit('PlaceWall', { tx: tx, ty: ty, item: stack.id, player: p, slot: slot });
+          return wr.ok ? { used: true, action: 'place-wall', place: wr.result }
+                       : { used: false, reason: wr.error };
+        }
         const r = submit('PlaceTile', { tx: tx, ty: ty, item: stack.id, player: p, slot: slot });
         return r.ok ? { used: true, action: 'place', place: r.result }
                     : { used: false, reason: r.error };

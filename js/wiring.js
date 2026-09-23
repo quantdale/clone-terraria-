@@ -77,6 +77,9 @@
     const T = TC.TILE;
     const defs = TC.TILE_DEFS;
     if (!T || !defs) return;
+    if (TC.Registry && typeof TC.Registry.syncFromTables === 'function') {
+      try { TC.Registry.syncFromTables(); } catch (e) {}
+    }
     if (T.WIRE == null) {
       let n = defs.length;
       T.WIRE = n++;

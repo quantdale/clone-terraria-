@@ -1598,8 +1598,8 @@
           if (iid == null) { ok = false; break; }
           const mn = en.min == null ? 1 : en.min;
           const mx = en.max == null ? mn : en.max;
-          if (!boundedInt(mn, 0, 999) || !boundedInt(mx, 0, 999) || mx < mn) {
-            P.push(ewho + ": min/max must be integers 0..999 with max >= min");
+        if (!boundedInt(mn, 1, 999) || !boundedInt(mx, 1, 999) || mx < mn) {
+          P.push(ewho + ": min/max must be integers 1..999 with max >= min");
             ok = false;
             break;
           }
@@ -2218,6 +2218,17 @@
     if (dupProblems.length) {
       statsCounters.failed++;
       lastError = PackError("duplicate", "pack content collides with built-in tables", dupProblems);
+      throw lastError;
+    }
+
+    let stagedWallCount = 0;
+    for (const { staged } of stagedByPack) stagedWallCount += staged.walls.length;
+    if (TC.WALL_DEFS.length + stagedWallCount > 256) {
+      statsCounters.failed++;
+      lastError = PackError(
+        "schema",
+        "active pack walls exceed the 8-bit world wall id capacity (max 256 definitions)",
+      );
       throw lastError;
     }
 

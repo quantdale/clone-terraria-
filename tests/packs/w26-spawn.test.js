@@ -42,6 +42,36 @@ test('spawn: valid rule appears in zoneTable for correct zone', () => {
   assert.ok(!night.some((e) => e[0] === 'mote'), 'not in night');
 });
 
+test('spawn: forest and ocean pack biome rules are reachable', () => {
+  const TC = fresh();
+  TC.Runtime.createWorld(4242);
+  TC.Packs.provide(manifest('biomepack', {
+    content: {
+      enemies: [
+        { key: 'forest_enemy', name: 'Forest Enemy', hp: 10, dmg: 1, ai: 'slime', w: 24, h: 24 },
+        { key: 'ocean_enemy', name: 'Ocean Enemy', hp: 10, dmg: 1, ai: 'slime', w: 24, h: 24 },
+      ],
+      spawnRules: [
+        { enemy: 'biomepack:forest_enemy', zone: 'day', weight: 1, biome: 'forest' },
+        { enemy: 'biomepack:ocean_enemy', zone: 'day', weight: 1, biome: 'ocean' },
+      ],
+    },
+  }));
+  TC.Packs.setActive(['biomepack']);
+  const edge = TC.Biomes.oceanEdge();
+  let forestCol = edge;
+  for (let col = edge + 1; col < TC.world.width - edge - 1; col++) {
+    if (TC.EnemySpawn.surfaceBiome(col) === 'forest') { forestCol = col; break; }
+  }
+  const oceanCol = edge - 1;
+  assert.strictEqual(TC.EnemySpawn.surfaceBiome(forestCol), 'forest');
+  assert.strictEqual(TC.EnemySpawn.surfaceBiome(oceanCol), 'ocean');
+  const forestTable = TC.EnemySpawn.zoneTable('day', forestCol, TC.player);
+  const oceanTable = TC.EnemySpawn.zoneTable('day', oceanCol, TC.player);
+  assert.ok(forestTable.some((entry) => entry[0] === 'forest_enemy'));
+  assert.ok(oceanTable.some((entry) => entry[0] === 'ocean_enemy'));
+});
+
 test('spawn: invalid vocab fails closed before commit', () => {
   const TC = fresh();
   // unknown zone

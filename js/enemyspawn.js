@@ -171,12 +171,18 @@
   function surfaceBiome(pcol) {
     const w = TC.world;
     if (!w || !w.surfaceY || typeof w.get !== "function") return "";
-    const id = w.get(pcol, w.surfaceY[pcol]);
+    const col = Math.max(0, Math.min(w.width - 1, pcol | 0));
+    const oceanEdge = TC.Biomes && typeof TC.Biomes.oceanEdge === "function"
+      ? TC.Biomes.oceanEdge()
+      : 0;
+    if (oceanEdge > 0 && (col < oceanEdge || col >= w.width - oceanEdge)) return "ocean";
+    const id = w.get(col, w.surfaceY[col]);
     if (id === TC.TILE.SNOW) return "snow";
     if (id === TC.TILE.JGRASS) return "jungle";
     if (id === TC.TILE.SAND) return "desert";
     if (id === TC.TILE.EBONGRASS || id === TC.TILE.EBONSTONE)
       return "corruption";
+    if (id === TC.TILE.DIRT || id === TC.TILE.GRASS) return "forest";
     return "";
   }
 

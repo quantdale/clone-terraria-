@@ -154,6 +154,7 @@ function loadGame(opts) {
 
   const mainWindowCanvas = makeCanvas(1280, 720);
   const documentStub = {
+    readyState: "loading",
     getElementById: () => mainWindowCanvas,
     createElement: (tag) =>
       tag === "canvas" ? makeCanvas() : { style: {}, appendChild() {} },
@@ -264,6 +265,10 @@ function loadGame(opts) {
       filename: rel.split(path.sep).join("/"),
     });
   }
+  documentStub.readyState = "interactive";
+  const domReady = listeners.DOMContentLoaded || [];
+  listeners.DOMContentLoaded = [];
+  for (const callback of domReady) callback();
 
   const TC = sandbox.TC;
   return {

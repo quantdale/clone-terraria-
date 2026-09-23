@@ -392,6 +392,11 @@
     for (let i = 0; i < recs.length; i++) {
       const r = recs[i];
       if (!r || typeof r !== "object") continue;
+      const owned = findByDef("recipe", r);
+      if (owned) {
+        safeAlias(alias, "recipe", owned.id, i);
+        continue;
+      }
       const outSnake = snakeCase(r.out == null ? "unknown" : String(r.out));
       seenOut[outSnake] = (seenOut[outSnake] || 0) + 1;
       const id =
