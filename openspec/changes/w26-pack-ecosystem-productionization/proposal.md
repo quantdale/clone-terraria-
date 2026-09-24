@@ -3,9 +3,9 @@
 ## Status
 
 IMPLEMENTED + HARDENED — **NOT SPEC-COMPLETE.** The 2026-09-24 pass closed
-optional-dependency, boot-order, wall, loot, spawn, identity, and host-argument
-gaps; mandatory resource-file, audit-ledger, browser-flow, and
-dedicated-host-plus-packs E2E follow-ups remain in the handoff.
+optional-dependency, boot-order, wall, loot, spawn, identity, host-argument,
+resource-file honesty, and browser install-flow gaps. Mandatory audit-ledger
+and dedicated-host-plus-packs E2E follow-ups remain in the handoff.
 
 ## Planned From
 

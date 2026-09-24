@@ -44,6 +44,8 @@ before anything is committed atomically to the game.
   active). Installed packs persist in `tc_packs_installed_v1` with caps
   (64 manifests, 256 KiB each, 4 MiB total) and corruption-safe degrade, and are
   provided before activation on every boot so they can be enabled after a reload.
+  Embedded locale resources are supported; manifests declaring external
+  `resources.files` are rejected until this runtime can materialize those bytes.
 - Enable packs on the title screen via **Content Packs** → toggle → **Apply &
   Restart**. The choice persists (like the locale); booting without a pack is
   byte-for-byte the historical game.

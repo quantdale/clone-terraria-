@@ -1254,20 +1254,24 @@ packs (packs/testpack.js) -> PackStore.load() provides every user-installed
 validated manifest from tc_packs_installed_v1 -> Settings 'activePacks'
 persisted by the title-screen Content Packs panel (toggle rows -> Apply &
 Restart, plus Install/Export/Remove via PackStore) -> bootActivate applies it
-fail-closed and surfaces failures via TC.Packs.lastError() for the title
-screen. PackStore caps (64 manifests, 256 KiB each, 4 MiB total) and
+fail-closed and surfaces failures via TC.Packs.lastError(); skipped stored
+entries remain available as bounded PackStore.loadErrors() diagnostics for the
+title panel. PackStore caps (64 manifests, 256 KiB each, 4 MiB total) and
 corruption handling degrade to empty without breaking boot.
 
 ### PackStore (W26)
 TC.PackStore owns the installed-manifest source (separate from Settings and
-world saves) under tc_packs_installed_v1. Install validates through the SAME
-TC.Packs.provideJSON boundary, so malicious store data can never bypass
-security; duplicate identical is idempotent, conflicting same-id requires
-explicit replace (rejected while active), quota/corrupt/wrong-version degrade
-safely, export is canonical JSON, remove is blocked while active (dense
-indices would shift). Dedicated hosts select packs via tools/mp-server.js
---packs/--pack-file before world creation; the same validation/provide path
-is used, so host and client digests gate admission before snapshot.
+world saves) under tc_packs_installed_v1. Install first runs
+TC.Packs.validateInstallJSON, then provisions through provideJSON, so malicious
+or unmaterializable source never reaches persistence/provisioning. In
+particular, non-empty resources.files is accepted only as future syntax by
+structural parsing and is rejected by install, stored-load, repair, dedicated
+host, and final setActive boundaries until a real byte materializer exists.
+Duplicate identical is idempotent, conflicting same-id requires explicit
+replace (rejected while active), quota/corrupt/wrong-version degrade safely,
+export is canonical JSON, and remove is blocked while active. Dedicated hosts
+select packs via tools/mp-server.js --packs/--pack-file before world creation;
+the same installability/provide path gates admission before snapshot.
 
 ### Version semantics (W26 truth-sync)
 package.json "0.9.0" is the release version; TC.VERSION mirrors it for the
@@ -1307,10 +1311,11 @@ registered locales with recorded undo handles — they can never touch machine
 identity, registry fingerprints or authoritative state.
 
 ### Test coverage added
-tests/packs/** (89 cases, including W25 migration, dedicated-host bounds, walls,
+tests/packs/** (91 cases, including W25 migration, dedicated-host bounds, walls,
 loot tables, spawn rules, PackStore, multiplayer, and security), tools/fuzz-packs.js
 (deterministic 400-round fuzz, 0 escapes), tools/bench-packs.js, browser journey P
-(real panel install/apply/save/continue), and journey M (authoritative placement
+(real panel valid install→reload→activate, invalid unmaterialized-file rejection,
+and apply/save/continue), and journey M (authoritative placement
 plus interest-bounded newcomer convergence, 20/20 stress passes). Final metrics:
 fixture activation 1.074 ms, `classifySave` 36.0 ms/50k, ordered save metadata
 +103 bytes, v4 hello 141 bytes, and zero browser errors.

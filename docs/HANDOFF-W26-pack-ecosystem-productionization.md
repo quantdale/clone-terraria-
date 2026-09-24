@@ -3,7 +3,7 @@
 **Status:** IMPLEMENTED + HARDENED — **NOT SPEC-COMPLETE** (mandatory follow-ups remain)
 **Started from:** `6aed702` (post-W25 docs, includes W26 OpenSpec package)
 **WS1 commit:** `f5b05d5` — declarative wall + standalone loot-table families
-**Final implementation:** `5d39c11` (verified identity/save/browser compatibility closure)
+**Final implementation:** `79786a4` (resource-file honesty + production install-flow closure)
 **Execution prompt:** W27 prompt is completed; W26 remains VERIFY/NOT SPEC-COMPLETE
 **OpenSpec change:** `openspec/changes/w26-pack-ecosystem-productionization/`
 
@@ -23,10 +23,13 @@ Turn the W25 safe-extensibility foundation into a production-usable pack ecosyst
 - **js/packstore.js** added to `index.html` after `packs.js` (production load order).
 - **js/constants.js** — `TC.VERSION` `0.1.0` → `0.9.0` (aligns with `package.json`; `TC.Packs.GAME_VERSION` now derives from `TC.VERSION`, and dotted ranges canonicalize missing segments).
 - **js/locales/en.js** — added W26 `ui.packs` keys: `install`, `export`, `export_all`, `remove`, `installed`, `install_ok`, `install_unchanged`, `install_failed`, `remove_ok`, `remove_failed`, `remove_active`, `export_failed`, `quota_error`, `conflict_error` (14 new keys; total 568).
-- **tools/mp-server.js** — added fail-closed `--packs` / repeatable `--pack-file` input (every occurrence requires a value; local files are descriptor-bound and capped before parsing), pack activation before `NetServer.start()`, and bounded `/debug?tx=&ty=` authoritative tile reads.
+- **js/packs.js / js/packstore.js** — structural manifest parsing remains backward-compatible, while explicit `validateInstallJSON` rejects non-empty unmaterialized `resources.files` before PackStore persistence/provisioning, stored-load/repair, dedicated-host registration, or final activation. `PackStore.loadErrors()` retains bounded skipped-entry diagnostics for the title panel.
+- **js/ui.js / js/locales/en.js** — installer/remover results map through localized keys; unsupported external files, invalid/empty/oversize/quota/conflict/active/storage/load failures never expose raw technical reasons. A bounded stored-load diagnostic appears when the pack panel opens.
+- **tools/mp-server.js** — added fail-closed `--packs` / repeatable `--pack-file` input (every occurrence requires a value; local files are descriptor-bound and capped before parsing), installability validation before provision, pack activation before `NetServer.start()`, and bounded `/debug?tx=&ty=` authoritative tile reads.
 - **tests/fixtures/registry-baseline-w24.json** — added `lootTable:0` (additive-only, fingerprint unchanged).
 - **tests/packs/w26-content-families.test.js** *(13 tests)* — walls/lootTables: append-only, invalid rejection (including zero hardness), canonical PlaceWall/MineWall, deterministic roll, enemy lootTable kill drop, cross-pack dependency, rollback, save classification.
-- **tests/packs/w26-packstore.test.js** *(new, 10 tests)* — PackStore: fresh/corrupt/wrong-version degrade, quota, identical/conflicting/replace, active-remove guard, export roundtrip, surviving reload, malicious bypass.
+- **tests/packs/w26-packstore.test.js** *(11 tests)* — PackStore: fresh/corrupt/wrong-version degrade, quota, identical/conflicting/replace, active-remove guard, export roundtrip, surviving reload, malicious bypass, unmaterialized-resource install/load rejection.
+- **tests/browser/journey-p-packs.spec.js** — real title-panel file chooser proves invalid external-resource rejection and valid JSON install→reload→UI activation with localized presentation active.
 - **tests/packs/w26-spawn.test.js** *(new, 7 tests)* — spawn rules: valid/invalid vocab, boss rejection, cross-pack dependency, deterministic ordering, biome/depth/time/requires filtering, rollback.
 - **docs/TASK_BOARD.md** — snapshot header W20 → W26, added W26 row (walls/lootTables/spawnRules + PackStore + dedicated host), updated follow-ups to include W26 LANDED.
 - **docs/ARCHITECTURE.md** — §29 updated to W26: supported families, PackStore, spawn grammar seam, boot order, PackStore caps, version semantics (package.json 0.9.0 ↔ TC.VERSION 0.9.0 ↔ Packs 0.9 compat ↔ SaveCore 0.9.0-campaign ↔ NetProto 4).
@@ -50,18 +53,19 @@ Turn the W25 safe-extensibility foundation into a production-usable pack ecosyst
 - Spawn rules cannot reference boss machinery (boss:true or BOSS_AI); cross-pack enemy references require declared dependency (checks `rec.deps`/`optionalDeps` at staging, fail-closed).
 - Dedicated host file loading is host-local config, byte-bounded before parse, same validator, activated before world creation; mismatch rejects before snapshot.
 - Zero-pack fingerprint remains `1b1d7c15`. New gameplay identity is order-sensitive; W25 `97f8ff42` saves/v4 peers migrate only after legacy content, versions, and reconstructed data-pack order match. Current gv2 resource-only changes stay compatible; ambiguous gv1 resource changes fail closed. Saves are classified before mutation.
+- Structural `resources.files` descriptors still parse, but every install/activation boundary rejects them until actual bytes can be materialized; no store, world, or live session can silently claim an external file exists.
 
 ## Test counts
 
 - `npm run check` — 58 files, 0 failures
-- `npm run check:i18n` — 568 fallback keys, 269 registry names resolved, fingerprint `1b1d7c15` match, 374 stable ids, 368 pre-W24 unchanged
-- `npm test` (node:test) — **665 pass, 0 fail** at `5d39c11`
-  - packs: 89/89; full browser: 32/32; build/verify/i18n green
+- `npm run check:i18n` — 577 fallback keys, 269 registry names resolved, fingerprint `1b1d7c15` match, 374 stable ids, 368 pre-W24 unchanged
+- `npm test` (node:test) — **667 pass, 0 fail** at `79786a4`
+  - packs: 91/91; full browser: 33/33; build/verify/i18n green
 - `node tools/fuzz-packs.js` — 400 rounds seed 20260924, accepted 43, rejected 756, **escapes 0**
 - `node tools/bench-packs.js` — activation 1.074ms, classifySave 36.0ms/50k, save delta +103 bytes, v4 hello 141 bytes
 - `npm run build` — 58 js files, 60 referenced assets
 - `npm run verify:build` — boots, renders, new-game and continue work, zero browser errors
-- `npm run test:browser` — **32 passed** on Chromium; includes the W27 frame-time gate, pack UI, and multiplayer journeys.
+- `npm run test:browser` — **33 passed** on Chromium; includes valid installed-resource import→reload→UI activation, unmaterialized-file rejection, the W27 frame-time gate, and multiplayer journeys.
 
 ## Benchmarks
 
@@ -69,9 +73,10 @@ See `tools/bench-packs.js` above; `tools/bench-runtime.js` unchanged (W21/W25 op
 
 ## CI runs
 
-- Final local gate at `5d39c11`: `npm run validate` green — 665/665 Node,
-  32/32 Chromium, build + verify-dist, i18n, fingerprint `1b1d7c15`. Journey M
-  also passed 20 consecutive stress iterations after deterministic harness repair.
+- Final local gate at `79786a4`: `npm run validate` green — 667/667 Node,
+  33/33 Chromium, build + verify-dist, i18n, fingerprint `1b1d7c15`.
+  Independent standards/spec reviews report no remaining Critical/High/Medium
+  issues in the resource-file/install-flow change.
 
 ## Known limitations
 
@@ -94,6 +99,7 @@ See `tools/bench-packs.js` above; `tools/bench-runtime.js` unchanged (W21/W25 op
 - `a905126` — canonical headless/browser boot order, wall placement/drop/byte bounds, loot bounds, forest/ocean spawn rules
 - `a19893e` — order-sensitive gameplay identity, resource-only save compatibility, positive wall hardness, fail-closed dedicated-host pack inputs
 - `5d39c11` — canonical W25 legacy content/order migration, fresh/rejoin welcome echo, duplicate host-option rejection, authoritative Journey M placement/interest repair
+- `79786a4` — explicit pack installability validation, unmaterialized-resource rejection across store/load/repair/host/activation, localized install/remove diagnostics, valid and invalid real-browser file flows
 
 ## Reproduction
 
@@ -134,17 +140,18 @@ OpenSpec package with current code/tests:
   reject missing/duplicate values before startup; local files are descriptor-bound
   and capped before parsing. Process-level regressions cover every rejection.
 
-Final proof at `5d39c11`: full `npm run validate` is green (665/665 Node,
-32/32 Chromium, build + verify-dist, i18n, fingerprint `1b1d7c15`); the isolated
-pack suite is 89/89 and Journey M passed 20/20 consecutive stress iterations.
-W25 `97f8ff42` / `715306e0` peers and saves migrate only with matching legacy
-content, required-only order, and declared versions; current gv2 preserves
-compatible resource-only changes. Fuzzing 400 rounds at seed 20260924 accepted
-43, rejected 756, and found 0 escapes. Final activation was 1.074 ms and
-classification 36.0 ms/50k. Known remaining limitations are intentionally not
-overstated: exact UTF-8 store accounting, unmaterialized `resources.files`,
-large pack-panel UX, dedicated-host-plus-packs end-to-end automation, W26-family
-fuzz coverage, and a durable exhaustive file-coverage ledger remain follow-ups.
+Final proof at `79786a4`: full `npm run validate` is green (667/667 Node,
+33/33 Chromium, build + verify-dist, i18n, fingerprint `1b1d7c15`); the
+isolated pack suite is 91/91. Browser coverage now proves both a real valid JSON
+resource install surviving reload and activating through the title UI, plus
+rejection of an unmaterialized `resources.files` manifest through the same file
+picker. Stored unsupported manifests are skipped with bounded localized
+diagnostics; dedicated-host and direct activation paths fail before startup.
+Independent standards and OpenSpec reviews report no Critical/High/Medium
+issues. Known remaining limitations are intentionally not overstated: exact
+UTF-8 store accounting, large pack-panel UX, dedicated-host-plus-packs
+end-to-end automation, W26-family fuzz coverage, and a durable exhaustive
+file-coverage ledger remain follow-ups.
 
 ---
 *Generated for W26 pack-ecosystem productionization; additive changes preserve zero-pack equivalence.*

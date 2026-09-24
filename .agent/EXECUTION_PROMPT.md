@@ -35,10 +35,10 @@ regress again.
   invalidation targets are measured and documented.
 - WS0.2's real-browser frame-time and operation gates pass, including the
   historical injected-regression negative control. The full browser suite is
-  32/32 green.
+  33/33 green.
 - WS5 entity sprite batching and WS1.4 `UI.layout()` memoization remain
   explicitly deferred for the visual-fidelity/CPU reasons in the handoff.
-- Final repository validation at `5d39c11`: 665/665 Node, 32/32 browser,
+- Final repository validation at `79786a4`: 667/667 Node, 33/33 browser,
   build + verify-dist, check 58/58, and i18n/fingerprint clean.
 
 ## Completion / truth-sync
