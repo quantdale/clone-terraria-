@@ -43,10 +43,23 @@ function panelPoint(page, which) {
     const w = window.innerWidth, h = window.innerHeight;
     const px = Math.round(w / 2 - 230);
     const py = Math.round(Math.max(24, h * 0.16));
-    const ph = 56 + 30 + 62; // one provided pack row
+    const ph = 56 + Math.max(1, window.TC.Packs.available().length) * 30 + 62;
     if (w2 === "row") return { x: px + 40, y: py + 56 + 12 };
+    if (w2 === "install") return { x: px + 160 + 55, y: py + ph - 48 + 18 };
     return { x: px + 12 + 100, y: py + ph - 48 + 18 }; // apply center
   }, [which]);
+}
+
+function panelRowPoint(page, id) {
+  return page.evaluate((packId) => {
+    const avail = window.TC.Packs.available();
+    const index = avail.findIndex((entry) => entry.id === packId);
+    if (index < 0) return null;
+    const w = window.innerWidth, h = window.innerHeight;
+    const px = Math.round(w / 2 - 250);
+    const py = Math.round(Math.max(24, h * 0.16));
+    return { x: px + 40, y: py + 56 + index * 30 + 12 };
+  }, id);
 }
 
 test("journey P: install fixture pack through the real UI, play it, save/reload", async ({ page }) => {
@@ -60,6 +73,21 @@ test("journey P: install fixture pack through the real UI, play it, save/reload"
   let pt = await titleButtonPoint(page, 4);
   await page.mouse.click(pt.x, pt.y);
   await H.runFrames(page, 3);
+  pt = await panelPoint(page, "install");
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.mouse.click(pt.x, pt.y);
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    name: "unmaterialized.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({
+      manifest: 1, id: "filepack", name: "File Pack", version: "1.0.0", type: "resource",
+      resources: { files: ["gfx/missing.png"] },
+    })),
+  });
+  await page.waitForFunction(() => !document.querySelector('input[type="file"]'));
+  expect(await page.evaluate(() => window.TC.PackStore.has("filepack"))).toBe(false);
+
   pt = await panelPoint(page, "row");
   await page.mouse.click(pt.x, pt.y); // toggle testpack row
   await H.runFrames(page, 2);
@@ -182,4 +210,54 @@ test("journey P: install fixture pack through the real UI, play it, save/reload"
   expect(after.fp, "identity stable across sessions").toBe(ident.fp);
 
   H.assertNoErrors(errors, "journey P");
+});
+
+test("journey P: installed JSON survives reload and activates through the UI", async ({ page }) => {
+  const errors = await H.openGame(page, "#test");
+  let pt = await titleButtonPoint(page, 4);
+  await page.mouse.click(pt.x, pt.y);
+  await H.runFrames(page, 3);
+
+  pt = await panelPoint(page, "install");
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.mouse.click(pt.x, pt.y);
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    name: "journey-resource.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({
+      manifest: 1,
+      id: "journeyres",
+      name: "Journey Resource",
+      version: "1.0.0",
+      type: "resource",
+      resources: { locale: { en: { ui: { menu: { new_world: "PACK JOURNEY" } } } } },
+    })),
+  });
+  await page.waitForFunction(() => !document.querySelector('input[type="file"]'));
+  expect(await page.evaluate(() => window.TC.PackStore.has("journeyres"))).toBe(true);
+  expect(await page.evaluate(() => window.TC.Packs.active().join(","))).toBe("");
+
+  await page.reload({ waitUntil: "load" });
+  await page.waitForFunction(() => !!(window.TC && window.TC.state === "title"));
+  expect(await page.evaluate(() => window.TC.PackStore.has("journeyres"))).toBe(true);
+  expect(await page.evaluate(() => !!window.TC.Packs.getManifest("journeyres"))).toBe(true);
+
+  pt = await titleButtonPoint(page, 4);
+  await page.mouse.click(pt.x, pt.y);
+  await H.runFrames(page, 3);
+  pt = await panelRowPoint(page, "journeyres");
+  expect(pt).not.toBeNull();
+  await page.mouse.click(pt.x, pt.y);
+  await H.runFrames(page, 2);
+  pt = await panelPoint(page, "apply");
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "load" }).catch(() => {}),
+    page.mouse.click(pt.x, pt.y),
+  ]);
+  await page.waitForFunction(() => !!(window.TC && window.TC.state === "title"));
+  expect(await page.evaluate(() => window.TC.Packs.active().join(","))).toBe("journeyres");
+  expect(await page.evaluate(() => window.TC.Localization.t("ui.menu.new_world"))).toBe("PACK JOURNEY");
+
+  H.assertNoErrors(errors, "journey P installed resource");
 });

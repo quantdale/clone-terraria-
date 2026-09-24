@@ -118,7 +118,13 @@ const TC = game.TC;
       process.exit(1);
     }
     let rec;
-    try { rec = TC.Packs.provideJSON(text); } catch (e) {
+    try {
+      if (typeof TC.Packs.validateInstallJSON !== "function") {
+        throw new Error("installability validator unavailable");
+      }
+      TC.Packs.validateInstallJSON(text);
+      rec = TC.Packs.provideJSON(text);
+    } catch (e) {
       console.error("[mp-server] pack file '" + fp + "' invalid: " + (e && e.message));
       process.exit(1);
     }

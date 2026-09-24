@@ -251,7 +251,7 @@ test('loader: reserved namespaces cannot be hijacked', () => {
   }
 });
 
-test('loader: resource-path traversal and malformed paths reject', () => {
+test('loader: resource paths validate but unmaterialized files reject at install/activation', () => {
   const TC = fresh();
   const mk = (f) => resourceManifest({
     id: 'res' + Math.abs(f.length * 31 % 9973),
@@ -262,7 +262,13 @@ test('loader: resource-path traversal and malformed paths reject', () => {
     assert.throws(() => TC.Packs.provide(mk(bad)),
       /pack resource root|path string/, 'traversal rejected: ' + bad);
   }
-  TC.Packs.provide(mk('gfx/deep/name-1.file.png')); // clean path accepted
+  const clean = mk('gfx/deep/name-1.file.png');
+  TC.Packs.provide(clean);
+  assert.doesNotThrow(() => TC.Packs.validateJSON(JSON.stringify(clean)));
+  assert.throws(() => TC.Packs.validateInstallJSON(JSON.stringify(clean)),
+    /does not materialize external pack files/);
+  assert.throws(() => TC.Packs.setActive([clean.id]),
+    /does not materialize external pack files/);
 });
 
 test('loader: schema bounds on family entries and values (activation-time)', () => {

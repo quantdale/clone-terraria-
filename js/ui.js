@@ -490,6 +490,7 @@
   let packsOpen = false;
   let packSel = {};                       // id -> bool (panel checkbox state)
   let packProblem = null;                 // MOD-003 classification result
+  let packLoadErrorShown = false;
 
   function actTogglePacks() {
     packsOpen = !packsOpen;
@@ -497,6 +498,11 @@
       packSel = {};
       const cur = TC.Packs ? TC.Packs.active() : [];
       for (const id of cur) packSel[id] = true;
+      if (!packLoadErrorShown && TC.PackStore && typeof TC.PackStore.loadErrors === 'function' &&
+          TC.PackStore.loadErrors().length) {
+        packLoadErrorShown = true;
+        toast(t('ui.packs.install_failed', { reason: t('ui.packs.load_error') }));
+      }
     }
   }
   function actPackRow(id) {
@@ -516,8 +522,23 @@
       catch (e) { toast(t('ui.packs.apply_failed', { reason: String(e && e.message || e).slice(0, 80) })); }
     }
   }
+  function packInstallReason(result) {
+    if (result.error === 'empty') return t('ui.packs.empty_error');
+    if (result.error === 'no-authority') return t('ui.packs.unavailable');
+    if (result.error === 'storage') return t('ui.packs.storage_error');
+    if (result.error === 'conflict') return t('ui.packs.conflict_error');
+    if (result.error === 'quota' || result.error === 'max-installed' || result.error === 'too-large') {
+      return t('ui.packs.quota_error');
+    }
+    if (result.error === 'active') return t('ui.packs.remove_active');
+    if (result.error === 'unsupported-resource') return t('ui.packs.resource_files_unsupported');
+    return t('ui.packs.invalid_error');
+  }
   function actPacksInstall() {
-    if (!TC.PackStore || typeof TC.PackStore.install !== 'function') { toast(t('ui.packs.install_failed', { reason: 'unavailable' })); return; }
+    if (!TC.PackStore || typeof TC.PackStore.install !== 'function') {
+      toast(t('ui.packs.install_failed', { reason: t('ui.packs.unavailable') }));
+      return;
+    }
     // Use a transient hidden file input; works in real browsers and degrades
     // gracefully in headless (no document). Provide a prompt fallback.
     try {
@@ -531,7 +552,11 @@
           if (!file) { try { document.body.removeChild(inp); } catch (e) {} return; }
           if (file.size > 256 * 1024) { toast(t('ui.packs.install_failed', { reason: t('ui.packs.quota_error') })); try { document.body.removeChild(inp); } catch (e) {} return; }
           const reader = (typeof FileReader !== 'undefined') ? new FileReader() : null;
-          if (!reader || typeof reader.readAsText !== 'function') { toast(t('ui.packs.install_failed', { reason: 'unavailable' })); try { document.body.removeChild(inp); } catch (e) {} return; }
+          if (!reader || typeof reader.readAsText !== 'function') {
+            toast(t('ui.packs.install_failed', { reason: t('ui.packs.unavailable') }));
+            try { document.body.removeChild(inp); } catch (e) {}
+            return;
+          }
           reader.onload = function () {
             const text = String(reader.result || '');
             const r = TC.PackStore.install(text);
@@ -541,18 +566,14 @@
               // Refresh checkbox state for newly available pack
               if (r.id) packSel[r.id] = true;
             } else {
-              let key = 'ui.packs.install_failed';
-              let reason = r.error || 'unknown';
-              if (r.error === 'conflict') reason = t('ui.packs.conflict_error');
-              else if (r.error === 'quota' || r.error === 'max-installed') reason = t('ui.packs.quota_error');
-              else if (r.error === 'too-large') reason = t('ui.packs.quota_error');
-              else if (r.error === 'active') reason = t('ui.packs.remove_active');
-              else if (r.detail) reason = String(r.detail).slice(0, 80);
-              toast(t(key, { reason: reason }));
+              toast(t('ui.packs.install_failed', { reason: packInstallReason(r) }));
             }
             try { document.body.removeChild(inp); } catch (e) {}
           };
-          reader.onerror = function () { toast(t('ui.packs.install_failed', { reason: 'read error' })); try { document.body.removeChild(inp); } catch (e) {} };
+          reader.onerror = function () {
+            toast(t('ui.packs.install_failed', { reason: t('ui.packs.read_error') }));
+            try { document.body.removeChild(inp); } catch (e) {}
+          };
           reader.readAsText(file);
         };
         // Append to body so the input exists in DOM for file picker to work
@@ -567,8 +588,10 @@
       if (text == null) return;
       const r = TC.PackStore.install(String(text));
       if (r.ok) toast(t('ui.packs.install_ok', { id: r.id }));
-      else toast(t('ui.packs.install_failed', { reason: r.error || 'unknown' }));
-    } catch (e) { toast(t('ui.packs.install_failed', { reason: String(e && e.message || e).slice(0, 80) })); }
+      else toast(t('ui.packs.install_failed', { reason: packInstallReason(r) }));
+    } catch (e) {
+      toast(t('ui.packs.install_failed', { reason: t('ui.packs.unknown_error') }));
+    }
   }
   function actPacksExport(id) {
     if (!TC.PackStore || typeof TC.PackStore.exportPack !== 'function') { toast(t('ui.packs.export_failed')); return; }
@@ -594,15 +617,20 @@
     } catch (e) { toast(t('ui.packs.export_failed')); }
   }
   function actPacksRemove(id) {
-    if (!TC.PackStore || typeof TC.PackStore.remove !== 'function') { toast(t('ui.packs.remove_failed', { reason: 'unavailable' })); return; }
+    if (!TC.PackStore || typeof TC.PackStore.remove !== 'function') {
+      toast(t('ui.packs.remove_failed', { reason: t('ui.packs.unavailable') }));
+      return;
+    }
     if (!id) return;
     const r = TC.PackStore.remove(id);
     if (r.ok) {
       toast(t('ui.packs.remove_ok', { id: id }));
       if (packSel[id]) delete packSel[id];
     } else {
-      let reason = r.error || 'unknown';
+      let reason = t('ui.packs.unknown_error');
       if (r.error === 'active') reason = t('ui.packs.remove_active');
+      else if (r.error === 'missing') reason = t('ui.packs.not_installed');
+      else if (r.error === 'storage') reason = t('ui.packs.storage_error');
       toast(t('ui.packs.remove_failed', { reason: reason }));
     }
   }

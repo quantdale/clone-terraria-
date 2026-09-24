@@ -796,6 +796,15 @@
     }
   }
 
+  function assertMaterializable(id, resources) {
+    if (!resources || !Array.isArray(resources.files) || !resources.files.length) return;
+    fail(
+      "unsupported",
+      "pack '" + id + "' cannot use resources.files because this runtime does not materialize external pack files",
+      resources.files.slice(0, 8).map((path) => String(path)),
+    );
+  }
+
   // Validate JSON through the same fail-closed boundary as provideJSON, but
   // do not register it. PackStore uses this for an explicit replacement: the
   // old record may already be provided in this session, so calling provideJSON
@@ -827,11 +836,17 @@
         fail("security", "manifest rejected by safety scan", scanErrs);
       }
       validateManifestShape(frozen);
-      return { id: frozen.id, rawDigest: manifestDigest(frozen) };
+      return { id: frozen.id, rawDigest: manifestDigest(frozen), resources: frozen.resources };
     } catch (e) {
       statsCounters.rejectedJson++;
       throw e;
     }
+  }
+
+  function validateInstallJSON(text) {
+    const validated = validateJSON(text);
+    assertMaterializable(validated.id, validated.resources);
+    return { id: validated.id, rawDigest: validated.rawDigest };
   }
 
   function getManifest(id) {
@@ -2201,6 +2216,16 @@
       lastError = PackError("schema", "dependency closure exceeds " + MAX_PACKS_ACTIVE + " active packs");
       throw lastError;
     }
+    try {
+      for (let i = 0; i < ordered.length; i++) {
+        const rec = provided.get(ordered[i]);
+        assertMaterializable(rec.id, rec.resources);
+      }
+    } catch (e) {
+      statsCounters.failed++;
+      lastError = e;
+      throw e;
+    }
 
     // Session permanence: committed pack content extends dense tables that
     // saves and hot paths index into — it cannot be withdrawn or reordered.
@@ -2721,6 +2746,7 @@
     provide: provide,
     provideJSON: provideJSON,
     validateJSON: validateJSON,
+    validateInstallJSON: validateInstallJSON,
     getManifest: getManifest,
     available: available,
     setActive: setActive,

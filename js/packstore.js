@@ -114,6 +114,9 @@
         continue;
       }
       try {
+        if (TC.Packs && typeof TC.Packs.validateInstallJSON === 'function') {
+          TC.Packs.validateInstallJSON(m.json);
+        }
         const rec = TC.Packs && typeof TC.Packs.provideJSON === 'function'
           ? TC.Packs.provideJSON(m.json)
           : null;
@@ -139,16 +142,20 @@
     opts = opts || {};
     if (typeof text !== 'string' || !text.length) return { ok: false, error: 'empty' };
     if (text.length > MAX_MANIFEST_BYTES) return { ok: false, error: 'too-large' };
-    if (!TC.Packs || typeof TC.Packs.validateJSON !== 'function' ||
+    if (!TC.Packs || typeof TC.Packs.validateInstallJSON !== 'function' ||
         typeof TC.Packs.provideJSON !== 'function') {
       return { ok: false, error: 'no-authority' };
     }
 
     let validated;
     try {
-      validated = TC.Packs.validateJSON(text);
+      validated = TC.Packs.validateInstallJSON(text);
     } catch (e) {
-      return { ok: false, error: 'invalid', detail: e && e.message || String(e) };
+      return {
+        ok: false,
+        error: e && e.code === 'unsupported' ? 'unsupported-resource' : 'invalid',
+        detail: e && e.message || String(e),
+      };
     }
     const id = validated.id;
     const digest = validated.rawDigest;
@@ -219,6 +226,10 @@
     return { ok: true, id };
   }
 
+  function loadErrors() {
+    return lastLoadErrors.slice();
+  }
+
   function list() {
     return installed.map((m) => ({ id: m.id, digest: m.digest }));
   }
@@ -244,7 +255,7 @@
     const kept = [];
     for (const m of before) {
       try {
-        const rec = TC.Packs.validateJSON(m.json);
+        const rec = TC.Packs.validateInstallJSON(m.json);
         if (rec.id !== m.id || rec.rawDigest !== m.digest) {
           kept.push({ id: rec.id, digest: rec.rawDigest, json: m.json });
         } else {
@@ -272,6 +283,7 @@
   TC.PackStore = {
     KEY: KEY,
     load: load,
+    loadErrors: loadErrors,
     install: install,
     remove: remove,
     exportJSON: exportJSON,

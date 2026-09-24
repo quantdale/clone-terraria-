@@ -54,6 +54,34 @@ test('packstore: fresh store empty, install persists and load provides', () => {
   assert.strictEqual(parsed.manifests[0].id, 'mypack');
 });
 
+test('packstore: unmaterialized resource files never persist or load', () => {
+  const storage = makeStorage();
+  const first = fresh(storage).TC;
+  assert.strictEqual(first.PackStore.install(manifest('basepack')).ok, true);
+  const before = first.PackStore.exportJSON();
+  const resourcePack = JSON.stringify({
+    manifest: 1, id: 'filepack', name: 'File Pack', version: '1.0.0', type: 'resource',
+    resources: { files: ['gfx/missing.png'] },
+  });
+  const rejected = first.PackStore.install(resourcePack);
+  assert.strictEqual(rejected.ok, false);
+  assert.strictEqual(rejected.error, 'unsupported-resource');
+  assert.strictEqual(first.PackStore.exportJSON(), before);
+  assert.strictEqual(first.Packs.getManifest('filepack'), null);
+
+  storage.setItem('tc_packs_installed_v1', JSON.stringify({
+    v: 1,
+    manifests: [{ id: 'filepack', digest: 'stale', json: resourcePack }],
+  }));
+  const second = fresh(storage).TC;
+  const loaded = second.PackStore.load();
+  assert.strictEqual(loaded.provided, 0);
+  assert.ok(loaded.errors.some((error) => /does not materialize external pack files/.test(error)));
+  assert.ok(second.PackStore.loadErrors().some((error) =>
+    /does not materialize external pack files/.test(error)));
+  assert.strictEqual(second.Packs.getManifest('filepack'), null);
+});
+
 test('packstore: installed survives reload via shared storage', () => {
   const storage = makeStorage();
   {
