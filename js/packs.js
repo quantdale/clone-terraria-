@@ -1536,8 +1536,8 @@
           continue;
         }
         def.color = wl.color;
-        if (!boundedNum(wl.hardness == null ? 0.5 : wl.hardness, 0, 10)) {
-          P.push(who + ": hardness must be a number within 0..10");
+        if (!boundedNum(wl.hardness == null ? 0.5 : wl.hardness, 0, 10) || wl.hardness === 0) {
+          P.push(who + ": hardness must be a number within (0,10]");
           continue;
         }
         def.hardness = wl.hardness == null ? 0.5 : wl.hardness;
@@ -2314,17 +2314,19 @@
   // Identity digests + save metadata (MOD-003)
   // ======================================================================
 
-  // Gameplay-affecting pack-set fingerprint: sorted 'id@version@digest'
-  // lines over DATA packs only. Resource packs NEVER change it, so two
-  // peers differing only in presentation packs stay multiplayer-compatible.
+  // Gameplay-affecting pack-set fingerprint: ordered 'id@version@digest'
+  // lines over DATA packs only. Resource packs never enter directly, but their
+  // dependency edges can change the dense data-pack order.
   function digest() {
     if (activeDigestCache !== null) return activeDigestCache;
     const lines = [];
-    for (const r of activeRecords) {
+    let dataOrder = 0;
+    for (let i = 0; i < activeRecords.length; i++) {
+      const r = activeRecords[i];
       if (r.type !== "data") continue;
-      lines.push(r.id + "@" + r.version + "@" + r.rawDigest);
+      lines.push(dataOrder++ + "|" + r.id + "@" + r.version + "@" + r.rawDigest);
     }
-    activeDigestCache = lines.length ? fnv1a(lines.sort().join("\n")).toString(16) : "";
+    activeDigestCache = lines.length ? fnv1a(lines.join("\n")).toString(16) : "";
     return activeDigestCache;
   }
 
@@ -2412,9 +2414,13 @@
       seenIds.add(p.id);
       const cur = activeById.get(p.id);
       if (!cur) {
-        problems.push(
-          "missing pack: save requires '" + p.id + "'@" + p.version + ", which is not active",
-        );
+        if (p.type === "resource") {
+          warnings.push("resource pack not active: " + p.id + "@" + p.version);
+        } else {
+          problems.push(
+            "missing pack: save requires '" + p.id + "'@" + p.version + ", which is not active",
+          );
+        }
       } else if (cur.version !== p.version) {
         problems.push(
           "incompatible version: save has '" + p.id + "'@" + p.version +
@@ -2428,9 +2434,9 @@
       }
     }
     if (meta.fp !== contentDigest()) {
-      problems.push(
-        "content fingerprint mismatch: save has " + meta.fp +
-          " but active content digest is " + contentDigest(),
+      warnings.push(
+        "content fingerprint differs (resource-only set change is compatible): save has " +
+          meta.fp + " but active content digest is " + contentDigest(),
       );
     }
     if (meta.gfp !== digest()) {

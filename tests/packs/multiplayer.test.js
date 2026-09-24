@@ -91,3 +91,32 @@ test("mp packs: resource-only difference stays compatible end to end", () => {
   const welcome = C.outbox.find((m) => m.t === "welcome");
   assert.ok(welcome, "resource-only difference joins fine");
 });
+
+
+test("mp packs: gameplay digest covers resource-induced dense order", () => {
+  function realm(includeResource) {
+    const TC = loadGame({}).TC;
+    TC.Packs.provide({
+      manifest: 1, id: "b_pack", name: "B", version: "1.0.0", type: "data",
+      content: { items: [{ key: "b_item", name: "B", kind: "material" }] },
+    });
+    TC.Packs.provide({
+      manifest: 1, id: "bridge_res", name: "Bridge", version: "1.0.0", type: "resource",
+      requires: { packs: { b_pack: "^1.0.0" } },
+      resources: { locale: { en: { ui: { packs: { hint: "BRIDGE" } } } } },
+    });
+    TC.Packs.provide({
+      manifest: 1, id: "a_pack", name: "A", version: "1.0.0", type: "data",
+      optional: { packs: { bridge_res: "^1.0.0" } },
+      content: { items: [{ key: "a_item", name: "A", kind: "material" }] },
+    });
+    const requested = includeResource ? ["a_pack", "b_pack", "bridge_res"] : ["a_pack", "b_pack"];
+    TC.Packs.setActive(requested);
+    return TC;
+  }
+  const withoutResource = realm(false);
+  const withResource = realm(true);
+  assert.notStrictEqual(withoutResource.Packs.digest(), withResource.Packs.digest());
+  assert.strictEqual(withoutResource.Packs.active().join(","), "a_pack,b_pack");
+  assert.strictEqual(withResource.Packs.active().join(","), "b_pack,bridge_res,a_pack");
+});

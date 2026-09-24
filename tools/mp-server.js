@@ -7,6 +7,7 @@
      node tools/mp-server.js [--seed 1337] [--port 7777]
           [--interest 56] [--budget 4] [--rate 2] [--keyframe 600]
           [--detach-grace 300] [--max-out-kb 128] [--fixture pumps]
+          [--packs id1,id2] [--pack-file path.json]
 
      interest      region interest radius in tiles around each player
      budget        changed regions replicated per tick per connection
@@ -42,6 +43,13 @@ function argsAll(name) {
   }
   return out;
 }
+for (const name of ["packs", "pack-file"]) {
+  const i = process.argv.indexOf("--" + name);
+  if (i >= 0 && (i + 1 >= process.argv.length || process.argv[i + 1].startsWith("--"))) {
+    console.error("[mp-server] --" + name + " requires a value");
+    process.exit(1);
+  }
+}
 
 const SEED = parseInt(arg("seed", "1337"), 10) | 0;
 const PORT = parseInt(arg("port", "7777"), 10) | 0;
@@ -63,16 +71,44 @@ const TC = game.TC;
   const packsArg = arg("packs", "");
   const packFiles = argsAll("pack-file");
   if (!packsArg && !packFiles.length) return;
+  if (packFiles.length > 64) {
+    console.error("[mp-server] too many --pack-file arguments (max 64)");
+    process.exit(1);
+  }
   const wantIds = packsArg ? packsArg.split(",").map((s) => s.trim()).filter(Boolean) : [];
   const fileIds = [];
   for (const fp of packFiles) {
-    let text;
-    try { text = fs.readFileSync(fp, "utf8"); } catch (e) {
-      console.error("[mp-server] pack file unreadable '" + fp + "': " + (e && e.message));
-      process.exit(1);
+    let fd = null;
+    let text = "";
+    let problem = "";
+    try {
+      fd = fs.openSync(fp, "r");
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size > 256 * 1024) {
+        problem = "exceeds 256 KiB or is not a file";
+      } else {
+        const bytes = Buffer.allocUnsafe(stat.size);
+        let offset = 0;
+        while (offset < bytes.length) {
+          const n = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
+          if (n <= 0) break;
+          offset += n;
+        }
+        if (offset !== bytes.length || fs.fstatSync(fd).size !== stat.size) {
+          problem = "changed while being read";
+        } else {
+          text = bytes.toString("utf8");
+        }
+      }
+    } catch (e) {
+      problem = "unreadable: " + (e && e.message);
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch (_) {}
+      }
     }
-    if (text.length > 256 * 1024) {
-      console.error("[mp-server] pack file '" + fp + "' exceeds 256 KiB");
+    if (problem) {
+      console.error("[mp-server] pack file '" + fp + "' " + problem);
       process.exit(1);
     }
     let rec;

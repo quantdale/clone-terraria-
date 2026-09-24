@@ -76,7 +76,7 @@ test('classify: full compatibility matrix', () => {
   assert.ok(!cls.ok && cls.problems[0].indexOf('incompatible version') >= 0);
 
   const contentMismatch = TC.Packs.classifySave(Object.assign({}, meta, { fp: 'deadbeef' }));
-  assert.ok(!contentMismatch.ok && contentMismatch.problems.some((p) => /content fingerprint mismatch/.test(p)));
+  assert.ok(contentMismatch.ok && contentMismatch.warnings.some((p) => /content fingerprint differs/.test(p)));
   const gameplayMismatch = TC.Packs.classifySave(Object.assign({}, meta, { gfp: 'deadbeef' }));
   assert.ok(!gameplayMismatch.ok && gameplayMismatch.problems.some((p) => /gameplay fingerprint mismatch/.test(p)));
   const omitted = TC.Packs.classifySave(Object.assign({}, meta, { packs: [] }));
@@ -109,8 +109,24 @@ test('classify: same id and version with changed content is fingerprint-incompat
   b.Packs.setActive(['changedpack']);
   const cls = b.Packs.classifySave(meta);
   assert.ok(!cls.ok);
-  assert.ok(cls.problems.some((problem) => /content fingerprint mismatch/.test(problem)));
+  assert.ok(cls.warnings.some((problem) => /content fingerprint differs/.test(problem)));
   assert.ok(cls.problems.some((problem) => /gameplay fingerprint mismatch/.test(problem)));
+});
+
+test('classify: independent resource-only pack differences stay compatible', () => {
+  const a = fresh();
+  a.Packs.setActive(['testpack']);
+  const meta = a.Packs.saveMetadata();
+  const b = fresh();
+  b.Packs.provide({
+    manifest: 1, id: 'skinonly', name: 'Skin Only', version: '1.0.0', type: 'resource',
+    resources: { locale: { en: { ui: { packs: { hint: 'SKINS' } } } } },
+  });
+  b.Packs.setActive(['skinonly', 'testpack']);
+  const cls = b.Packs.classifySave(meta);
+  assert.ok(cls.ok);
+  assert.ok(cls.warnings.some((warning) => /content fingerprint differs/.test(warning)));
+  assert.ok(cls.warnings.some((warning) => /active pack not present/.test(warning)));
 });
 
 test('cycle: save with pack -> fresh realm without it refuses cleanly; restore succeeds', () => {

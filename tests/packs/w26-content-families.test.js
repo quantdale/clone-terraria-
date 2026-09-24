@@ -99,11 +99,16 @@ test('ws1: invalid wall schema rejected (color/hardness/unknown field)', () => {
 
   assert.throws(() => activate(TC, [{
     manifest: 1, id: 'badwall2', name: 'Bad Wall 2', version: '1.0.0', type: 'data',
-    content: { walls: [{ key: 'x', name: 'X Wall', color: '#112233', hardness: 99 }] },
-  }]), /hardness must be a number within 0\.\.10/);
+    content: { walls: [{ key: 'x', name: 'X Wall', color: '#112233', hardness: 0 }] },
+  }]), /hardness must be a number within \(0,10\]/);
 
   assert.throws(() => activate(TC, [{
     manifest: 1, id: 'badwall3', name: 'Bad Wall 3', version: '1.0.0', type: 'data',
+    content: { walls: [{ key: 'x', name: 'X Wall', color: '#112233', hardness: 99 }] },
+  }]), /hardness must be a number within \(0,10\]/);
+
+  assert.throws(() => activate(TC, [{
+    manifest: 1, id: 'badwall4', name: 'Bad Wall 4', version: '1.0.0', type: 'data',
     content: { walls: [{ key: 'x', name: 'X Wall', color: '#112233', hardness: 0.3, bogus: 1 }] },
   }]), /unknown field 'bogus'/);
 });
