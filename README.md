@@ -47,9 +47,10 @@ before anything is committed atomically to the game.
 - Enable packs on the title screen via **Content Packs** → toggle → **Apply &
   Restart**. The choice persists (like the locale); booting without a pack is
   byte-for-byte the historical game.
-- Saves record which packs were active. Loading a save whose packs are missing
-  or changed refuses cleanly with an actionable message and never touches the
-  stored save.
+- Saves record which packs were active. Missing or changed data packs refuse
+  cleanly with an actionable message and never touch the stored save; compatible
+  current gv2 metadata allows resource-only additions, removals, and version changes;
+  legacy gv1 saves migrate only when historical content/order is verifiable.
 - Multiplayer peers prove identical gameplay pack sets during the join handshake
   before any world state is shared (protocol v4). Dedicated hosts select packs
   before world creation via `node tools/mp-server.js --packs a,b --pack-file ./p.json`.
@@ -66,8 +67,10 @@ Two ways to play locally:
    with tuning flags `--interest 56 --budget 4 --rate 2 --keyframe 600
    --detach-grace 300 --max-out-kb 128` and pack selection
    `--packs a,b --pack-file ./my-pack.json` (repeatable, validated before world
-   creation; mismatched clients are rejected before snapshot), then open the game
-   in each browser and pick **Join Local Server** (`ws://localhost:7777`).
+   creation; mismatched clients are rejected before snapshot). W25 v4 peers and
+   saves remain accepted only when their declared data-pack order is verified.
+   Open the game in each browser and pick **Join Local Server**
+   (`ws://localhost:7777`).
 2. **Browser host** - pick **Host Local Multiplayer** on one machine's title screen;
    other browsers join it the same way.
 

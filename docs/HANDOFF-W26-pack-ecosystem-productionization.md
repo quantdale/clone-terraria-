@@ -1,10 +1,10 @@
 # W26 Handoff — Pack Ecosystem Productionization
 
-**Status:** COMPLETED + HARDENED (2026-09-24: 653/653 Node, 32/32 browser, full validate green)
+**Status:** IMPLEMENTED + HARDENED — **NOT SPEC-COMPLETE** (mandatory follow-ups remain)
 **Started from:** `6aed702` (post-W25 docs, includes W26 OpenSpec package)
 **WS1 commit:** `f5b05d5` — declarative wall + standalone loot-table families
-**Final HEAD:** `a905126` (+ reconciliation docs) — dependency/security, boot order, wall gameplay, loot/spawn hardening
-**Execution prompt:** `.agent/EXECUTION_PROMPT.md` (ACTIVE → VERIFY)
+**Final implementation:** `5d39c11` (verified identity/save/browser compatibility closure)
+**Execution prompt:** W27 prompt is completed; W26 remains VERIFY/NOT SPEC-COMPLETE
 **OpenSpec change:** `openspec/changes/w26-pack-ecosystem-productionization/`
 
 ## Mission
@@ -21,11 +21,11 @@ Turn the W25 safe-extensibility foundation into a production-usable pack ecosyst
 - **js/main.js** — W26 boot order: `PackStore.load()` before `Packs.bootActivate()` so installed packs are provided before activation; registry sync and boot tasks still after.
 - **js/ui.js** — title Packs panel evolves: Install JSON (hidden file input with prompt fallback), per-row Export/Remove for installed packs (Remove blocked while active, with localized toasts), Apply & Restart, Close; layout widened to 500px, new rects `packsInstallRect` + per-row `exportRect`/`removeRect`, `onClick` handling, `drawPacksPanel` draws small buttons and truncates labels. All new strings via `t()` with pseudo-locale proof.
 - **js/packstore.js** added to `index.html` after `packs.js` (production load order).
-- **js/constants.js** — `TC.VERSION` `0.1.0` → `0.9.0` (align with `package.json` 0.9.0; `TC.Packs.GAME_VERSION` stays `0.9` for pack compat; SaveCore `0.9.0-campaign` unchanged; documented in ARCHITECTURE §29).
+- **js/constants.js** — `TC.VERSION` `0.1.0` → `0.9.0` (aligns with `package.json`; `TC.Packs.GAME_VERSION` now derives from `TC.VERSION`, and dotted ranges canonicalize missing segments).
 - **js/locales/en.js** — added W26 `ui.packs` keys: `install`, `export`, `export_all`, `remove`, `installed`, `install_ok`, `install_unchanged`, `install_failed`, `remove_ok`, `remove_failed`, `remove_active`, `export_failed`, `quota_error`, `conflict_error` (14 new keys; total 568).
-- **tools/mp-server.js** — added `--packs id1,id2` and repeatable `--pack-file path.json` (byte-bounded, same `TC.Packs.provideJSON` validation, activated before `NetServer.start()` world creation; exits before listen on malformed/oversize/invalid packs).
+- **tools/mp-server.js** — added fail-closed `--packs` / repeatable `--pack-file` input (every occurrence requires a value; local files are descriptor-bound and capped before parsing), pack activation before `NetServer.start()`, and bounded `/debug?tx=&ty=` authoritative tile reads.
 - **tests/fixtures/registry-baseline-w24.json** — added `lootTable:0` (additive-only, fingerprint unchanged).
-- **tests/packs/w26-content-families.test.js** *(new, 10 tests)* — walls/lootTables: append-only, invalid rejection, PlaceWall/MineWall via Commands, deterministic roll, enemy lootTable kill drop, cross-pack dependency, rollback, save classification.
+- **tests/packs/w26-content-families.test.js** *(13 tests)* — walls/lootTables: append-only, invalid rejection (including zero hardness), canonical PlaceWall/MineWall, deterministic roll, enemy lootTable kill drop, cross-pack dependency, rollback, save classification.
 - **tests/packs/w26-packstore.test.js** *(new, 10 tests)* — PackStore: fresh/corrupt/wrong-version degrade, quota, identical/conflicting/replace, active-remove guard, export roundtrip, surviving reload, malicious bypass.
 - **tests/packs/w26-spawn.test.js** *(new, 7 tests)* — spawn rules: valid/invalid vocab, boss rejection, cross-pack dependency, deterministic ordering, biome/depth/time/requires filtering, rollback.
 - **docs/TASK_BOARD.md** — snapshot header W20 → W26, added W26 row (walls/lootTables/spawnRules + PackStore + dedicated host), updated follow-ups to include W26 LANDED.
@@ -35,7 +35,7 @@ Turn the W25 safe-extensibility foundation into a production-usable pack ecosyst
 
 ## Schemas
 
-**Wall** (`content.walls[]`): `{key, name, color:"#rrggbb", hardness:0..10, drop?:itemRef}` — color required, hardness defaults 0.5, drop references an item (same-pack or dependency). Appends to `WALL_DEFS`, alias `wall:sid -> index`.
+**Wall** (`content.walls[]`): `{key, name, color:"#rrggbb", hardness:(0,10], drop?:itemRef}` — color required, hardness defaults 0.5, zero hardness is rejected because canonical mining cannot break it, drop references an item (same-pack or dependency). Appends to `WALL_DEFS`, alias `wall:sid -> index`.
 
 **Loot table** (`content.lootTables[]`): `{key, name, entries:[{id:itemRef, min:1..999,max:1..999,chance:0.0001..1,requires?:progressionCond}]}` max 64 entries, 64 tables per pack. Registers `lootTable` kind, rolled via `LootTables.rollById` / `rollEntity` loot stream.
 
@@ -49,19 +49,19 @@ Turn the W25 safe-extensibility foundation into a production-usable pack ecosyst
 - All installed JSON passes through `TC.Packs.provideJSON` (safeScan: prototype pollution, non-finites, oversize, depth, unknown fields, reserved ns, traversal) before persistence; `load()` re-provides and skips any entry that fails (degrade).
 - Spawn rules cannot reference boss machinery (boss:true or BOSS_AI); cross-pack enemy references require declared dependency (checks `rec.deps`/`optionalDeps` at staging, fail-closed).
 - Dedicated host file loading is host-local config, byte-bounded before parse, same validator, activated before world creation; mismatch rejects before snapshot.
-- Zero-pack fingerprint preserved (`1b1d7c15`), W25 fixture identity intact, saves classified before mutation.
+- Zero-pack fingerprint remains `1b1d7c15`. New gameplay identity is order-sensitive; W25 `97f8ff42` saves/v4 peers migrate only after legacy content, versions, and reconstructed data-pack order match. Current gv2 resource-only changes stay compatible; ambiguous gv1 resource changes fail closed. Saves are classified before mutation.
 
 ## Test counts
 
 - `npm run check` — 58 files, 0 failures
 - `npm run check:i18n` — 568 fallback keys, 269 registry names resolved, fingerprint `1b1d7c15` match, 374 stable ids, 368 pre-W24 unchanged
-- `npm test` (node:test) — **653 pass, 0 fail** at `a905126`
-  - packs: 77/77; full browser: 32/32; build/verify/i18n green
-- `node tools/fuzz-packs.js` — 400 rounds seed 20260826, accepted 17, rejected 782, **escapes 0**
-- `node tools/bench-packs.js` — boot zero 46.6ms vs fixture 47.7ms (+1.09ms), activation 1.488ms, save delta +96 bytes, pack hello 141 bytes
-- `npm run build` — 58 js files, 60 assets, commit f5b05d5a85
+- `npm test` (node:test) — **665 pass, 0 fail** at `5d39c11`
+  - packs: 89/89; full browser: 32/32; build/verify/i18n green
+- `node tools/fuzz-packs.js` — 400 rounds seed 20260924, accepted 43, rejected 756, **escapes 0**
+- `node tools/bench-packs.js` — activation 1.074ms, classifySave 36.0ms/50k, save delta +103 bytes, v4 hello 141 bytes
+- `npm run build` — 58 js files, 60 referenced assets
 - `npm run verify:build` — boots, renders, new-game and continue work, zero browser errors
-- `npm run test:browser` — **32 passed** on Chromium at `a905126`; includes the W27 frame-time gate and all runtime-authority journeys.
+- `npm run test:browser` — **32 passed** on Chromium; includes the W27 frame-time gate, pack UI, and multiplayer journeys.
 
 ## Benchmarks
 
@@ -69,7 +69,9 @@ See `tools/bench-packs.js` above; `tools/bench-runtime.js` unchanged (W21/W25 op
 
 ## CI runs
 
-- Local `npm run check` + `check:i18n` + `npm test` + `fuzz-packs` + `bench-packs` + `build` + `verify:build` all green at final HEAD (see above). `test:browser` requires Playwright display; last W25 full gate was 30 journeys green.
+- Final local gate at `5d39c11`: `npm run validate` green — 665/665 Node,
+  32/32 Chromium, build + verify-dist, i18n, fingerprint `1b1d7c15`. Journey M
+  also passed 20 consecutive stress iterations after deterministic harness repair.
 
 ## Known limitations
 
@@ -90,6 +92,8 @@ See `tools/bench-packs.js` above; `tools/bench-runtime.js` unchanged (W21/W25 op
 - `f5b05d5` / W26 final implementation (PackStore + spawn grammar + dedicated host + version/docs)
 - `15bd4cc` — optional dependency semantics, immutable manifest snapshots, save fingerprint enforcement, atomic rollback hardening
 - `a905126` — canonical headless/browser boot order, wall placement/drop/byte bounds, loot bounds, forest/ocean spawn rules
+- `a19893e` — order-sensitive gameplay identity, resource-only save compatibility, positive wall hardness, fail-closed dedicated-host pack inputs
+- `5d39c11` — canonical W25 legacy content/order migration, fresh/rejoin welcome echo, duplicate host-option rejection, authoritative Journey M placement/interest repair
 
 ## Reproduction
 
@@ -113,23 +117,34 @@ OpenSpec package with current code/tests:
 - Programmatic manifests are snapshotted/frozen in one bounded pass; caller
   mutation, accessors, hidden/symbol fields, prototype tricks, Proxy descriptor
   substitution, and oversized sparse/wide inputs fail closed.
-- Live activation may append only after the canonical prefix; save metadata
-  enforces content/gameplay fingerprints, types, and active data-pack presence.
+- Live activation may append only after the canonical prefix; gameplay identity
+  includes canonical data-pack order because resource dependency edges can alter
+  dense IDs. Current gv2 resource-only differences remain compatible; legacy
+  gv1 migration additionally requires the historical full content fingerprint
+  and required-only reconstructed order to match.
 - Localization rollback is reverse-ordered; registry/core-before-wiring boot
   order is identical in browser/headless/dedicated paths; pack recipe ownership
   survives registry mirroring.
-- Walls cannot overflow 8-bit world ids; wall-only blocks use `UseItem` →
-  `PlaceWall`; declared wall drops emit exactly once; standalone loot minimums
-  match `TC.LootTables`; forest/ocean spawn rules are reachable.
-- `classifySave` fingerprint caches restore benchmark performance to 44.2 ms /
-  50k, below the historical 56 ms baseline.
+- Walls cannot overflow 8-bit world ids or stage unminable zero hardness;
+  wall-only blocks use `UseItem` → `PlaceWall`; declared wall drops emit
+  exactly once; standalone loot minimums match `TC.LootTables`; forest/ocean
+  spawn rules are reachable.
+- `classifySave` fingerprint caches keep the isolated final benchmark at
+  36.0 ms / 50k, below the historical 56 ms baseline. Dedicated-host options
+  reject missing/duplicate values before startup; local files are descriptor-bound
+  and capped before parsing. Process-level regressions cover every rejection.
 
-Final proof at `a905126`: `npm run validate` green — 653/653 Node, 32/32
-Chromium, build + verify-dist, i18n, fingerprint `1b1d7c15`; review found no
-Critical/High issues. Known remaining limitations are intentionally not
+Final proof at `5d39c11`: full `npm run validate` is green (665/665 Node,
+32/32 Chromium, build + verify-dist, i18n, fingerprint `1b1d7c15`); the isolated
+pack suite is 89/89 and Journey M passed 20/20 consecutive stress iterations.
+W25 `97f8ff42` / `715306e0` peers and saves migrate only with matching legacy
+content, required-only order, and declared versions; current gv2 preserves
+compatible resource-only changes. Fuzzing 400 rounds at seed 20260924 accepted
+43, rejected 756, and found 0 escapes. Final activation was 1.074 ms and
+classification 36.0 ms/50k. Known remaining limitations are intentionally not
 overstated: exact UTF-8 store accounting, unmaterialized `resources.files`,
-large pack-panel UX, dedicated-host real-WebSocket automation, W26-family fuzz
-coverage, and a durable exhaustive file-coverage ledger remain follow-ups.
+large pack-panel UX, dedicated-host-plus-packs end-to-end automation, W26-family
+fuzz coverage, and a durable exhaustive file-coverage ledger remain follow-ups.
 
 ---
 *Generated for W26 pack-ecosystem productionization; additive changes preserve zero-pack equivalence.*

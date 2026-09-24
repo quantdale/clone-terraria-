@@ -51,19 +51,18 @@ localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
 | World regions / RGB lighting / benchmarks (W21) | PERF-004, VIS-002, LGT-001, LGT-002(re), PERF-002 | DONE (`TC.WorldRegions` canonical multi-consumer invalidation authority; renderer+lighting+minimap are independent consumers; RGB lighting production-integrated with colored emissive + dynamic sources and quality profiles via `TC.Lighting.setQuality`/TC.Settings; minimap region-driven with catch-up; `tools/bench-scenarios.js` ten-scene harness with before/after evidence — see ARCHITECTURE.md §25 and docs/HANDOFF-W21-world-regions-rgb-lighting.md). PERF-003 measured-but-deferred (evidence in handoff); save-diff optimization measured-and-deferred (~2ms/op once per autosave). |
 | Rendering/lighting/audio depth | VIS/LGT/ART/AUD epics | LGT-002 done (dynamic lights); rest TODO/P2 |
 | Performance | PERF-001 | DONE (TC.Debug instrumentation + F3 overlay); PERF-002 partially covered by `tools/bench-runtime.js` fixed-step benchmark; PERF-003..005 TODO |
-| Presentation performance (W27) | WS0..WS7 (WS5 + WS1.4 deferred w/ analysis) | DONE (render-path measured hardware-independently via `tools/bench-render.js` + real-browser `tests/browser/perf.spec.js` gate with verified negative control; HUD sprites + composed heart-row/hotbar strips; sky Path2D/sprite bakes; unchanged-lighting skip; windowed chunk rebuilds + viewport cache cap + eviction off draw(); settle-mark coalescing. Idle frame 1,229 → 204 ops, flat in max HP; night 842 → 17; startup 494 rebuilds + 336 evictions → 5 + 9; liquid marks 24,968 → 352 fresh-120 with identical digests. Zero gameplay/determinism/save/protocol change; final gate 653/653 node + 32/32 browser — see ARCHITECTURE.md §30, docs/PERFORMANCE.md, docs/W27-PERFORMANCE-PLAN.md) |
+| Presentation performance (W27) | WS0..WS7 (WS5 + WS1.4 deferred w/ analysis) | DONE (render-path measured hardware-independently via `tools/bench-render.js` + real-browser `tests/browser/perf.spec.js` gate with verified negative control; HUD sprites + composed heart-row/hotbar strips; sky Path2D/sprite bakes; unchanged-lighting skip; windowed chunk rebuilds + viewport cache cap + eviction off draw(); settle-mark coalescing. Idle frame 1,229 → 204 ops, flat in max HP; night 842 → 17; startup 494 rebuilds + 336 evictions → 5 + 9; liquid marks 24,968 → 352 fresh-120 with identical digests. Zero gameplay/determinism/save/protocol change; final repository gate 665/665 node + 32/32 browser — see ARCHITECTURE.md §30, docs/PERFORMANCE.md, docs/W27-PERFORMANCE-PLAN.md) |
 | Multiplayer | NET-001..004 | DONE through W22 foundation + W23 productionization (see rows below; NET-004 productionization closed by W23) |
 | Extensibility/mods | MOD-001..004 | MOD-001/002/003 DONE (W25: canonical TC.Packs authority — fail-closed manifest/data-pack pipeline, declarative tile/item/enemy/recipe families, atomic activation with session-permanence, pack-aware save classification + continue gating, title-screen packs panel, protocol-v4 handshake identity, fixture pack + journey P; see ARCHITECTURE.md §29). MOD-004 remains RESEARCH ONLY (docs/ADR-MOD-004-sandboxed-mods.md — recommendation DEFER); no executable-mod runtime exists by design |
-| Pack ecosystem prod. (W26) | walls + lootTables + spawnRules + PackStore + dedicated host | DONE (WS1: declarative wall/lootTable families via same atomic pipeline; WS2: TC.PackStore durable install + title import/export/remove; WS3: compiled spawn-rule grammar into EnemySpawn; WS4: mp-server --packs/--pack-file pre-world activation; WS5: version/doc truth-sync) |
+| Pack ecosystem prod. (W26) | walls + lootTables + spawnRules + PackStore + dedicated host | IMPLEMENTED / NOT SPEC-COMPLETE (runtime families, store, spawn grammar, host CLI and 2026-09-24 hardening landed; resource-file honesty, exact UTF-8 quotas, dedicated-host-plus-packs E2E, W26 fuzz and audit ledger remain) |
 
 ### Newly discovered follow-ups (updated W26)
 
-- **W26 status:** pack ecosystem productionization LANDED — declarative walls/
-  standalone loot tables + deterministic spawn-rule grammar (EnemySpawn seam) +
-  durable TC.PackStore install/import/export/remove with caps/corruption handling
-  and title import/export/remove UX + dedicated mp-server pack selection +
-  version/doc truth-sync. Zero-pack fingerprint 1b1d7c15 preserved, W25 fixture
-  identity intact, saves remain classified before mutation.
+- **W26 status:** implemented and hardened, but **not spec-complete** — declarative
+  walls/standalone loot tables, deterministic spawn-rule grammar, durable
+  TC.PackStore, title UX, dedicated host selection, and 2026-09-24 security/runtime
+  hardening landed. Resource-file materialization, exact UTF-8 quotas, dedicated-host
+  dedicated-host-plus-packs E2E, W26-family fuzz, and the exhaustive audit ledger remain mandatory.
 
 - **W25 status:** safe extensibility foundation LANDED — declarative data
   packs (tiles/items/enemies/recipes) + resource locale fragments through a
@@ -71,9 +70,10 @@ localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
   identity integrated into saves (MOD-003 classification before mutation)
   and the multiplayer handshake (protocol v4). Fixture pack
   (packs/testpack.js) proves the full production chain incl. browser journey
-  P. Remaining future work: more pack families (walls, NPCs/shops, loot
-  tables, projectiles), MOD-004 executable mods stay RESEARCH-DEFERRED
-  (ADR), real secondary-language catalogs, PERF-003/005, >4 player scaling.
+  P. W26 added walls, standalone loot tables, and spawn rules. Remaining future
+  work includes NPCs/shops and projectiles; MOD-004 executable mods remain
+  RESEARCH-DEFERRED (ADR), plus real secondary-language catalogs, PERF-003/005,
+  and >4-player scaling.
 
 - **W23 status (historical):** multiplayer productionization LANDED — deterministic
   GameRng authority (enemy AI now inside replay digests), `TC.Targets`

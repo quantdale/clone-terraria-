@@ -6,7 +6,7 @@
 **Execution-Started:** 2026-08-29
 **Target-Branch:** `main`
 **Campaign-Type:** performance investigation + render-path optimization + measurement-gate construction
-**Supersedes-Context:** W26 (`.agent/EXECUTION_PROMPT.md`) is `COMPLETED`; this is the next campaign.
+**Supersedes-Context:** W26 implementation is hardened but not spec-complete; W27 is independently complete. This plan is historical campaign context, not a resume instruction.
 
 ---
 

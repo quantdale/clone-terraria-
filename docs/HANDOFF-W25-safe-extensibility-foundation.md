@@ -2,6 +2,15 @@
 
 Task ID: W25. Branch: `main` only (repository policy).
 
+## 2026-09-24 compatibility note
+
+The historical gameplay/content digests below remain the W25 wire/save values.
+Current code emits ordered gameplay identity and ordered gv2 save metadata. It
+continues to accept W25 `97f8ff42` / `715306e0` only when legacy versions,
+content, and required-only reconstructed data-pack order all match. Current gv2
+resource-only differences remain compatible; ambiguous gv1 resource changes
+fail closed.
+
 ## Reconciliation
 
 - Planned-From: `93fc990` (expected W24 checkpoint). Fetch confirmed

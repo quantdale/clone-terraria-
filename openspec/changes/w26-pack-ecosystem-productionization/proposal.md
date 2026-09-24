@@ -2,10 +2,10 @@
 
 ## Status
 
-IMPLEMENTED + HARDENED — original W26 landed; 2026-09-24 reconciliation
-closed the optional-dependency, headless boot-order, wall gameplay, loot
-bounds, and forest/ocean spawn gaps. Remaining limitations are recorded in
-`docs/HANDOFF-W26-pack-ecosystem-productionization.md`.
+IMPLEMENTED + HARDENED — **NOT SPEC-COMPLETE.** The 2026-09-24 pass closed
+optional-dependency, boot-order, wall, loot, spawn, identity, and host-argument
+gaps; mandatory resource-file, audit-ledger, browser-flow, and
+dedicated-host-plus-packs E2E follow-ups remain in the handoff.
 
 ## Planned From
 

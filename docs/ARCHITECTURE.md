@@ -1220,12 +1220,15 @@ the 'core' namespace is unreachable to packs, so pack content cannot
 masquerade as built-in. Identity model:
   A. built-in stable identity is untouched (zero packs => registry fingerprint
      stays 1b1d7c15);
-  B. TC.Packs.digest() fingerprints the active GAMEPLAY set (resource packs
-     excluded by construction), TC.Packs.contentDigest() covers all packs;
-     both are FNV-1a over order-independent canonicalized data;
+  B. TC.Packs.digest() fingerprints the active GAMEPLAY set in resolved data-pack
+     order; resource packs are excluded directly but their dependency edges can
+     change that order. TC.Packs.contentDigest() covers all packs independently of
+     order. W25 `97f8ff42` peers/saves are accepted only through
+     `gameplayFingerprintMatches()` / legacy classification after their declared
+     data order is verified;
   C. dense runtime indices append after built-ins in topological dependency
-     order with ascending-pack-id tie-breaks, so subsets keep their indices
-     stable across sessions;
+     order with ascending-pack-id tie-breaks, so the same resolved active set
+     keeps indices stable across sessions;
   D. commit-time normalization rewrites every stored reference to canonical
      runtime forms (bare table keys, numeric world ids) — hot paths keep
      indexing tables exactly as before; there is ZERO per-frame pack awareness.
@@ -1268,33 +1271,34 @@ is used, so host and client digests gate admission before snapshot.
 
 ### Version semantics (W26 truth-sync)
 package.json "0.9.0" is the release version; TC.VERSION mirrors it for the
-title UI. TC.Packs.GAME_VERSION "0.9" is the pack compatibility target
-(major.minor) checked against requires.game ranges — "0.9" and "0.9.0" are
-equivalent (dotted 1..3 parts, missing parts padded to 0). SaveCore writes
-"0.9.0-campaign" (release version + campaign tag); format compatibility is
-controlled by SaveCore.formatVersion, not the display string. NetProto.VERSION
-remains 4 (wire unchanged by W26 CLI).
+title UI and pack `requires.game` checks. Dotted 1..3-part versions and ranges
+are padded/canonicalized, so "0.9" and "0.9.0" share one identity. SaveCore
+writes "0.9.0-campaign" (release version + campaign tag); format compatibility
+is controlled by SaveCore.formatVersion, not the display string. NetProto.VERSION
+remains 4; ordered gameplay identity accepts verified W25 v4 fingerprints.
 
 ### Save compatibility (MOD-003)
-Save envelopes gain top-level 'packs' metadata {v, fp, gfp,
-packs[{id,version,type}]} (+96 bytes for the fixture). Pre-W25 envelopes
-(field absent/null) remain trivially compatible. main.continueGame classifies
-BEFORE any world/character mutation: exact/compatible loads proceed;
-missing-pack and incompatible-version refusals name the pack and both
-versions through UI.showPackProblem and stay on the title with storage byte-
-untouched; malformed metadata fails closed as its own status. Legacy v1 blobs
-are unaffected.
+Save envelopes gain top-level 'packs' metadata. New writes use
+`{v:1,gv:2,fp,gfp,packs[{id,version,type}]}` with resolved pack order preserved.
+Legacy gv1 metadata remains accepted: its historical W25 gameplay fingerprint
+is admitted only after reconstructing and comparing the old data-pack order.
+Pre-W25 envelopes (field absent/null) remain trivially compatible.
+main.continueGame classifies BEFORE any world/character mutation: data-pack
+mismatches refuse with storage bytes untouched. Current gv2 resource-only
+differences warn and remain compatible; legacy gv1 requires the historical full
+content fingerprint and order to match before migration. Malformed metadata
+fails closed.
 
 ### Multiplayer pack negotiation (WS7, protocol v4)
 NetProto VERSION 3->4: hello/welcome payloads REQUIRE bounded packs meta
 {fp(<=16 hex chars|''), list(<=16 id@version strings)} — the wire change is
 the point, since pack identity must be proven before any world state flows.
-The server gates EVERY hello path (fresh join AND detached rejoin) before
-player binding: mismatch rejects as 'content-mismatch host=<fp> client=<fp>'
-with no entity, snapshot or world mutation leaked. Clients cross-check the
-welcome fingerprint before entering syncing and disconnect cleanly otherwise.
-Resource-only differences cannot change digest(), so they stay compatible BY
-CONSTRUCTION.
+The server gates EVERY hello path (fresh join AND detached rejoin) before player
+binding. Current ordered fingerprints and verified W25 legacy fingerprints are
+accepted; mismatches reject as 'content-mismatch host=<fp> client=<fp>' with no
+entity, snapshot, or world mutation leaked. Resource packs never enter the
+fingerprint directly, but an active resource dependency can reorder data packs;
+legacy acceptance therefore verifies the peer's declared data order.
 
 ### Security boundary summary
 Untrusted-input posture end-to-end; staged transactions; no dynamic code
@@ -1303,15 +1307,13 @@ registered locales with recorded undo handles — they can never touch machine
 identity, registry fingerprints or authoritative state.
 
 ### Test coverage added
-tests/packs/{loader,activation,save-compat,multiplayer}.test.js (23 cases),
-tools/fuzz-packs.js (deterministic seeded fuzzing, 0 escapes across the
-default 400 rounds), tools/bench-packs.js (WS12 evidence), browser journey P
-(tests/browser/journey-p-packs.spec.js): real panel clicks -> Apply &
-Restart (genuine reload) -> active set proven -> craft/place/mine/summon/
-loot through canonical seams -> save/reload/continue coherence -> zero page
-errors. Performance: fixture activation ~1.9 ms one-time (~0.13 ms
-idempotent), save metadata +96 bytes, registry lookup parity at 200k-query
-scale, gameplay scenario medians unchanged (see docs/PERFORMANCE.md).
+tests/packs/** (89 cases, including W25 migration, dedicated-host bounds, walls,
+loot tables, spawn rules, PackStore, multiplayer, and security), tools/fuzz-packs.js
+(deterministic 400-round fuzz, 0 escapes), tools/bench-packs.js, browser journey P
+(real panel install/apply/save/continue), and journey M (authoritative placement
+plus interest-bounded newcomer convergence, 20/20 stress passes). Final metrics:
+fixture activation 1.074 ms, `classifySave` 36.0 ms/50k, ordered save metadata
++103 bytes, v4 hello 141 bytes, and zero browser errors.
 
 ## 30. Campaign contracts (W27 — Presentation Performance Recovery)
 

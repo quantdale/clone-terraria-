@@ -1,8 +1,7 @@
 # W27 — Presentation Performance Recovery
 
-**Status:** COMPLETED (2026-09-03; per-criterion audit below — 8/10 fully
-pass, 2 carry recorded environmental qualifications with base-code
-controls, budgets unweakened throughout)
+**Status:** COMPLETED (2026-09-24; all required acceptance gates pass; WS5 and
+WS1.4 remain explicitly deferred with recorded analysis)
 **Planned-From:** `ca39da303e34e2eef1f6774dadbafe26df68b3c7`
 **Planned-At:** 2026-08-29
 **Execution-Started:** 2026-08-29
@@ -12,11 +11,10 @@ controls, budgets unweakened throughout)
 **Full plan:** `docs/W27-PERFORMANCE-PLAN.md` (mission, evidence, findings, workstreams WS0–WS7, acceptance criteria — read this in full before continuing)
 **Session handoff:** `docs/HANDOFF-W27-performance.md` (what actually landed, what was deferred and why, recommended next steps — read this too, it has the load-bearing detail)
 
-**Prior campaign:** W26 (Pack Ecosystem Productionization) is `COMPLETED` —
-see `docs/HANDOFF-W26-pack-ecosystem-productionization.md`. Do not redo W26
-scope. This file previously carried the W26 prompt in full; that history is
-preserved in `docs/HANDOFF-W26-pack-ecosystem-productionization.md` and
-`docs/W26-AUDIT.md`, not duplicated here.
+**Prior campaign:** W26 is implemented and hardened but **not
+OpenSpec-complete** — see `docs/HANDOFF-W26-pack-ecosystem-productionization.md`
+for mandatory follow-ups. This file previously carried the W26 prompt in full;
+that history remains in the handoff and `docs/W26-AUDIT.md`.
 
 ## Mission (condensed — full version in the plan doc)
 
@@ -40,30 +38,17 @@ regress again.
   32/32 green.
 - WS5 entity sprite batching and WS1.4 `UI.layout()` memoization remain
   explicitly deferred for the visual-fidelity/CPU reasons in the handoff.
-- Final `npm run validate` at `a905126`: 653/653 Node, 32/32 browser,
+- Final repository validation at `5d39c11`: 665/665 Node, 32/32 browser,
   build + verify-dist, check 58/58, and i18n/fingerprint clean.
 
-## Resuming this campaign
+## Completion / truth-sync
 
-1. Read `docs/W27-PERFORMANCE-PLAN.md` in full (mission, §3 findings, §5
-   preserved-behavior invariants, §6 per-workstream detail and status, §7
-   acceptance criteria) and `docs/HANDOFF-W27-performance.md` (what happened,
-   why deferred items were deferred, recommended next steps — this has
-   design guidance for WS2/WS3 that took real investigation to produce; use
-   it instead of re-investigating from scratch).
-2. If on a machine with a real browser: run `npm run test:browser` and
-   `npm run verify:build` once as a baseline against current `HEAD` (neither
-   has been confirmed green in this repository since before this campaign
-   started, only via the pre-existing W25/W26 handoffs' historical record).
-   Then implement WS0.2 (the real frame-time journey) — this is the actual
-   point of WS0 and should happen before further optimization work compounds
-   without a real gate behind it.
-3. Continue with WS2 (mask/color-split design, see handoff), then WS3 (needs
-   a bounded far-region service-pass design first — do not implement the
-   naive radius gate), then WS5/WS6, then WS7 truth-sync.
-4. Mark `COMPLETED` only when the acceptance criteria in the plan's §7 all
-   pass, including the real-browser gate — a green Node-only gate is
-   explicitly **not** sufficient per the plan's own risk table.
+1. `docs/W27-PERFORMANCE-PLAN.md` and `docs/HANDOFF-W27-performance.md` are the
+   authoritative design and outcome records.
+2. All accepted workstreams and the real-browser gates are complete; WS5 and
+   WS1.4 remain intentionally deferred with recorded analysis.
+3. This prompt is historical campaign context. Do not re-implement completed
+   work or resume W27; start a new requirements-backed campaign instead.
 
 ## Non-negotiable preserved behavior
 
