@@ -21,6 +21,7 @@ test('save: envelope carries pack metadata only when packs are active', () => {
   TC.Packs.setActive(['testpack']);
   env = TC.SaveCore.buildEnvelope();
   assert.strictEqual(env.packs.v, 1);
+  assert.strictEqual(env.packs.gv, 2);
   assert.strictEqual(env.packs.gfp, TC.Packs.digest());
   assert.strictEqual(env.packs.fp, TC.Packs.contentDigest());
   assert.strictEqual(env.packs.packs.map((p) => p.id).join(','), 'testpack');
@@ -32,6 +33,7 @@ test('save: envelope carries pack metadata only when packs are active', () => {
   for (const bad of [
     { v: 2, fp: '', gfp: '', packs: [] },
     { v: 1, fp: 5, gfp: '', packs: [] },
+    { v: 1, gv: 3, fp: '', gfp: '', packs: [] },
     { v: 1, fp: '', gfp: '', packs: [{ id: 1, version: 'x', type: 'data' }] },
     { v: 1, fp: '', gfp: '' },
     { v: 1, fp: '', gfp: '', packs: 'no' },
@@ -86,8 +88,20 @@ test('classify: full compatibility matrix', () => {
   }));
   assert.ok(!wrongType.ok && wrongType.problems.some((p) => /incompatible pack type/.test(p)));
 
+  const w25 = TC.Packs.classifySave({
+    v: 1,
+    fp: '715306e0',
+    gfp: '97f8ff42',
+    packs: [{ id: 'testpack', version: '1.0.0', type: 'data' }],
+  });
+  assert.ok(w25.ok);
+  assert.ok(w25.warnings.some((warning) => /legacy W25 gameplay fingerprint accepted/.test(warning)));
+
   // malformed metadata
-  for (const bad of [42, {}, { v: 1 }, { v: 1, fp: '', gfp: '', packs: 'no' }]) {
+  for (const bad of [
+    42, {}, { v: 1 }, { v: 1, fp: '', gfp: '', packs: 'no' },
+    { v: 1, gv: 3, fp: '', gfp: '', packs: [] },
+  ]) {
     cls = TCc.Packs.classifySave(bad);
     assert.ok(!cls.ok && cls.status === 'malformed-metadata', JSON.stringify(bad));
   }
@@ -113,6 +127,29 @@ test('classify: same id and version with changed content is fingerprint-incompat
   assert.ok(cls.problems.some((problem) => /gameplay fingerprint mismatch/.test(problem)));
 });
 
+test('classify: abbreviated W25 data-pack version migrates safely', () => {
+  function realm() {
+    const TC = fresh();
+    TC.Packs.provide({
+      manifest: 1, id: 'shortver', name: 'Short', version: '1.2', type: 'data',
+      requires: { game: '>=0.9' },
+      content: { items: [{ key: 'token', name: 'Token', kind: 'material' }] },
+    });
+    TC.Packs.setActive(['shortver']);
+    return TC;
+  }
+  const oldRealm = realm();
+  const meta = {
+    v: 1,
+    fp: oldRealm.Packs.stats().legacyContentDigest,
+    gfp: oldRealm.Packs.stats().legacyDigest,
+    packs: [{ id: 'shortver', version: '1.2', type: 'data' }],
+  };
+  const cls = realm().Packs.classifySave(meta);
+  assert.ok(cls.ok, JSON.stringify(cls));
+  assert.ok(cls.warnings.some((warning) => /legacy W25 gameplay fingerprint accepted/.test(warning)));
+});
+
 test('classify: independent resource-only pack differences stay compatible', () => {
   const a = fresh();
   a.Packs.setActive(['testpack']);
@@ -127,6 +164,60 @@ test('classify: independent resource-only pack differences stay compatible', () 
   assert.ok(cls.ok);
   assert.ok(cls.warnings.some((warning) => /content fingerprint differs/.test(warning)));
   assert.ok(cls.warnings.some((warning) => /active pack not present/.test(warning)));
+});
+
+test('classify: resource-only version changes remain compatible', () => {
+  function resourcePack(version) {
+    return {
+      manifest: 1, id: 'skinonly', name: 'Skin Only', version, type: 'resource',
+      resources: { locale: { en: { ui: { packs: { hint: version } } } } },
+    };
+  }
+  const a = fresh();
+  a.Packs.provide(resourcePack('1.0.0'));
+  a.Packs.setActive(['skinonly']);
+  const meta = a.Packs.saveMetadata();
+  const b = fresh();
+  b.Packs.provide(resourcePack('2.0.0'));
+  b.Packs.setActive(['skinonly']);
+  const cls = b.Packs.classifySave(meta);
+  assert.ok(cls.ok);
+  assert.ok(cls.warnings.some((warning) => /resource version differs/.test(warning)));
+  assert.ok(cls.warnings.some((warning) => /content fingerprint differs/.test(warning)));
+  const legacy = b.Packs.classifySave({
+    v: 1,
+    fp: meta.fp,
+    gfp: '',
+    packs: meta.packs,
+  });
+  assert.ok(legacy.ok);
+  assert.ok(legacy.warnings.some((warning) => /resource version differs/.test(warning)));
+});
+
+test('classify: legacy gv1 resource changes with active data fail closed', () => {
+  function realm(version) {
+    const TC = fresh();
+    TC.Packs.provide({
+      manifest: 1, id: 'skinonly', name: 'Skin Only', version, type: 'resource',
+      resources: { locale: { en: { ui: { packs: { hint: version } } } } },
+    });
+    TC.Packs.setActive(['skinonly', 'testpack']);
+    return TC;
+  }
+  const oldRealm = realm('1.0.0');
+  const oldSave = {
+    v: 1,
+    fp: oldRealm.Packs.stats().legacyContentDigest,
+    gfp: oldRealm.Packs.stats().legacyDigest,
+    packs: [
+      { id: 'skinonly', version: '1.0.0', type: 'resource' },
+      { id: 'testpack', version: '1.0.0', type: 'data' },
+    ],
+  };
+  const cls = realm('2.0.0').Packs.classifySave(oldSave);
+  assert.ok(!cls.ok);
+  assert.ok(cls.warnings.some((warning) => /legacy gv1 requires matching historical content/.test(warning)));
+  assert.ok(cls.problems.some((problem) => /gameplay fingerprint mismatch/.test(problem)));
 });
 
 test('cycle: save with pack -> fresh realm without it refuses cleanly; restore succeeds', () => {

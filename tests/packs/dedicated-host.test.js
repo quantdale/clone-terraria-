@@ -11,8 +11,15 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const SERVER = path.join(ROOT, 'tools', 'mp-server.js');
 
 test('dedicated host: pack options require values before startup', () => {
-  for (const option of ['--packs', '--pack-file']) {
-    const result = spawnSync(process.execPath, [SERVER, option], {
+  const cases = [
+    ['--packs'],
+    ['--pack-file'],
+    ['--packs', 'testpack', '--packs'],
+    ['--pack-file', 'pack.json', '--pack-file'],
+  ];
+  for (const args of cases) {
+    const option = args[args.length - 1];
+    const result = spawnSync(process.execPath, [SERVER].concat(args), {
       cwd: ROOT,
       encoding: 'utf8',
       timeout: 10000,
@@ -20,6 +27,14 @@ test('dedicated host: pack options require values before startup', () => {
     assert.strictEqual(result.status, 1, result.stderr);
     assert.match(result.stderr, new RegExp(option + ' requires a value'));
   }
+  const duplicate = spawnSync(process.execPath,
+    [SERVER, '--packs', 'testpack', '--packs', 'otherpack'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+  assert.strictEqual(duplicate.status, 1, duplicate.stderr);
+  assert.match(duplicate.stderr, /--packs may be specified only once/);
 });
 
 test('dedicated host: oversized local manifest is rejected before startup', () => {

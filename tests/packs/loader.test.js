@@ -324,3 +324,25 @@ test('identity: canonical digests are order-independent; different data differs'
     resources: { locale: { en: { ui: { a: 'A!' }, z: 'Z' } } } }));
   assert.notStrictEqual(rd.rawDigest, ra.rawDigest, 'changed data changes identity');
 });
+
+test('identity: abbreviated versions and single-clause ranges canonicalize', () => {
+  const short = fresh();
+  const long = fresh();
+  const shortPack = resourceManifest({
+    id: 'versioned', name: 'Versioned', version: '1.2', type: 'resource',
+    requires: { game: '>=0.9 <1' },
+    resources: { locale: { en: { ui: { value: 'OK' } } } },
+  });
+  const longPack = JSON.parse(JSON.stringify(shortPack));
+  longPack.version = '1.2.0';
+  longPack.requires.game = '>=0.9.0 <1.0.0';
+  const a = short.Packs.provide(shortPack);
+  const b = long.Packs.provide(longPack);
+  assert.strictEqual(a.version, '1.2.0');
+  assert.strictEqual(a.gameRange, '>=0.9.0 <1.0.0');
+  assert.strictEqual(a.rawDigest, b.rawDigest);
+  short.Packs.setActive(['versioned']);
+  long.Packs.setActive(['versioned']);
+  assert.strictEqual(short.Packs.digest(), long.Packs.digest());
+  assert.strictEqual(short.Packs.contentDigest(), long.Packs.contentDigest());
+});

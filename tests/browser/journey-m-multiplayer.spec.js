@@ -48,6 +48,21 @@ function probe(port) {
   });
 }
 
+function probeJson(port, path) {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: "127.0.0.1", port, path, timeout: 2000 }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { body += chunk; });
+      res.on("end", () => {
+        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(new Error("debug probe timeout")); });
+  });
+}
+
 async function waitReady(port, ms) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
@@ -202,6 +217,79 @@ async function approach(page, cell) {
 }
 
 
+async function positionAndSendPlacement(page, cell, item, placedTile) {
+  let side = 0;
+  let diag = null;
+  for (let i = 0; i < 240; i++) {
+    const state = await page.evaluate(([target, itemId, tileId]) => {
+      const TC = window.TC;
+      const TSz = TC.CONST.TS;
+      if (TC.world.get(target.tx, target.ty) === tileId) return { done: true };
+      const left = target.tx * TSz;
+      const right = left + TSz;
+      const center = left + TSz / 2;
+      const player = TC.player;
+      const pCenter = player.x + player.w / 2;
+      const dx = center - pCenter;
+      const dy = (target.ty + 0.5) * TSz - (player.y + player.h / 2);
+      const overlaps = player.x < right && player.x + player.w > left &&
+        player.y < (target.ty + 1) * TSz && player.y + player.h > target.ty * TSz;
+      if (!overlaps && dx * dx + dy * dy <= 60 * 60) {
+        const failed = window.__mpc.stats.cmdResultsFailed;
+        const ok = window.__mpc.stats.cmdResultsOk;
+        const result = window.__mpc.sendCmd("PlaceTile", {
+          tx: target.tx, ty: target.ty, item: itemId,
+        });
+        return { sent: result.ok, failed, ok, cseq: window.__mpc.cseqCmd };
+      }
+      const leftX = left - player.w - 3;
+      const rightX = right + 3;
+      const sideX = Math.abs(pCenter - leftX) <= Math.abs(pCenter - rightX) ? leftX : rightX;
+      return { move: sideX > pCenter ? 1 : -1, overlaps, dx, dy };
+    }, [cell, item, placedTile]);
+    if (state.done) return { done: true };
+    if (state.sent) return state;
+    diag = { i, state };
+    if (side === 0 && state.move) side = state.move;
+    if (i > 0 && i % 40 === 0) side = -side;
+    const key = side > 0 ? "KeyD" : "KeyA";
+    await page.keyboard.down(key);
+    await page.waitForTimeout(150);
+    await page.keyboard.up(key);
+  }
+  return { ok: false, reason: "positioning-failed", diag };
+}
+
+async function placeUntilAuthoritative(page, cell, item, placedTile) {
+  let diag = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const sent = await positionAndSendPlacement(page, cell, item, placedTile);
+    if (sent.done) return { ok: true, attempts: attempt + 1 };
+    if (!sent.sent) {
+      diag = { attempt, sent };
+      continue;
+    }
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const state = await page.evaluate(([target, tileId]) => ({
+        tile: window.TC.world.get(target.tx, target.ty),
+        failed: window.__mpc.stats.cmdResultsFailed,
+        ok: window.__mpc.stats.cmdResultsOk,
+        lastErr: window.__mpc.lastCmdError || null,
+        phase: window.__mpc.phase,
+      }), [cell, placedTile]);
+      diag = { attempt, sent, state };
+      if (state.tile === placedTile) return { ok: true, attempts: attempt + 1 };
+      if (state.failed > sent.failed) {
+        await page.waitForTimeout(1000);
+        break;
+      }
+      await page.waitForTimeout(100);
+    }
+  }
+  throw new Error("placement did not become authoritative: " + JSON.stringify(diag));
+}
+
 function countOwnDirt() {
   return {
     inv: window.TC.player.inventory,
@@ -342,40 +430,19 @@ test.describe("journey M — multiplayer vertical slice", () => {
       // retrying until within reach again; the other client's mirror
       // converges through replication
       const ownerPage = pageB;
-      const placeRes = await (async () => {
-        // CI-runner calibration: the server validates PlaceTile reach
-        // against ITS lagged simulation of Bob, so when the authoritative
-        // position trails prediction the right recovery is to physically
-        // re-approach the cell (what a player does) and re-propose — not
-        // to spin on a client-side reach check alone.
-        for (let i = 0; i < 900; i++) {
-          const r = await ownerPage.evaluate(([cell, item]) => {
-            const TC = window.TC;
-            const TSz = TC.CONST.TS;
-            const dx = (cell.tx + 0.5) * TSz - (TC.player.x + TC.player.w / 2);
-            const dy = (cell.ty + 0.5) * TSz - (TC.player.y + TC.player.h / 2);
-            if (dx * dx + dy * dy > 80 * 80) return { ok: false };
-            return window.__mpc.sendCmd("PlaceTile", { tx: cell.tx, ty: cell.ty, item });
-          }, [mineCellB, lootId]);
-          if (r.ok) return { ok: true };
-          if (i > 0 && i % 60 === 0) await approach(ownerPage, mineCellB);
-          await pageB.waitForTimeout(50);
-        }
-        return { ok: false };
-      })();
-      expect(placeRes.ok).toBe(true);
       const placedTile = await ownerPage.evaluate((item) =>
         window.TC.ITEM_DEFS[item].tile, lootId);
-      // The OWNER's mirror proves the authoritative placement landed (the
-      // server validates reach against ITS simulated position, which under
-      // CI-class load can trail the client's prediction for a while); only
-      // then is Alice's replication window measured.
-      await ownerPage.waitForFunction(([tx, ty, tid]) =>
-        window.TC.world.get(tx, ty) === tid,
-      [mineCellB.tx, mineCellB.ty, placedTile], { timeout: 60000 });
+      const placeRes = await placeUntilAuthoritative(
+        ownerPage, mineCellB, lootId, placedTile,
+      );
+      expect(placeRes.ok).toBe(true);
       await pageA.waitForFunction(([tx, ty, tid]) =>
         window.TC.world.get(tx, ty) === tid,
       [mineCellB.tx, mineCellB.ty, placedTile], { timeout: 60000 });
+      const authority = await probeJson(port,
+        "/debug?tx=" + mineCellB.tx + "&ty=" + mineCellB.ty);
+      expect(authority.sid).toBe(idsA.sid);
+      expect(authority.cell).toEqual({ tx: mineCellB.tx, ty: mineCellB.ty, tile: placedTile });
       // exactly once: placing consumed exactly one of the looted stack
       const afterPlace = await invSnapshot(ownerPage);
       expect(afterPlace[lootId] || 0).toBeGreaterThanOrEqual((afterLoot[lootId] || 1) - 1);
@@ -384,10 +451,16 @@ test.describe("journey M — multiplayer vertical slice", () => {
       await pageA.reload({ waitUntil: "load" });
       await pageA.waitForFunction(() => window.TC && window.TC.state === "title");
       await joinAs(pageA, url, "Alice2");
-      const resynced = await pageA.evaluate(([p, m, tid]) => ({
+      const rejoinedSid = await pageA.evaluate(() => window.__mpc.sid);
+      expect(rejoinedSid).toBe(idsA.sid);
+      await approach(pageA, mineCellB);
+      await pageA.waitForFunction(([tx, ty, tid]) =>
+        window.TC.world.get(tx, ty) === tid,
+      [mineCellB.tx, mineCellB.ty, placedTile], { timeout: 30000 });
+      const resynced = await pageA.evaluate(([p, m]) => ({
         placed: window.TC.world.get(p.tx, p.ty),
         mined: window.TC.world.get(m.tx, m.ty),
-      }), [mineCellB, mineCellA, placedTile]);
+      }), [mineCellB, mineCellA]);
       expect(resynced.placed).toBe(placedTile);
       expect(resynced.mined).toBe(await pageA.evaluate(() => window.TC.TILE.AIR));
 

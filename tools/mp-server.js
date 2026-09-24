@@ -43,12 +43,18 @@ function argsAll(name) {
   }
   return out;
 }
-for (const name of ["packs", "pack-file"]) {
-  const i = process.argv.indexOf("--" + name);
-  if (i >= 0 && (i + 1 >= process.argv.length || process.argv[i + 1].startsWith("--"))) {
-    console.error("[mp-server] --" + name + " requires a value");
+let packsOptionCount = 0;
+for (let i = 0; i < process.argv.length; i++) {
+  const match = process.argv[i].match(/^--(packs|pack-file)$/);
+  if (match && match[1] === "packs") packsOptionCount++;
+  if (match && (i + 1 >= process.argv.length || process.argv[i + 1].startsWith("--"))) {
+    console.error("[mp-server] --" + match[1] + " requires a value");
     process.exit(1);
   }
+}
+if (packsOptionCount > 1) {
+  console.error("[mp-server] --packs may be specified only once");
+  process.exit(1);
 }
 
 const SEED = parseInt(arg("seed", "1337"), 10) | 0;
@@ -193,7 +199,11 @@ console.log(`[mp-server] session ${started.sid} seed=${TC.worldSeed} ` +
 
 // ---- real transport (dependency-free RFC6455 shim) ----
 const httpServer = http.createServer((req, res) => {
-  if (req.url === "/debug") {
+  const rawUrl = req.url || "/";
+  const queryAt = rawUrl.indexOf("?");
+  const pathname = queryAt < 0 ? rawUrl : rawUrl.slice(0, queryAt);
+  const query = new URLSearchParams(queryAt < 0 ? "" : rawUrl.slice(queryAt + 1));
+  if (pathname === "/debug") {
     // bounded diagnostics: authoritative tick, player poses, live drops
     const drops = (TC.Items && TC.Items.drops || []).slice(0, 24).map((d) => ({
       id: d.id, x: Math.round(d.x), y: Math.round(d.y), age: Math.round(d.age * 10) / 10,
@@ -212,9 +222,17 @@ const httpServer = http.createServer((req, res) => {
         return t ? (TC.Players.idOf ? TC.Players.idOf(t) : null) : null;
       })() : null,
     }));
+    const txRaw = query.get("tx");
+    const tyRaw = query.get("ty");
+    const tx = txRaw === null ? NaN : Number(txRaw);
+    const ty = tyRaw === null ? NaN : Number(tyRaw);
+    const cell = Number.isInteger(tx) && Number.isInteger(ty) &&
+      tx >= 0 && ty >= 0 && tx < TC.world.width && ty < TC.world.height
+      ? { tx, ty, tile: TC.world.get(tx, ty) }
+      : null;
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
-      sid: started.sid, tick: server.summary().tick, players, enemies, drops,
+      sid: started.sid, tick: server.summary().tick, players, enemies, drops, cell,
       // W24 read-only pump observability (journey O)
       pump: (TC.Wiring && TC.Wiring.pumpStats) ? TC.Wiring.pumpStats() : null,
       liquid: FIXTURE ? {

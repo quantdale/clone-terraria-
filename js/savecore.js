@@ -212,7 +212,9 @@
       if (!isObj(env.packs) || env.packs.v !== 1 ||
           typeof env.packs.fp !== 'string' || typeof env.packs.gfp !== 'string' ||
           !Array.isArray(env.packs.packs)) {
-        fail('packs metadata must be { v:1, fp, gfp, packs: [...] } or null');
+        fail('packs metadata must be { v:1, gv?:1|2, fp, gfp, packs: [...] } or null');
+      } else if (env.packs.gv != null && env.packs.gv !== 1 && env.packs.gv !== 2) {
+        fail('packs metadata has unsupported gameplay fingerprint version');
       } else if (env.packs.packs.length > 16) {
         fail('packs metadata lists too many entries');
       } else {

@@ -276,7 +276,8 @@
       snapQueue: [],
       lastSent: new Map(),   // idx -> {rev, tiles(Uint8Array), walls(Uint8Array)}
       acked: new Map(),      // idx -> rev
-      joinedTick: 0
+      joinedTick: 0,
+      clientPacks: null,
     };
     this.conns.set(conn.cid, conn);
     this._attachEndpoint(conn, ep);
@@ -361,11 +362,17 @@
     // digests so the mismatch is actionable on both ends.
     const ownPacks = this._packsMeta();
     const got = p.packs && typeof p.packs.fp === 'string' ? p.packs.fp : '?';
-    if (!p.packs || p.packs.fp !== ownPacks.fp) {
+    const compatible = p.packs && (
+      TC.Packs && typeof TC.Packs.gameplayFingerprintMatches === "function"
+        ? TC.Packs.gameplayFingerprintMatches(p.packs.fp, p.packs.list)
+        : p.packs.fp === ownPacks.fp
+    );
+    if (!compatible) {
       this._reject(conn, 'payload',
         'content-mismatch: host=' + ownPacks.fp + ' client=' + String(got).slice(0, 16));
       return;
     }
+    conn.clientPacks = { fp: p.packs.fp, list: p.packs.list.slice(0, 16) };
     const rj = p.rejoin;
     if (rj) {
       // Reconnect: validate session + identity, rebind generation, resync.
@@ -390,6 +397,7 @@
       existing.snapQueue = [];
       existing.joinedTick = this._tick();
       existing.inbox = conn.inbox;          // adopt already-buffered frames
+      existing.clientPacks = conn.clientPacks;
       existing.ep = conn.ep;
       this._attachEndpoint(existing, conn.ep);
       this.detached.delete(rj.pid);
@@ -441,7 +449,7 @@
       you: { pid: conn.pid },
       players: [],
       mode: mode,
-      packs: this._packsMeta()
+      packs: conn.clientPacks || this._packsMeta()
     });
   };
 

@@ -57,7 +57,7 @@
   // ======================================================================
 
   const MANIFEST_VERSION = 1;
-  const GAME_VERSION = "0.9"; // compat target for requires.game ranges
+  const GAME_VERSION = TC.VERSION || "0.9.0";
 
   const MAX_MANIFEST_BYTES = 256 * 1024; // serialized JSON size cap
   const MAX_SNAPSHOT_NODES = 16384;
@@ -368,9 +368,14 @@
     return clauses;
   }
 
+  function canonicalVersion(version) {
+    const parsed = parseVersion(version);
+    return parsed ? parsed.join(".") : version;
+  }
+
   function canonicalRange(range) {
     const clauses = parseRange(range);
-    if (!clauses || clauses.length < 2) return range;
+    if (!clauses) return range;
     const rank = { ">=": 0, ">": 1, "<=": 2, "<": 3, "=": 4, "^": 5 };
     const anchored = clauses[0].op === "=" || clauses[0].op === "^";
     const tail = anchored ? clauses.slice(1) : clauses.slice();
@@ -384,12 +389,18 @@
 
   function canonicalManifestRanges(manifest) {
     const out = Object.assign({}, manifest);
+    if (manifest.version !== undefined) out.version = canonicalVersion(manifest.version);
+    if (manifest.requires && manifest.requires.game !== undefined) {
+      out.requires = Object.assign({}, manifest.requires, {
+        game: canonicalRange(manifest.requires.game),
+      });
+    }
     if (manifest.requires && manifest.requires.packs) {
       const packs = {};
       for (const id of Object.keys(manifest.requires.packs)) {
         packs[id] = canonicalRange(manifest.requires.packs[id]);
       }
-      out.requires = Object.assign({}, manifest.requires, { packs });
+      out.requires = Object.assign({}, out.requires, { packs });
     }
     if (manifest.optional && manifest.optional.packs) {
       const packs = {};
@@ -401,8 +412,45 @@
     return out;
   }
 
+  function legacyCanonicalRange(range) {
+    const clauses = parseRange(range);
+    if (!clauses || clauses.length < 2) return range;
+    const rank = { ">=": 0, ">": 1, "<=": 2, "<": 3, "=": 4, "^": 5 };
+    const anchored = clauses[0].op === "=" || clauses[0].op === "^";
+    const tail = anchored ? clauses.slice(1) : clauses.slice();
+    tail.sort((a, b) => rank[a.op] - rank[b.op] || cmpVersion(a.version, b.version));
+    const ordered = anchored ? [clauses[0]].concat(tail) : tail;
+    return ordered.map((clause) => {
+      const version = clause.version.join(".");
+      return clause.op === "=" ? version : clause.op + version;
+    }).join(" ");
+  }
+
+  function legacyCanonicalManifestRanges(manifest) {
+    const out = Object.assign({}, manifest);
+    if (manifest.requires && manifest.requires.packs) {
+      const packs = {};
+      for (const id of Object.keys(manifest.requires.packs)) {
+        packs[id] = legacyCanonicalRange(manifest.requires.packs[id]);
+      }
+      out.requires = Object.assign({}, manifest.requires, { packs });
+    }
+    if (manifest.optional && manifest.optional.packs) {
+      const packs = {};
+      for (const id of Object.keys(manifest.optional.packs)) {
+        packs[id] = legacyCanonicalRange(manifest.optional.packs[id]);
+      }
+      out.optional = Object.assign({}, manifest.optional, { packs });
+    }
+    return out;
+  }
+
   function manifestDigest(manifest) {
     return digestOf(canonicalManifestRanges(manifest));
+  }
+
+  function legacyManifestDigest(manifest) {
+    return digestOf(legacyCanonicalManifestRanges(manifest));
   }
 
   function rangeError(range) {
@@ -652,6 +700,8 @@
   let activeList = []; // activated pack ids in deterministic order
   let activeRecords = []; // parallel records
   let activeDigestCache = null;
+  let activeLegacyDigestCache = null;
+  let activeLegacyContentDigestCache = null;
   let activeContentDigestCache = null;
   const committed = new Map(); // id -> rawDigest of the LIVE committed content
   let spawnRules = []; // compiled global spawn rules in committed pack order
@@ -669,7 +719,7 @@
 
   function normalizeRecord(m, parsed) {
     const type = m.type === "resource" ? "resource" : "data";
-    const version = m.version == null ? "1.0.0" : m.version;
+    const version = canonicalVersion(m.version == null ? "1.0.0" : m.version);
     const deps = {};
     const optionalDeps = {};
     for (const id of Object.keys(parsed.deps)) deps[id] = canonicalRange(parsed.deps[id]);
@@ -680,14 +730,18 @@
       id: m.id,
       name: m.name || m.id,
       version: version,
+      legacyVersion: m.version == null ? "1.0.0" : m.version,
       type: type,
       description: m.description || "",
-      gameRange: (m.requires && m.requires.game) || null,
+      gameRange: m.requires && m.requires.game != null
+        ? canonicalRange(m.requires.game)
+        : null,
       deps: Object.freeze(deps),
       optionalDeps: Object.freeze(optionalDeps),
       content: m.content || null,
       resources: m.resources || null,
       rawDigest: manifestDigest(m),
+      legacyRawDigest: legacyManifestDigest(m),
     });
   }
 
@@ -929,6 +983,43 @@
         // Cycle missed by DFS (should not happen) — fail closed anyway.
         fail("dependency", "dependency cycle detected among: " + ids.join(", "));
       }
+      done.add(picked);
+      ordered.push(picked);
+    }
+    return ordered;
+  }
+
+  function legacyResolveOrder(requested) {
+    const chosen = new Set();
+    const visit = (id) => {
+      if (chosen.has(id)) return;
+      const rec = provided.get(id);
+      if (!rec) fail("dependency", "legacy dependency resolution failed", ["missing pack: " + id]);
+      chosen.add(id);
+      for (const dep of Object.keys(rec.deps).sort()) visit(dep);
+    };
+    for (const id of requested) visit(id);
+    const ids = Array.from(chosen).sort();
+    const done = new Set();
+    const ordered = [];
+    while (ordered.length < ids.length) {
+      let picked = null;
+      for (const id of ids) {
+        if (done.has(id)) continue;
+        const rec = provided.get(id);
+        let ready = true;
+        for (const dep of Object.keys(rec.deps)) {
+          if (chosen.has(dep) && !done.has(dep)) {
+            ready = false;
+            break;
+          }
+        }
+        if (ready) {
+          picked = id;
+          break;
+        }
+      }
+      if (picked == null) fail("dependency", "legacy dependency cycle detected");
       done.add(picked);
       ordered.push(picked);
     }
@@ -2278,6 +2369,8 @@
     activeList = ordered;
     activeRecords = ordered.map((id) => provided.get(id));
     activeDigestCache = null;
+    activeLegacyDigestCache = null;
+    activeLegacyContentDigestCache = null;
     activeContentDigestCache = null;
     statsCounters.ok++;
 
@@ -2330,6 +2423,58 @@
     return activeDigestCache;
   }
 
+  function legacyDigest() {
+    if (activeLegacyDigestCache !== null) return activeLegacyDigestCache;
+    const lines = [];
+    for (const r of activeRecords) {
+      if (r.type !== "data") continue;
+      lines.push(r.id + "@" + r.legacyVersion + "@" + r.legacyRawDigest);
+    }
+    activeLegacyDigestCache = lines.length ? fnv1a(lines.sort().join("\n")).toString(16) : "";
+    return activeLegacyDigestCache;
+  }
+
+  function legacyContentDigest() {
+    if (activeLegacyContentDigestCache !== null) return activeLegacyContentDigestCache;
+    const lines = [];
+    for (const r of activeRecords) {
+      lines.push(r.id + "@" + r.legacyVersion + "@" + r.type + "@" + r.legacyRawDigest);
+    }
+    activeLegacyContentDigestCache = lines.length
+      ? fnv1a(lines.sort().join("\n")).toString(16)
+      : "";
+    return activeLegacyContentDigestCache;
+  }
+
+  function gameplayFingerprintMatches(fingerprint, list) {
+    if (typeof fingerprint !== "string") return false;
+    if (fingerprint === digest()) return true;
+    if (fingerprint !== legacyDigest() || !Array.isArray(list) ||
+        list.length > MAX_PACKS_ACTIVE) return false;
+    const clientData = [];
+    const seen = new Set();
+    for (let i = 0; i < list.length; i++) {
+      const spec = list[i];
+      if (typeof spec !== "string") return false;
+      const at = spec.lastIndexOf("@");
+      if (at <= 0) return false;
+      const id = spec.slice(0, at);
+      const version = spec.slice(at + 1);
+      const rec = provided.get(id);
+      if (!rec || rec.legacyVersion !== version || seen.has(id)) return false;
+      seen.add(id);
+      if (rec.type === "data") clientData.push(id);
+    }
+    const serverData = activeRecords
+      .filter((r) => r.type === "data")
+      .map((r) => r.id);
+    if (clientData.length !== serverData.length) return false;
+    for (let i = 0; i < serverData.length; i++) {
+      if (clientData[i] !== serverData[i]) return false;
+    }
+    return true;
+  }
+
   function contentDigest() {
     if (activeContentDigestCache !== null) return activeContentDigestCache;
     const lines = [];
@@ -2340,19 +2485,56 @@
     return activeContentDigestCache;
   }
 
+  function legacySaveOrderCompatible(packs) {
+    const ids = [];
+    let uncertainResource = false;
+    for (let i = 0; i < packs.length; i++) {
+      const p = packs[i];
+      const rec = provided.get(p.id);
+      if (p.type === "data") {
+        if (!rec || rec.type !== "data" || rec.legacyVersion !== p.version) return false;
+        ids.push(p.id);
+      } else {
+        if (!rec || rec.type !== "resource" || rec.legacyVersion !== p.version) {
+          uncertainResource = true;
+        } else {
+          ids.push(p.id);
+        }
+      }
+    }
+    const currentData = activeRecords
+      .filter((r) => r.type === "data")
+      .map((r) => r.id);
+    if (currentData.length === 0) return true;
+    if (uncertainResource) return false;
+    let historicalOrder;
+    try {
+      historicalOrder = legacyResolveOrder(ids);
+    } catch (e) {
+      return false;
+    }
+    const historicalData = historicalOrder.filter((id) => provided.get(id).type === "data");
+    if (historicalData.length !== currentData.length) return false;
+    for (let i = 0; i < currentData.length; i++) {
+      if (historicalData[i] !== currentData[i]) return false;
+    }
+    return true;
+  }
+
   // Envelope metadata payload; null when no packs are active (pre-W25
   // saves carry no such field and remain trivially compatible).
   function saveMetadata() {
     if (!activeRecords.length) return null;
     return {
       v: 1,
+      gv: 2,
       fp: contentDigest(),
       gfp: digest(),
       packs: activeRecords.map((r) => ({
         id: r.id,
         version: r.version,
         type: r.type,
-      })).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+      })),
     };
   }
 
@@ -2383,6 +2565,15 @@
         ok: false,
         status: "malformed-metadata",
         problems: ["save pack metadata is malformed"],
+        warnings,
+      };
+    }
+    const gameplayVersion = meta.gv == null ? 1 : meta.gv;
+    if (gameplayVersion !== 1 && gameplayVersion !== 2) {
+      return {
+        ok: false,
+        status: "malformed-metadata",
+        problems: ["save pack metadata has an unsupported gameplay fingerprint version"],
         warnings,
       };
     }
@@ -2421,25 +2612,53 @@
             "missing pack: save requires '" + p.id + "'@" + p.version + ", which is not active",
           );
         }
-      } else if (cur.version !== p.version) {
-        problems.push(
-          "incompatible version: save has '" + p.id + "'@" + p.version +
-            " but active version is " + cur.version,
-        );
       } else if (cur.type !== p.type) {
         problems.push(
           "incompatible pack type: save has '" + p.id + "' as " + p.type +
             " but active type is " + cur.type,
         );
+      } else {
+        const versionMatches = gameplayVersion === 1
+          ? cur.legacyVersion === p.version
+          : cur.version === p.version;
+        if (!versionMatches) {
+          if (cur.type === "resource") {
+            warnings.push(
+              "resource version differs: save has '" + p.id + "'@" + p.version +
+                " but active version is " + cur.version,
+            );
+          } else {
+            problems.push(
+              "incompatible version: save has '" + p.id + "'@" + p.version +
+                " but active version is " + cur.version,
+            );
+          }
+        }
       }
     }
     if (meta.fp !== contentDigest()) {
-      warnings.push(
-        "content fingerprint differs (resource-only set change is compatible): save has " +
-          meta.fp + " but active content digest is " + contentDigest(),
-      );
+      warnings.push(gameplayVersion === 2
+        ? "content fingerprint differs (resource-only gv2 change is compatible): save has " +
+          meta.fp + " but active content digest is " + contentDigest()
+        : "content fingerprint differs (legacy gv1 requires matching historical content/order): save has " +
+          meta.fp + " but active content digest is " + contentDigest());
     }
-    if (meta.gfp !== digest()) {
+    const savedDataOrder = meta.packs
+      .filter((p) => p.type === "data")
+      .map((p) => p.id);
+    const currentDataOrder = activeRecords
+      .filter((r) => r.type === "data")
+      .map((r) => r.id);
+    const dataOrderMatches = savedDataOrder.length === currentDataOrder.length &&
+      savedDataOrder.every((id, i) => id === currentDataOrder[i]);
+    let gameplayCompatible = meta.gfp === digest() && dataOrderMatches;
+    if (!gameplayCompatible && gameplayVersion === 1 &&
+        meta.fp === legacyContentDigest() && meta.gfp === legacyDigest() &&
+        legacySaveOrderCompatible(meta.packs)) {
+      gameplayCompatible = true;
+      warnings.push("legacy W25 gameplay fingerprint accepted with verified pack order");
+    }
+    if (!gameplayCompatible) {
       problems.push(
         "gameplay fingerprint mismatch: save has " + meta.gfp +
           " but active gameplay digest is " + digest(),
@@ -2465,6 +2684,8 @@
       providedCount: provided.size,
       activeCount: activeList.length,
       digest: digest(),
+      legacyDigest: legacyDigest(),
+      legacyContentDigest: legacyContentDigest(),
       contentDigest: contentDigest(),
     });
   }
@@ -2507,6 +2728,7 @@
     active: active,
     isActive: isActive,
     digest: digest,
+    gameplayFingerprintMatches: gameplayFingerprintMatches,
     contentDigest: contentDigest,
     saveMetadata: saveMetadata,
     classifySave: classifySave,
