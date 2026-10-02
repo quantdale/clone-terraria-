@@ -133,7 +133,15 @@ main.js (lead-owned) exposes: `TC.newGame(seed?)`, `TC.continueGame()`, `TC.quit
 - **W23 gameplay randomness rule:** runtime decisions that affect replicated truth
   (enemy AI, spawns, loot, crits/variance, drop physics) MUST draw from `TC.GameRng`
   named streams — never `Math.random()`. Presentation-only randomness (particles,
-  blink timers, trails) stays on `Math.random` by design.
+  blink timers, trails) stays on `Math.random` by design. Enforced by
+  `tools/check-rng.js` (`npm run check:rng`): every `Math.random(` call site must be
+  covered by the call-site audit allowlist in that file (one entry per call site,
+  with a justification; no whole-file exemptions). New ambient call sites are added
+  there with a reason; replicated-truth code moves to `TC.GameRng` instead.
+- **Static gate:** `npm run check:static` runs a filtered `tsc --checkJs` harness
+  (`tools/check-static.js` over `tsconfig.check.json`) that fails on TS2304 for any
+  name other than the dynamic `TC` global and on TS2393 duplicate
+  function/class implementations; everything else is excluded as documented noise.
 - **W23 multiplayer rules:** authoritative gameplay code must never read the
   `TC.player` singleton for targeting/anchor/despawn/attribution decisions — use
   `TC.Targets`. Camera/input/HUD/self-mirror ownership may stay primary/local.

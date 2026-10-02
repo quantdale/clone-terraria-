@@ -151,3 +151,16 @@ console.log(JSON.stringify({
 server.stop();
 console.log("[soak] post-stop players=" + TC.Players.count() +
   " detached=" + server.detached.size + " conns=" + server.conns.size);
+
+// Gate: a healthy teardown leaves NO players, detached identities, or
+// connections behind. This soak never attaches a local primary, so any
+// leftover identity is a leak. A printed summary alone is not a pass.
+const leftover =
+  TC.Players.count() !== 0 ||
+  server.detached.size !== 0 ||
+  server.conns.size !== 0;
+if (leftover) {
+  console.error("[soak] FAIL: leaked identities or connections remain");
+  process.exit(1);
+}
+console.log("[soak] post-stop teardown clean");

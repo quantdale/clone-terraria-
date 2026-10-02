@@ -4,10 +4,10 @@
   "private": true,
   "description": "Original-assets Terraria-style 2D sandbox. Vanilla JS + Canvas, no build step required to play.",
   "scripts": {
-    "check": "node tools/check-syntax.js",
+    "check": "node tools/check-syntax.js && node tools/check-static.js --enforce && node tools/check-rng.js --enforce",
     "check:i18n": "node tools/check-i18n.js",
-    "check:static": "node tools/check-static.js",
-    "check:rng": "node tools/check-rng.js",
+    "check:static": "node tools/check-static.js --enforce",
+    "check:rng": "node tools/check-rng.js --enforce",
     "test": "node --test \"tests/unit/**/*.test.js\" \"tests/core/**/*.test.js\" \"tests/save/**/*.test.js\" \"tests/combat/**/*.test.js\" \"tests/player/**/*.test.js\" \"tests/npc/**/*.test.js\" \"tests/world/**/*.test.js\" \"tests/net/**/*.test.js\" \"tests/packs/**/*.test.js\"",
     "test:net": "node --test \"tests/net/**/*.test.js\"",
     "test:packs": "node --test \"tests/packs/**/*.test.js\"",
@@ -21,7 +21,7 @@
     "test:browser": "playwright test",
     "build": "node tools/release-build.js",
     "verify:build": "node tools/release-build.js && node tools/verify-dist.js",
-    "validate": "npm run check && npm run check:i18n && npm test && npm run build && npm run verify:build && npm run test:browser",
+    "validate": "npm run check && npm run check:i18n && npm test && npm run build && npm run verify:build && npm run test:browser && node tools/fuzz-packs.js && node tools/soak-multiplayer.js --ticks 400",
     "serve": "python -m http.server 8000"
   },
   "comment": "The game itself runs from index.html with plain script tags (file:// or any static server). These scripts only drive validation. All --test arguments use globs because bare directory args are unreliable across supported Node versions/platforms.",

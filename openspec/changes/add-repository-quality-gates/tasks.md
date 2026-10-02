@@ -39,42 +39,42 @@
 
 ## 4. Wire fuzz and soak harnesses into the gate
 
-- [ ] 4.1 Confirm `tools/fuzz-packs.js` runs deterministically and passes with
+- [x] 4.1 Confirm `tools/fuzz-packs.js` runs deterministically and passes with
       its recorded default (400 rounds, seed 20260924, 0 escapes).
-- [ ] 4.2 Make `tools/soak-multiplayer.js` or its gate wrapper exit non-zero
+- [x] 4.2 Make `tools/soak-multiplayer.js` or its gate wrapper exit non-zero
       when post-stop player count, detached reconnect records, or connections
       are non-zero, and when the run throws. Bound it with the existing
       `--ticks` argument. A printed summary with exit 0 is not a pass.
-- [ ] 4.3 Add both to the `validate` npm script.
-- [ ] 4.4 Record the added wall-clock cost of each harness.
+- [x] 4.3 Add both to the `validate` npm script.
+- [x] 4.4 Record the added wall-clock cost of each harness.
 
 ## 5. Enforce and integrate
 
-- [ ] 5.1 Flip the static gate and the randomness guard to enforcing only
+- [x] 5.1 Flip the static gate and the randomness guard to enforcing only
       after `fix-ui-chest-quick-move-crash` and
       `enforce-gamerng-replicated-loot` have landed and the duplicate
       `canShape` is removed. Report-only may land before those changes.
-- [ ] 5.2 Wire the static gate and randomness guard into the `check` script so
+- [x] 5.2 Wire the static gate and randomness guard into the `check` script so
       `validate` runs them before the test suites.
-- [ ] 5.3 Update `.github/workflows/ci.yml` if any step ordering or caching
+- [x] 5.3 Update `.github/workflows/ci.yml` if any step ordering or caching
       needs adjusting; CI should remain a single `npm run validate`.
-- [ ] 5.4 Add a CI failure-diagnostics artifact for the new gate output so a
+- [x] 5.4 Add a CI failure-diagnostics artifact for the new gate output so a
       failure is diagnosable from the CI run.
 
 ## 6. Documentation
 
-- [ ] 6.1 Document every gate in `CONTRIBUTING.md` with the exact local command.
-- [ ] 6.2 Document the randomness allowlist policy in `AGENTS.md` next to the
+- [x] 6.1 Document every gate in `CONTRIBUTING.md` with the exact local command.
+- [x] 6.2 Document the randomness allowlist policy in `AGENTS.md` next to the
       existing W23 randomness rule.
-- [ ] 6.3 Document common static-gate failures and their fixes.
+- [x] 6.3 Document common static-gate failures and their fixes.
 
 ## 7. Verification
 
-- [ ] 7.1 Run `npm run check` and confirm it now includes the static and
+- [x] 7.1 Run `npm run check` and confirm it now includes the static and
       randomness gates and passes.
-- [ ] 7.2 Temporarily reintroduce an undefined identifier and confirm the gate
+- [x] 7.2 Temporarily reintroduce an undefined identifier and confirm the gate
       fails; remove it and confirm it passes (negative control).
-- [ ] 7.3 Temporarily reintroduce a duplicate class member and confirm the gate
+- [x] 7.3 Temporarily reintroduce a duplicate class member and confirm the gate
       fails; remove it and confirm it passes (negative control).
 - [ ] 7.4 Run `npm run validate` end to end and record total runtime versus the
       pre-change baseline.

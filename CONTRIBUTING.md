@@ -294,7 +294,44 @@ Update documentation in the same change when altering:
 
 For expensive-to-reverse choices, add an Architecture Decision Record under `docs/adr/` once that directory is established.
 
-## 13. Pull-request / implementation checklist
+## 13. Repository quality gates
+
+Locale gate: the catalog/fingerprint guard, run inside `npm run validate`:
+
+```
+npm run check:i18n
+```
+
+Static gate (filtered `tsc --checkJs`, `npm run check` also runs it):
+
+```
+npm run check:static
+```
+
+Randomness guard (call-site `Math.random` allowlist):
+
+```
+npm run check:rng
+```
+
+Pack security fuzz + bounded multiplayer soak (both in `npm run validate`):
+
+```
+node tools/fuzz-packs.js
+node tools/soak-multiplayer.js --ticks 400
+```
+
+The static gate fails on two signal classes only: `TS2304` for any name other
+than the dynamic `TC` global, and `TS2393` duplicate function/class
+implementations (a dead first `canShape` definition was the original
+catch — remove the dead duplicate; do not silence it). The randomness guard
+fails on any `Math.random(` call site not covered by the audited
+call-site allowlist in `tools/check-rng.js` — add the call site with a
+justification there rather than sprinkling a file-level exemption. To add
+new ambient presentation randomness, extend the allowlist; any replicated-truth
+draw belongs on `TC.GameRng` named streams instead.
+
+## 14. Pull-request / implementation checklist
 
 Before requesting merge, verify:
 
@@ -313,7 +350,7 @@ Before requesting merge, verify:
 - [ ] Architecture/system docs were updated when contracts changed.
 - [ ] Known Critical/High regressions are resolved before milestone completion.
 
-## 14. Agent handoff format
+## 15. Agent handoff format
 
 Autonomous or parallel agents should leave a durable handoff containing:
 
@@ -333,7 +370,7 @@ Follow-up task IDs:
 
 This prevents future sessions from having to reverse-engineer what a previous worker intended.
 
-## 15. Definition of done
+## 16. Definition of done
 
 A feature is not done merely because it appears on screen.
 
