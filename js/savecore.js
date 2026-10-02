@@ -35,11 +35,23 @@
   function storageGet(key) {
     try { return window.localStorage.getItem(key); } catch (e) { return null; }
   }
+  let lastStorageErrorName = null;
   function storageSet(key, val) {
-    try { window.localStorage.setItem(key, val); return true; } catch (e) { return false; }
+    try { window.localStorage.setItem(key, val); return true; } catch (e) {
+      lastStorageErrorName = (e && e.name) || 'Error';
+      return false;
+    }
   }
   function storageRemove(key) {
     try { window.localStorage.removeItem(key); } catch (e) {}
+  }
+
+  // ---- persistence observability (F-07) ----
+  const stats = { attempts: 0, successes: 0, failures: 0, lastFailure: null };
+  function isCapacityError(name) {
+    return name === 'QuotaExceededError' ||
+      name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      name === 'QUOTA_EXCEEDED_ERR';
   }
   function parseRaw(raw) {
     if (typeof raw !== 'string' || !raw) return null;
@@ -258,25 +270,98 @@
   // Any failure leaves the previous main/bak untouched.
   function saveNow(storageKey) {
     const key = storageKey || DEFAULT_KEY;
+    stats.attempts++;
     let json;
-    try { json = JSON.stringify(buildEnvelope(buildCtx())); } catch (e) { return false; }
+    try { json = JSON.stringify(buildEnvelope(buildCtx())); } catch (e) {
+      stats.failures++;
+      stats.lastFailure = { reason: 'data', message: msg(e) };
+      return false;
+    }
 
     const prev = storageGet(key);
     const prevGood = (prev && parseRaw(prev)) ? prev : null;
 
-    if (!storageSet(key + '.tmp', json)) return false;
-    const written = parseRaw(storageGet(key + '.tmp'));
-    if (!written || written.formatVersion !== FORMAT_VERSION) {
+    // capacity/storage steps run once, then reclaim-and-retry below
+    let tmpOk = storageSet(key + '.tmp', json);
+    let tmpErrorName = lastStorageErrorName;
+    if (tmpOk) {
+      const written = parseRaw(storageGet(key + '.tmp'));
+      if (!written || written.formatVersion !== FORMAT_VERSION) {
+        storageRemove(key + '.tmp');
+        stats.failures++;
+        stats.lastFailure = { reason: 'data', message: 'tmp verification failed' };
+        return false;
+      }
+      if (prevGood) storageSet(key + '.bak', prevGood); // best-effort backup
+      let mainOk = storageSet(key, json);
+      let mainErrorName = lastStorageErrorName;
+      if (!mainOk && isCapacityError(mainErrorName)) {
+        // reclaim: tmp artifact is never valid; drop the backup of a
+        // previous good save and retry the main write exactly once. The
+        // previous main copy stays untouched on failure.
+        storageRemove(key + '.tmp');
+        if (storageGet(key + '.bak') != null) storageRemove(key + '.bak');
+        mainOk = storageSet(key, json);
+        mainErrorName = lastStorageErrorName;
+      }
+      if (!mainOk) {
+        storageRemove(key + '.tmp');
+        stats.failures++;
+        stats.lastFailure = {
+          reason: isCapacityError(mainErrorName) ? 'capacity' : 'storage',
+          message: mainErrorName || 'write failed'
+        };
+        return false;
+      }
       storageRemove(key + '.tmp');
-      return false;
+      stats.successes++;
+      stats.lastFailure = null;
+      return true;
     }
-    if (prevGood) storageSet(key + '.bak', prevGood); // best-effort backup
-    if (!storageSet(key, json)) {
-      storageRemove(key + '.tmp');
-      return false;
-    }
+
+    // tmp write failed: remove any stale tmp, classify, and on capacity
+    // retry once after the reclaim (main was never reached, nothing is
+    // half-written).
     storageRemove(key + '.tmp');
-    return true;
+    let retried = null;
+    if (isCapacityError(tmpErrorName)) {
+      retried = storageSet(key + '.tmp', json);
+      tmpErrorName = lastStorageErrorName;
+    }
+    if (retried === true) {
+      const written2 = parseRaw(storageGet(key + '.tmp'));
+      if (written2 && written2.formatVersion === FORMAT_VERSION) {
+        if (prevGood) storageSet(key + '.bak', prevGood);
+        let mainOk2 = storageSet(key, json);
+        let mainErrorName2 = lastStorageErrorName;
+        if (!mainOk2 && isCapacityError(mainErrorName2)) {
+          storageRemove(key + '.tmp');
+          if (storageGet(key + '.bak') != null) storageRemove(key + '.bak');
+          mainOk2 = storageSet(key, json);
+          mainErrorName2 = lastStorageErrorName;
+        }
+        if (mainOk2) {
+          storageRemove(key + '.tmp');
+          stats.successes++;
+          stats.lastFailure = null;
+          return true;
+        }
+        storageRemove(key + '.tmp');
+        stats.failures++;
+        stats.lastFailure = {
+          reason: isCapacityError(mainErrorName2) ? 'capacity' : 'storage',
+          message: mainErrorName2 || 'write failed'
+        };
+        return false;
+      }
+    }
+
+    stats.failures++;
+    stats.lastFailure = {
+      reason: isCapacityError(tmpErrorName) ? 'capacity' : 'storage',
+      message: tmpErrorName || 'tmp write failed'
+    };
+    return false;
   }
 
   // ---- legacy v1 adapter ----
@@ -383,6 +468,16 @@
   TC.SaveCore.applyMigrations = applyMigrations;
   TC.SaveCore.validate = validate;
   TC.SaveCore.saveNow = saveNow;
+  TC.SaveCore.stats = function () {
+    return {
+      attempts: stats.attempts,
+      successes: stats.successes,
+      failures: stats.failures,
+      lastFailure: stats.lastFailure
+        ? { reason: stats.lastFailure.reason, message: stats.lastFailure.message }
+        : null
+    };
+  };
   TC.SaveCore.loadFrom = loadFrom;
   TC.SaveCore.restore = restore;
   TC.SaveCore.exportString = exportString;

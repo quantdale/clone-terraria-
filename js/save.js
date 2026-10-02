@@ -324,7 +324,38 @@
     return storageSet(KEY, JSON.stringify(data));
   };
 
-  // Periodic autosave while a world is live; failures are silent.
+  // ---- persistence observability (F-07) ----
+  // Mirror the SaveCore counters so UI/debug surfaces have one access point.
+  TC.Save.stats = function () {
+    if (TC.SaveCore && typeof TC.SaveCore.stats === 'function') {
+      try { return TC.SaveCore.stats(); } catch (e) {}
+    }
+    return { attempts: 0, successes: 0, failures: 0, lastFailure: null };
+  };
+
+  // Autosave failure state: first failure after a success raises a notice;
+  // while the failure persists, re-raise at most once per cooldown. Success
+  // clears the state so the next failure is reported normally.
+  const NOTICE_COOLDOWN_MS = 60000;
+  let autoFailed = false;
+  let lastNoticeAt = 0;
+  function notifyAutoFail(reason) {
+    const now = Date.now();
+    if (autoFailed && (now - lastNoticeAt) < NOTICE_COOLDOWN_MS) return;
+    autoFailed = true;
+    lastNoticeAt = now;
+    const key = reason === 'capacity' ? 'ui.toast.save_quota' : 'ui.toast.autosave_failed';
+    const fallback = reason === 'capacity'
+      ? 'Save storage is full — free up space or reduce world changes'
+      : 'Autosave failed — progress since the last save is not protected';
+    const msg = TC.Localization && typeof TC.Localization.t === 'function'
+      ? TC.Localization.t(key) : fallback;
+    // TC.Localization.t falls back to '[key]' when untranslated; never toast
+    // the bracketed key — use the English fallback instead.
+    if (TC.UI && typeof TC.UI.toast === 'function') {
+      try { TC.UI.toast(String(msg).charAt(0) === '[' ? fallback : msg); } catch (e) {}
+    }
+  }
   // W22: a joined network client holds a presentation mirror, never world
   // truth — autosaving it would corrupt the local save with replicated
   // state, so client sessions are skipped here (single gate, no wraps).
@@ -338,7 +369,13 @@
     acc += dt;
     if (acc >= interval) {
       acc = 0;
-      TC.Save.save();
+      const ok = TC.Save.save();
+      if (ok) { autoFailed = false; return; }
+      const st = TC.Save.stats();
+      const reason = st && st.lastFailure ? st.lastFailure.reason : null;
+      notifyAutoFail(reason);
     }
   };
+  // Test seam: clear the autosave failure state between scenarios.
+  TC.Save._resetAutoFail = function () { autoFailed = false; lastNoticeAt = 0; };
 })();

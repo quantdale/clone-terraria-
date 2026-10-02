@@ -110,6 +110,8 @@
       toast: {
         saved: 'Saved',
         save_failed: 'Save failed',
+        autosave_failed: 'Autosave failed — progress since the last save is not protected',
+        save_quota: 'Save storage is full — free up space or reduce world changes',
         sound_on: 'Sound on',
         sound_off: 'Sound off',
         sorted: { one: 'Sorted {n} stack', other: 'Sorted {n} stacks' },

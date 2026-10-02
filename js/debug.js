@@ -194,6 +194,16 @@
 
     const flags = guardedCall('Progression', 'all');
     if (flags) lines.push('flags ' + (flags.length ? flags.join(', ') : 'none'));
+    // F-07 persistence observability: write accounting + last failure reason.
+    try {
+      const saveStats = guardedCall('Save', 'stats');
+      if (saveStats) {
+        let line = 'save a' + (saveStats.attempts | 0) + ' ok' + (saveStats.successes | 0) +
+          ' fail' + (saveStats.failures | 0);
+        if (saveStats.lastFailure) line += ' ' + saveStats.lastFailure.reason;
+        lines.push(line);
+      }
+    } catch (e) {}
     // WOF encounter observability (W17): state/phase/elapsed/servants/projectiles
     try {
       const wof = (TC.Enemies && typeof TC.Enemies.getWofEncounter === 'function') ? TC.Enemies.getWofEncounter() : null;
