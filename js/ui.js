@@ -135,6 +135,22 @@
     } catch (e) { return false; }
   }
 
+  // True only when this session is a joined client that can route intents.
+  // drivesTick() is broader (it includes 'connecting') and must not be used
+  // here: NetClient.intent() returns null while connecting and a txSubmit
+  // fallback would mutate the local mirror. A missing client means local
+  // editing; a throwing client authority fails closed (treat as joined) so
+  // the click cannot fail open into a local write.
+  function joinedActive() {
+    try {
+      const client = TC.NetClient && typeof TC.NetClient.active === 'function'
+        ? TC.NetClient.active() : null;
+      return !!(client && typeof client.isActive === 'function' && client.isActive());
+    } catch (e) {
+      return !!(TC.NetClient && typeof TC.NetClient.active === 'function');
+    }
+  }
+
   // ---- shop currency (canonical coins via TC.Economy, W2) ----
   function currencyCount(inv) {
     if (!TC.Economy || typeof TC.Economy.total !== 'function') return 0;
@@ -2180,10 +2196,12 @@
       const cs = UI.chest ? chestSlots() : null;
       if (cs) {
         if (joinedActive()) {
-          txSubmit('ContainerMove', {
-            tx: UI.chest.tx, ty: UI.chest.ty,
-            from: 'inv', to: 'chest', fromSlot: i
-          });
+          if (TC.NetClient && typeof TC.NetClient.intent === 'function') {
+            TC.NetClient.intent('ContainerMove', {
+              tx: UI.chest.tx, ty: UI.chest.ty,
+              from: 'inv', to: 'chest', fromSlot: i
+            });
+          }
           return;
         }
         quickMoveRange(inv.slots, i, cs, 0, CHEST_N);
@@ -2321,10 +2339,12 @@
         const s = liveSlot(cs, r.index);
         if (joinedActive()) {
           if ((shiftHeld() || !rightClick) && !cursorStack && s) {
-            txSubmit('ContainerMove', {
-              tx: UI.chest.tx, ty: UI.chest.ty,
-              from: 'chest', to: 'inv', fromSlot: r.index
-            });
+            if (TC.NetClient && typeof TC.NetClient.intent === 'function') {
+              TC.NetClient.intent('ContainerMove', {
+                tx: UI.chest.tx, ty: UI.chest.ty,
+                from: 'chest', to: 'inv', fromSlot: r.index
+              });
+            }
           }
           return;
         }
