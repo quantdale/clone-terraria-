@@ -426,24 +426,6 @@
       return true;
     }
 
-    // May a hammer act on this tile? Rejects air/liquids/bedrock and anything
-    // support-anchored: plants, torches, chests, doors, crafting stations.
-    canShape(x, y) {
-      if (!this.inB(x, y)) return false;
-      const id = this.tiles[this.idx(x, y)];
-      const def = TC.TILE_DEFS[id];
-      if (!def) return false;
-      if (id === TC.TILE.AIR) return false;
-      if (def.needsSupport || def.replaceable) return false;
-      if (!def.hammerable && !def.solid) return false;
-      if (def.hardness >= 9999) return false; // unmineable blocks stay whole
-      return !(
-        TC.Wiring &&
-        typeof TC.Wiring.isGhost === "function" &&
-        TC.Wiring.isGhost(x, y)
-      );
-    }
-
     // May a hammer act on this tile? Rejects air/liquids/bedrock and support-
     // anchored decor or furniture (plants, torches, chests, doors, stations);
     // platforms pass despite their 'any' anchor because they are hammerable.

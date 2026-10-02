@@ -6,6 +6,8 @@
   "scripts": {
     "check": "node tools/check-syntax.js",
     "check:i18n": "node tools/check-i18n.js",
+    "check:static": "node tools/check-static.js",
+    "check:rng": "node tools/check-rng.js",
     "test": "node --test \"tests/unit/**/*.test.js\" \"tests/core/**/*.test.js\" \"tests/save/**/*.test.js\" \"tests/combat/**/*.test.js\" \"tests/player/**/*.test.js\" \"tests/npc/**/*.test.js\" \"tests/world/**/*.test.js\" \"tests/net/**/*.test.js\" \"tests/packs/**/*.test.js\"",
     "test:net": "node --test \"tests/net/**/*.test.js\"",
     "test:packs": "node --test \"tests/packs/**/*.test.js\"",

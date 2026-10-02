@@ -2,50 +2,40 @@
 
 ## 1. Static analysis — report-only rollout
 
-- [ ] 1.1 Add ESLint as a dev-only dependency with a flat `eslint.config.js`
-      enabling only correctness rules: `no-undef`, `no-dupe-class-members`,
-      `no-dupe-keys`, `no-redeclare`, `no-unreachable`, `no-const-assign`,
-      `no-eval`, `no-implied-eval`, `no-new-func`.
-- [ ] 1.2 Declare `TC` as a project global in the config so the dynamic
-      namespace pattern is not flagged (removes the dominant noise class).
-- [ ] 1.3 Scope the config to `js/**/*.js` and `packs/**/*.js` (both ship in
-      `dist/`).
-- [ ] 1.4 Run the lint in report-only mode over the full file set and record the
-      complete finding list.
-- [ ] 1.5 Alternative path if a new dependency is unacceptable: implement a
-      filtered `tsc --checkJs` harness that fails on the two proven signal
-      classes (`TS2304` excluding the `TC` global; `TS2393`) and ignores the
-      known noise codes. Document which path was taken and why.
-- [ ] 1.6 Add a `check:static` npm script that runs the static gate in
-      report-only mode for now.
+- [x] 1.1 Superseded by 1.5 (D1-alt taken; ESLint not installed, no new
+      dependency added; `tsc` 7.0.2 is already available globally).
+- [x] 1.2 Same TC-global noise class handled by the 1.5 filtered harness
+      (`TS2304` name `TC` and `TS2339` Window-TC excluded as noise).
+- [x] 1.3 Scope equivalent in `tsconfig.check.json`: `js/**/*.js` +
+      `packs/**/*.js`.
+- [x] 1.4 Finding list recorded: 183 diagnostics, 4 signals (2× joinedActive
+      TS2304, 2× canShape TS2393); full list classified by code in 1.5's
+      report output.
+- [x] 1.5 D1-alt TAKEN: `tools/check-static.js` + `tsconfig.check.json` run
+      filtered `tsc --checkJs`; fails on TS2304 (excluding the `TC` global)
+      and TS2393; all other codes are excluded as documented noise.
+- [x] 1.6 `check:static` script added; runs report-only by default.
 
 ## 2. Randomness guard
 
-- [ ] 2.1 Add `tools/check-rng.js` that scans `js/` for `Math.random` and fails
-      on any usage not covered by an audited allowlist (design D2).
-- [ ] 2.2 Build a call-site allowlist, not a file allowlist. Start from the
-      audited presentation and seed-selection sites in `particles.js`,
-      `accessories.js`, `magic.js`, `music.js`, `audio.js`, `biomes.js`,
-      `tiles.js`, `sky.js`, `main.js`, and `ui.js`. Each entry names the site
-      and its justification. A new `Math.random` in one of those files fails
-      unless it is added as its own entry.
-- [ ] 2.3 Require a justification comment on every allowlist entry so the
-      allowlist cannot silently become a blanket exemption.
-- [ ] 2.4 Add `check:rng` npm script.
-- [ ] 2.5 Confirm the guard flags the `js/loot.js` pot-roll violation in
-      report-only mode (it is owned by `enforce-gamerng-replicated-loot`;
-      confirm the guard goes quiet after that change lands).
+- [x] 2.1 `tools/check-rng.js` added (call-site allowlist scan over `js/`).
+- [x] 2.2 Call-site allowlist built; each entry names file + site substring
+      + justification. `js/loot.js` intentionally unlisted.
+- [x] 2.3 Every allowlist entry carries a `why` justification string.
+- [x] 2.4 `check:rng` npm script added.
+- [x] 2.5 Guard flags `js/loot.js:316/320/325` in report-only mode; will go
+      quiet after enforce-gamerng-replicated-loot lands (Phase 2).
 
 ## 3. Fix true positives surfaced by the gate
 
-- [ ] 3.1 Remove the dead first `canShape(x, y)` definition in `js/world.js`
-      (lines ~431-448); the second definition (line ~450) is the live one,
-      confirmed by a runtime probe of `TC.World.prototype.canShape`.
-- [ ] 3.2 Triage every remaining report-only finding: fix genuine defects,
-      suppress genuine false positives with a documented reason, and record the
-      decision.
-- [ ] 3.3 Confirm no product-code change was made purely to silence the gate
-      without a real justification.
+- [x] 3.1 Dead first `canShape(x, y)` removed from `js/world.js`; the live
+      second definition retained (world tests pass; TS2393 count 2 → 0).
+- [x] 3.2 Triage record: the two remaining report-only signals are
+      `joinedActive` TS2304 ×2 (js/ui.js:2182, js/ui.js:2322) — genuine
+      P0, owned by fix-ui-chest-quick-move-crash (Phase 1), not suppressed.
+      All other codes are the documented noise classes from design D1/D1-alt.
+- [x] 3.3 No product-code change was made to silence the gate; the only
+      product-code edit removed a dead duplicate method (a real defect).
 
 ## 4. Wire fuzz and soak harnesses into the gate
 
