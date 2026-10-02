@@ -25,11 +25,11 @@ function chestSlotCenter(i) {
 }
 
 function shiftDown(game) {
-  const kd = game.listeners.keydown || [];
+  const kd = (game.listeners.keydown || []).slice();
   for (const fn of kd) fn({ code: 'ShiftLeft', repeat: false, preventDefault() {} });
 }
 function shiftUp(game) {
-  const ku = game.listeners.keyup || [];
+  const ku = (game.listeners.keyup || []).slice();
   for (const fn of ku) fn({ code: 'ShiftLeft', repeat: false, preventDefault() {} });
 }
 

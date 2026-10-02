@@ -17,7 +17,12 @@
     invOpen: false,  // inventory panel visible
     chest: null,     // {tx,ty} while a chest panel is open (implies invOpen)
     dialog: null,    // {name,text,t} NPC speech box while t > 0
-    selected: 0      // mirrored from TC.player.hotbarIndex (player.js owns selection)
+    selected: 0,     // mirrored from TC.player.hotbarIndex (player.js owns selection)
+    // keyboard focus readout (F-08): {surface, index, craftScroll, packsScroll}
+    focusInfo: function () {
+      return { surface: focus.surface, index: focus.index,
+               craftScroll: craftScroll, packsScroll: packsScroll };
+    }
   };
 
   // ---- tunables ----
@@ -88,6 +93,16 @@
   let breathT = 0;            // breath bubble row fade (0..1)
   let craftShowAll = false;   // crafting panel: false = craftable only
   let lastShop = null;        // {npcType, panel, rows:[{rect,entry}]} from the last layout
+
+  // ---- keyboard focus model (F-08) ----
+  // One index per surface ('title','pause','packs','shop','craft'). The
+  // surface id is re-derived every frame from live UI state, so a closed
+  // surface can never keep a stale index. Movement keys differ by surface:
+  // arrows on non-simulating surfaces, Tab on shop/craft where arrows and
+  // Space belong to the running simulation.
+  const focus = { surface: null, index: 0 };
+  let craftScroll = 0;        // first visible index into L.craftList
+  let packsScroll = 0;        // first visible index into the packs rows
 
   // pixel heart bitmap, 7 wide x 6 tall
   const HEART_MAP = [
@@ -472,6 +487,7 @@
   function closeInventory() {
     UI.invOpen = false;
     UI.chest = null;          // chest panel lives inside the inventory
+    craftScroll = 0;
     stashCursorOrThrow();
   }
 
@@ -493,6 +509,8 @@
     UI.paused = false;
     UI.invOpen = false;
     UI.chest = null;
+    focus.surface = null; focus.index = 0;
+    craftScroll = 0; packsScroll = 0;
     UI.dialog = null;
     cursorStack = null;
     lastShop = null;
@@ -920,7 +938,10 @@
             L.craftMeta.push({ ok: true, missing: [] });
           }
         }
-        const n = Math.min(L.craftList.length, L.craftMaxRows);
+        if (craftScroll > Math.max(0, L.craftList.length - L.craftMaxRows)) {
+          craftScroll = Math.max(0, L.craftList.length - L.craftMaxRows);
+        }
+        const n = Math.min(L.craftList.length - craftScroll, L.craftMaxRows);
         for (let i = 0; i < n; i++) {
           L.craftRects.push({
             x: L.craftPanel.x + 6,
@@ -964,13 +985,20 @@
       const avail = TC.Packs.available();
       const rowH = 30, headH = 56, footH = 62;
       const pw = 500;
-      const ph = headH + Math.max(1, avail.length) * rowH + footH;
       const px = w / 2 - pw / 2, py = Math.max(24, h * 0.16);
+      // Scroll window: only the rows that fit on screen are laid out;
+      // keyboard focus scrolls packsScroll to keep its row visible.
+      const visN = Math.max(1, Math.min(avail.length,
+        Math.floor((h - py - headH - footH) / rowH)));
+      if (packsScroll > Math.max(0, avail.length - visN)) {
+        packsScroll = Math.max(0, avail.length - visN);
+      }
+      const ph = headH + Math.max(1, visN) * rowH + footH;
       L.packsPanel = { x: px, y: py, w: pw, h: ph };
       L.packsRows = [];
-      for (let i = 0; i < avail.length; i++) {
-        const id = avail[i].id;
-        const rowRect = { x: px + 12, y: py + headH + i * rowH, w: pw - 24, h: rowH - 6 };
+      for (let k = 0; k < visN && packsScroll + k < avail.length; k++) {
+        const id = avail[packsScroll + k].id;
+        const rowRect = { x: px + 12, y: py + headH + k * rowH, w: pw - 24, h: rowH - 6 };
         const entry = { id: id, rect: rowRect };
         // Per-row Export/Remove for installed packs (WS2)
         if (TC.PackStore && typeof TC.PackStore.has === 'function' && TC.PackStore.has(id)) {
@@ -1099,27 +1127,29 @@
     try { ctx.drawImage(ic, x, y, size, size); } catch (e) { /* bad icon: skip */ }
   }
 
-  function drawButton(ctx, b, mx, my) {
+  function drawButton(ctx, b, mx, my, focused) {
     const r = b.rect;
     const hov = inRect(mx, my, r);
-    ctx.fillStyle = hov ? 'rgba(72,56,22,0.94)' : 'rgba(28,22,34,0.9)';
+    const on = hov || !!focused;
+    ctx.fillStyle = on ? 'rgba(72,56,22,0.94)' : 'rgba(28,22,34,0.9)';
     ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.lineWidth = hov ? 2 : 1;
-    ctx.strokeStyle = hov ? GOLD : 'rgba(255,210,74,0.4)';
+    ctx.lineWidth = on ? 2 : 1;
+    ctx.strokeStyle = on ? GOLD : 'rgba(255,210,74,0.4)';
     ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
-    txt(ctx, b.label, r.x + r.w / 2, r.y + r.h / 2 + 1, 17, hov ? GOLD : TEXT, 'center', true);
+    txt(ctx, b.label, r.x + r.w / 2, r.y + r.h / 2 + 1, 17, on ? GOLD : TEXT, 'center', true);
   }
 
   // compact header-row variant (Sort / Quick Stack / Split / filter toggle)
-  function drawSmallButton(ctx, b, mx, my) {
+  function drawSmallButton(ctx, b, mx, my, focused) {
     const r = b.rect;
     const hov = inRect(mx, my, r);
-    ctx.fillStyle = hov ? 'rgba(72,56,22,0.94)' : 'rgba(28,22,34,0.9)';
+    const on = hov || !!focused;
+    ctx.fillStyle = on ? 'rgba(72,56,22,0.94)' : 'rgba(28,22,34,0.9)';
     ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = hov ? GOLD : 'rgba(255,210,74,0.35)';
+    ctx.lineWidth = on ? 2 : 1;
+    ctx.strokeStyle = on ? GOLD : 'rgba(255,210,74,0.35)';
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
-    txt(ctx, b.label, r.x + r.w / 2, r.y + r.h / 2 + 1, 11, hov ? GOLD : TEXT_DIM, 'center', true);
+    txt(ctx, b.label, r.x + r.w / 2, r.y + r.h / 2 + 1, 11, on ? GOLD : TEXT_DIM, 'center', true);
   }
 
   function drawSlotBox(ctx, r, stack, opts) {
@@ -1643,14 +1673,20 @@
 
     for (let i = 0; i < L.craftRects.length; i++) {
       const r = L.craftRects[i];
-      const rec = L.craftList[i];
+      const rec = L.craftList[craftScroll + i];
       if (!rec) continue;
-      const meta = L.craftMeta[i] || null;
+      const meta = L.craftMeta[craftScroll + i] || null;
       const hov = inRect(mx, my, r);
+      const foc = isFocused('craft', craftScroll + i);
       const dim = !!meta && !meta.ok;    // 'All' mode: not currently makeable
-      if (hov) {
-        ctx.fillStyle = 'rgba(255,210,74,0.12)';
+      if (hov || foc) {
+        ctx.fillStyle = foc ? 'rgba(255,210,74,0.18)' : 'rgba(255,210,74,0.12)';
         ctx.fillRect(r.x, r.y, r.w, r.h);
+      }
+      if (foc) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = GOLD;
+        ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
       }
       ctx.save();
       if (dim) ctx.globalAlpha = 0.45;
@@ -1670,8 +1706,9 @@
       ctx.restore();
       if (hov) craftTooltip(mx, my, rec, cc, meta);
     }
-    if (L.craftList.length > L.craftRects.length) {
-      txt(ctx, t('ui.crafting.more', { n: L.craftList.length - L.craftRects.length }),
+    const craftBelow = L.craftList.length - (craftScroll + L.craftRects.length);
+    if (craftBelow > 0) {
+      txt(ctx, t('ui.crafting.more', { n: craftBelow }),
           p.x + 10, p.y + 40 + L.craftRects.length * CRAFT_ROW_H + 8, 11, TEXT_DIM, 'left');
     }
   }
@@ -1709,7 +1746,7 @@
     txtShadow(ctx, t('ui.title_screen.subtitle'), w / 2, ly + size * 0.8, 15,
               'rgba(255,236,180,0.9)', 'center');
 
-    for (let i = 0; i < L.buttons.length; i++) drawButton(ctx, L.buttons[i], mx, my);
+    for (let i = 0; i < L.buttons.length; i++) drawButton(ctx, L.buttons[i], mx, my, isFocused('title', i));
 
     if (L.packsPanel) drawPacksPanel(ctx, L, mx, my);
 
@@ -1740,6 +1777,7 @@
   // ---- W25 packs panel ----
   function drawPacksPanel(ctx, L, mx, my) {
     const p = L.packsPanel;
+    const focIt = (focus.surface === 'packs') ? packsNavItems(L)[focus.index] || null : null;
     panel(ctx, p.x, p.y, p.w, p.h, true);
     txtShadow(ctx, t('ui.packs.title'), p.x + p.w / 2, p.y + 24, 20, GOLD, 'center');
     txt(ctx, t('ui.packs.hint'), p.x + p.w / 2, p.y + 42, 11, TEXT_DIM, 'center');
@@ -1747,13 +1785,21 @@
     if (!avail.length) {
       txt(ctx, t('ui.packs.none'), p.x + p.w / 2, p.y + 56 + 12, 13, TEXT_DIM, 'center');
     }
-    for (const row of L.packsRows) {
+    for (let k = 0; k < L.packsRows.length; k++) {
+      const row = L.packsRows[k];
+      const absRow = packsScroll + k;
       const r = row.rect;
       const hov = inRect(mx, my, r);
+      const foc = !!(focIt && focIt.kind === 'row' && focIt.row === absRow);
       const checked = !!packSel[row.id];
       const meta = TC.Packs.getManifest(row.id);
-      ctx.fillStyle = hov ? 'rgba(255,220,140,0.10)' : 'rgba(255,255,255,0.03)';
+      ctx.fillStyle = (hov || foc) ? 'rgba(255,220,140,0.10)' : 'rgba(255,255,255,0.03)';
       ctx.fillRect(r.x, r.y, r.w, r.h);
+      if (foc) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = GOLD;
+        ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+      }
       // checkbox
       ctx.strokeStyle = checked ? GOLD : TEXT_DIM;
       ctx.lineWidth = 1.5;
@@ -1769,12 +1815,17 @@
       const labelMax = hasActions ? r.w - 160 : r.w - 90;
       txt(ctx, ellipsize(ctx, label, labelMax), r.x + 34, r.y + r.h / 2, 13, checked ? TEXT : TEXT_DIM, 'left');
       if (!hasActions) txt(ctx, tag, r.x + r.w - 8, r.y + r.h / 2, 10, TEXT_DIM, 'right');
-      if (row.exportRect) drawSmallButton(ctx, { rect: row.exportRect, id: 'exp-' + row.id, label: t('ui.packs.export') }, mx, my);
-      if (row.removeRect) drawSmallButton(ctx, { rect: row.removeRect, id: 'rm-' + row.id, label: t('ui.packs.remove') }, mx, my);
+      if (row.exportRect) drawSmallButton(ctx, { rect: row.exportRect, id: 'exp-' + row.id, label: t('ui.packs.export') }, mx, my,
+        !!(focIt && focIt.kind === 'export' && focIt.row === absRow));
+      if (row.removeRect) drawSmallButton(ctx, { rect: row.removeRect, id: 'rm-' + row.id, label: t('ui.packs.remove') }, mx, my,
+        !!(focIt && focIt.kind === 'remove' && focIt.row === absRow));
     }
-    drawButton(ctx, { rect: L.packsApplyRect, id: 'apply', label: t('ui.packs.apply') }, mx, my);
-    if (L.packsInstallRect) drawButton(ctx, { rect: L.packsInstallRect, id: 'install', label: t('ui.packs.install') }, mx, my);
-    drawButton(ctx, { rect: L.packsCloseRect, id: 'close', label: t('ui.common.close') }, mx, my);
+    drawButton(ctx, { rect: L.packsApplyRect, id: 'apply', label: t('ui.packs.apply') }, mx, my,
+      !!(focIt && focIt.kind === 'apply'));
+    if (L.packsInstallRect) drawButton(ctx, { rect: L.packsInstallRect, id: 'install', label: t('ui.packs.install') }, mx, my,
+      !!(focIt && focIt.kind === 'install'));
+    drawButton(ctx, { rect: L.packsCloseRect, id: 'close', label: t('ui.common.close') }, mx, my,
+      !!(focIt && focIt.kind === 'close'));
   }
 
   function drawPause(ctx, L, mx, my) {
@@ -1783,7 +1834,7 @@
     const p = L.pausePanel;
     panel(ctx, p.x, p.y, p.w, p.h, true);
     txtShadow(ctx, t('ui.pause.title'), L.w / 2, p.y + 30, 24, GOLD, 'center');
-    for (let i = 0; i < L.buttons.length; i++) drawButton(ctx, L.buttons[i], mx, my);
+    for (let i = 0; i < L.buttons.length; i++) drawButton(ctx, L.buttons[i], mx, my, isFocused('pause', i));
   }
 
   function respawnSeconds() {
@@ -2011,9 +2062,15 @@
       const e = row.entry;
       const price = Math.max(1, Math.floor(e.price) || 1);
       const hov = inRect(mx, my, r);
-      if (hov) {
-        c.fillStyle = 'rgba(255,210,74,0.12)';
+      const foc = isFocused('shop', i);
+      if (hov || foc) {
+        c.fillStyle = foc ? 'rgba(255,210,74,0.18)' : 'rgba(255,210,74,0.12)';
         c.fillRect(r.x, r.y, r.w, r.h);
+      }
+      if (foc) {
+        c.lineWidth = 2;
+        c.strokeStyle = GOLD;
+        c.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
       }
       drawIcon(c, e.itemId, r.x + 4, r.y + (r.h - 18) / 2, 18);
       c.font = '13px monospace';
@@ -2094,6 +2151,114 @@
       if (inRect(x, y, L.buttons[i].rect)) return L.buttons[i];
     }
     return null;
+  }
+
+  // ---- keyboard focus navigation (F-08) ----
+  function isFocused(surface, i) {
+    return focus.surface === surface && focus.index === i;
+  }
+  // Flat keyboard-navigable item list for the packs panel: per-row toggle,
+  // export, and remove actions, then the Apply / Install / Close buttons.
+  // Built from the FULL available list so off-screen rows stay reachable;
+  // only visible rows carry hit rects. The pointer path hit-tests these
+  // same rects, so both modalities share one implementation per item.
+  function packsNavItems(L) {
+    const items = [];
+    let avail = [];
+    try { avail = (TC.Packs && TC.Packs.available) ? TC.Packs.available() : []; } catch (e) {}
+    const byId = {};
+    for (const row of L.packsRows || []) byId[row.id] = row;
+    const total = avail.length;
+    for (let r = 0; r < total; r++) {
+      const id = avail[r].id;
+      const row = byId[id] || null;
+      items.push({ kind: 'row', row: r, rect: row ? row.rect : null,
+        act: (function (pid) { return function () { actPackRow(pid); }; })(id) });
+      if (TC.PackStore && typeof TC.PackStore.has === 'function' && TC.PackStore.has(id)) {
+        items.push({ kind: 'export', row: r, rect: row && row.exportRect ? row.exportRect : null,
+          act: (function (pid) { return function () { actPacksExport(pid); }; })(id) });
+        const isActive = TC.Packs.isActive && TC.Packs.isActive(id);
+        if (!isActive) {
+          items.push({ kind: 'remove', row: r, rect: row && row.removeRect ? row.removeRect : null,
+            act: (function (pid) { return function () { actPacksRemove(pid); }; })(id) });
+        }
+      }
+    }
+    if (L.packsApplyRect) items.push({ kind: 'apply', row: total, rect: L.packsApplyRect, act: actPacksApply });
+    if (L.packsInstallRect) items.push({ kind: 'install', row: total, rect: L.packsInstallRect, act: actPacksInstall });
+    if (L.packsCloseRect) items.push({ kind: 'close', row: total, rect: L.packsCloseRect, act: function () { packsOpen = false; } });
+    return items;
+  }
+  function focusCount(surface, L) {
+    if (surface === 'title' || surface === 'pause') return L.buttons.length;
+    if (surface === 'packs') return packsNavItems(L).length;
+    if (surface === 'shop') return (lastShop && lastShop.rows.length) || 0;
+    if (surface === 'craft') return (L.craftList && L.craftList.length) || 0;
+    return 0;
+  }
+  function moveFocus(delta, n) {
+    if (!(n > 0)) return;
+    focus.index = (((focus.index + delta) % n) + n) % n;
+  }
+  function fixScroll(surface, L) {
+    if (surface === 'craft' && L.craftList) {
+      const vis = Math.max(1, L.craftRects.length);
+      if (focus.index < craftScroll) craftScroll = focus.index;
+      else if (focus.index >= craftScroll + vis) craftScroll = focus.index - vis + 1;
+      const max = Math.max(0, L.craftList.length - vis);
+      if (craftScroll > max) craftScroll = max;
+      if (craftScroll < 0) craftScroll = 0;
+    } else if (surface === 'packs') {
+      const items = packsNavItems(L);
+      const it = items[focus.index];
+      const row = it ? it.row : 0;
+      const total = packsRowTotal();
+      const vis = Math.max(1, (L.packsRows || []).length);
+      if (row < packsScroll) packsScroll = row;
+      else if (row >= packsScroll + vis) packsScroll = row - vis + 1;
+      const max = Math.max(0, total - vis);
+      if (packsScroll > max) packsScroll = max;
+      if (packsScroll < 0) packsScroll = 0;
+    }
+  }
+  function packsRowTotal() {
+    try {
+      return (TC.Packs && TC.Packs.available) ? TC.Packs.available().length : 0;
+    } catch (e) { return 0; }
+  }
+  function navSurface(L) {
+    if (TC.state === 'title') return (L.packsPanel && packsOpen) ? 'packs' : 'title';
+    if (UI.paused) return 'pause';
+    if (lastShop) return 'shop';
+    if (UI.invOpen && L.craftCtx && L.craftList && L.craftList.length) return 'craft';
+    return null;
+  }
+  // One activation implementation shared by pointer and keyboard (D4).
+  // Keyboard maps to the primary (left-click) action only.
+  function activateItem(surface, index, L) {
+    if (surface === 'title' || surface === 'pause') {
+      const b = L.buttons[index];
+      if (b && b.act) b.act();
+    } else if (surface === 'packs') {
+      const it = packsNavItems(L)[index];
+      if (it && it.act) it.act();
+    } else if (surface === 'shop') {
+      const row = lastShop && lastShop.rows[index];
+      if (row) buyItem(row.entry);
+    } else if (surface === 'craft') {
+      craftRow(index, L);
+    }
+  }
+  // Craft-row activation at an ABSOLUTE craftList index (pointer callers
+  // pass rectIndex + craftScroll). Unavailable rows are inert, never throws.
+  function craftRow(absIndex, L) {
+    if (!L.craftCtx || !L.craftList || !L.craftList[absIndex]) return;
+    const routed = txSubmit('CraftRecipe', {
+      recipe: L.craftList[absIndex],
+      inv: L.craftCtx.inv,
+      stations: L.craftCtx.stations
+    });
+    if (routed && routed.ok && TC.Audio) TC.Audio.play('craft');
   }
   function hitHotbar(L, x, y) {
     for (let i = 0; i < L.hotbar.length; i++) {
@@ -2252,18 +2417,17 @@
     if (TC.state === 'title') {
       if (rightClick) return;
       if (L.packsPanel) {
-        for (const row of L.packsRows || []) {
-          if (row.exportRect && inRect(mx, my, row.exportRect)) { actPacksExport(row.id); return; }
-          if (row.removeRect && inRect(mx, my, row.removeRect)) { actPacksRemove(row.id); return; }
-          if (inRect(mx, my, row.rect)) { actPackRow(row.id); return; }
+        const items = packsNavItems(L);
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].rect && inRect(mx, my, items[i].rect)) {
+            activateItem('packs', i, L);
+            return;
+          }
         }
-        if (inRect(mx, my, L.packsApplyRect)) { actPacksApply(); return; }
-        if (L.packsInstallRect && inRect(mx, my, L.packsInstallRect)) { actPacksInstall(); return; }
-        if (inRect(mx, my, L.packsCloseRect)) { packsOpen = false; return; }
         return; // modal: clicks inside never fall through to menu buttons
       }
       const b = hitButton(L, mx, my);
-      if (b && b.act) b.act();
+      if (b) activateItem('title', L.buttons.indexOf(b), L);
       return;
     }
     if (TC.state !== 'playing') return;
@@ -2271,7 +2435,7 @@
     if (UI.paused) {           // modal: pause buttons only
       if (rightClick) return;
       const b = hitButton(L, mx, my);
-      if (b && b.act) b.act();
+      if (b) activateItem('pause', L.buttons.indexOf(b), L);
       return;
     }
 
@@ -2311,14 +2475,7 @@
     if (!rightClick && L.craftCtx) {
       for (let i = 0; i < L.craftRects.length; i++) {
         if (inRect(mx, my, L.craftRects[i])) {
-          let ok = false;
-          const routed = txSubmit('CraftRecipe', {
-            recipe: L.craftList[i],
-            inv: L.craftCtx.inv,
-            stations: L.craftCtx.stations
-          });
-          ok = !!(routed && routed.ok);
-          if (ok && TC.Audio) TC.Audio.play('craft');
+          craftRow(craftScroll + i, L);
           return;
         }
       }
@@ -2411,7 +2568,7 @@
         for (let i = 0; i < lastShop.rows.length; i++) {
           const row = lastShop.rows[i];
           if (!inRect(mx, my, row.rect)) continue;
-          buyItem(row.entry);
+          activateItem('shop', i, L);
           handled = true;
           break;
         }
@@ -2433,6 +2590,35 @@
     } else {
       if (m.clicked) onClick(L, mx, my, false);
       if (m.rightClicked) onClick(L, mx, my, true);
+    }
+
+    // ---- keyboard menu navigation (F-08) ----
+    // Derived from the same L as the pointer path; clamped every frame so a
+    // layout change cannot strand the index. Pointer hover never touches
+    // focus (7.3). pressed() only peeks — gameplay keys are not consumed.
+    const surf = navSurface(L);
+    if (surf !== focus.surface) {
+      focus.surface = surf;
+      focus.index = 0;
+      if (surf === 'craft') craftScroll = 0;
+    }
+    if (surf) {
+      const n = focusCount(surf, L);
+      if (n <= 0) {
+        focus.index = 0;
+      } else {
+        if (focus.index >= n) focus.index = n - 1;
+        if (focus.index < 0) focus.index = 0;
+        if (surf === 'title' || surf === 'pause' || surf === 'packs') {
+          if (pressed('ArrowUp')) { moveFocus(-1, n); fixScroll(surf, L); }
+          else if (pressed('ArrowDown')) { moveFocus(1, n); fixScroll(surf, L); }
+          if (pressed('Enter') || pressed('Space')) activateItem(surf, focus.index, L);
+          if (surf === 'packs' && pressed('Escape')) packsOpen = false;
+        } else { // shop, craft: Tab moves, Enter activates; arrows/Space stay gameplay
+          if (pressed('Tab')) { moveFocus(shiftHeld() ? -1 : 1, n); fixScroll(surf, L); }
+          if (pressed('Enter')) activateItem(surf, focus.index, L);
+        }
+      }
     }
   }
 

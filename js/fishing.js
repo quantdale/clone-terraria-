@@ -457,6 +457,7 @@
     const e = pickWeighted(table);
     const n = randInt(e.min, e.max);
     give(player, e.id, n);
+    const d = iDef(e.id);
     fText(S.bobber.x, S.bobber.y - 8,
       fmsg('feedback.fishing.caught_fish', { n: n, name: iName(e.id) }, '+{n} {name}'),
       '#ffffff');
