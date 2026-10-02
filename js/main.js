@@ -93,6 +93,14 @@
 
   TC.newGame = function (seed) {
     seed = (seed == null) ? ((Math.random() * 2147483647) | 0) : (seed | 0);
+    if (TC.Players && typeof TC.Players.resetForNewWorld === 'function') {
+      if (TC.Players.count() > 0) {
+        console.warn('[TC] Players: resetting ' + TC.Players.count() +
+          ' stale identit' + (TC.Players.count() === 1 ? 'y' : 'ies') +
+          ' on newGame');
+      }
+      TC.Players.resetForNewWorld();
+    }
     if (TC.Chests && typeof TC.Chests.clear === 'function') TC.Chests.clear();
     const gen = buildWorld(seed, null);
     TC.player = new TC.Player(
@@ -114,6 +122,9 @@
     if (TC.NPCs && typeof TC.NPCs.evaluateUnlocks === 'function') {
       try { TC.NPCs.evaluateUnlocks(); } catch (eu) {}
     }
+    if (TC.Players && typeof TC.Players.create === 'function') {
+      TC.Players.create(TC.player, { primary: true });
+    }
   };
 
   TC.continueGame = function () {
@@ -133,6 +144,13 @@
         return; // stay on title; storage untouched
       }
     }
+    if (TC.Players && typeof TC.Players.resetForNewWorld === 'function') {
+      if (TC.Players.count() > 0) {
+        console.warn('[TC] Players: resetting ' + TC.Players.count() +
+          ' stale identities on continueGame');
+      }
+      TC.Players.resetForNewWorld();
+    }
     const gen = buildWorld(data.seed, data.diffs, data.wallDiffs);
     TC.player = TC.Player.deserialize(data.player);
     if (!TC.player) {
@@ -142,6 +160,10 @@
       );
       TC.player.giveStarterKit();
     }
+    if (TC.Players && typeof TC.Players.create === 'function') {
+      TC.Players.create(TC.player, { primary: true });
+    }
+
     if (TC.Enemies) TC.Enemies.clear();
     if (TC.NPCs && TC.NPCs.load) TC.NPCs.load(data.npcs);
     if (TC.Items) TC.Items.clearDrops();

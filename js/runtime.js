@@ -153,6 +153,13 @@
     if (TC.Wiring && typeof TC.Wiring.resetForNewWorld === 'function') try { TC.Wiring.resetForNewWorld(); } catch (e) {}
     if (TC.Grapple && typeof TC.Grapple.resetForNewWorld === 'function') try { TC.Grapple.resetForNewWorld(); } catch (e) {}
     if (TC.NPCs && typeof TC.NPCs.clear === 'function') try { TC.NPCs.clear(); } catch (e) {}
+    if (TC.Players && typeof TC.Players.resetForNewWorld === 'function') {
+      if (TC.Players.count() > 0) {
+        console.warn('[TC] Players: resetting ' + TC.Players.count() +
+          ' stale identities on createWorld');
+      }
+      TC.Players.resetForNewWorld();
+    }
 
     let gen = null;
     gen = TC.WorldGen.generate(seed);

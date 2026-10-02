@@ -57,6 +57,22 @@ test("players: retainOnly drops everything else (session teardown hygiene)", () 
   assert.strictEqual(TC.Players.primary(), a.player);
 });
 
+test("players: create is idempotent for the same player object", () => {
+  TC.Players.resetForNewWorld();
+  const p = fakePlayer(7, 8);
+  const a = TC.Players.create(p, { id: "p1" });
+  const b = TC.Players.create(p, { id: "p1" });
+  assert.strictEqual(a, b, "same record returned");
+  assert.strictEqual(b.id, "p1");
+  assert.strictEqual(TC.Players.count(), 1);
+  assert.strictEqual(TC.Players.all().length, 1);
+
+  const other = fakePlayer(9, 10);
+  const c = TC.Players.create(other, { id: "p1" });
+  assert.notStrictEqual(c.id, "p1", "a different object never steals an occupied id");
+  assert.strictEqual(TC.Players.count(), 2);
+});
+
 test("players: resetForNewWorld clears all state so sessions cannot leak", () => {
   TC.Players.create(fakePlayer(), { id: "z" });
   TC.Players.resetForNewWorld();

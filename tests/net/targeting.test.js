@@ -53,9 +53,9 @@ test("targets: stickiness keeps the incumbent unless beaten decisively", () => {
 
 test("targets: dead and disconnected players lose eligibility; no-target is graceful", () => {
   const { TC } = boot();
-  // register the host too so removal of the remote leaves a REAL fallback
-  const host = new TC.Player(TC.player.x, TC.player.y);
-  TC.Players.create(host, { id: "p1", primary: true });
+  // newGame already seats the live primary; use it directly so removal of
+  // the remote leaves a REAL fallback
+  const host = TC.player;
   const rec = addPlayer(TC, 200, 200, { id: "p2" });
   const e = { x: 210, y: 210, w: 16, h: 16 };
   assert.strictEqual(TC.Targets.of(e), rec.player);

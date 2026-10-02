@@ -40,6 +40,11 @@
     opts = opts || {};
     if (!assertPlayer(player)) return null;
     if (entries.size >= MAX_PLAYERS) return null;
+    // Idempotent for the same player object: a second registration returns
+    // the existing record/id instead of double-entering or relocating it.
+    for (const rec of entries.values()) {
+      if (rec.player === player) return rec;
+    }
     let id = opts.id;
     if (typeof id !== 'string' || !id || entries.has(id)) {
       do { id = 'p' + (nextOrdinal++); } while (entries.has(id));
