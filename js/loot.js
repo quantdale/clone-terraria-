@@ -313,16 +313,19 @@
     stats.potsBroken++;
     const cx = (tx + 0.5) * TS, cy = (ty + 0.5) * TS;
     const pool = POT_LOOT.filter((e) => TC.ITEM_DEFS[e[0]]);
-    let rolls = 1 + ((Math.random() * 2) | 0);   // gameplay roll, not worldgen
+    // Replicated-truth draw: the loot selection and counts are a pure
+    // function of the seeded 'loot' stream (authoritative replay).
+    const rnd = TC.GameRng ? TC.GameRng.stream('loot').float : Math.random;
+    let rolls = 1 + ((rnd() * 2) | 0);
     while (rolls-- > 0 && pool.length) {
       let total = 0;
       for (let i = 0; i < pool.length; i++) total += pool[i][3];
-      let r = Math.random() * total;
+      let r = rnd() * total;
       for (let i = 0; i < pool.length; i++) {
         r -= pool[i][3];
         if (r <= 0) {
           const e = pool[i];
-          const n = e[1] + ((Math.random() * (e[2] - e[1] + 1)) | 0);
+          const n = e[1] + ((rnd() * (e[2] - e[1] + 1)) | 0);
           spawnDrop(cx, cy, e[0], n);
           break;
         }

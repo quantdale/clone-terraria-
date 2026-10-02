@@ -46,6 +46,42 @@ test('loot: pot TileBroken scatters exactly once', () => {
 });
 function TS() { return 16; }
 
+test('loot: pot-break output is a pure function of the seeded stream', () => {
+  const dropsOf = () => {
+    const g = loadGame();
+    const TC = g.TC;
+    TC.newGame(31337);
+    const tx = Math.floor(TC.player.x / TS()) + 3;
+    const ty = Math.floor((TC.player.y + 48) / TS());
+    TC.world.setRaw(tx, ty, TC.TILE.POT);
+    TC.Loot.reset();
+    TC.Loot.onTileBroken(tx, ty);
+    return TC.Items.drops.map((d) => d.id + ':' + d.count).join(',');
+  };
+  const a = dropsOf();
+  const b = dropsOf();
+  assert.strictEqual(a, b, 'same seed + same trace must yield identical pot loot');
+  assert.notStrictEqual(a, '', 'pot actually dropped something');
+});
+
+test('loot: pot break still completes without TC.GameRng (fallback)', () => {
+  const g = loadGame();
+  const TC = g.TC;
+  TC.newGame(77);
+  const tx = Math.floor(TC.player.x / TS()) + 3;
+  const ty = Math.floor((TC.player.y + 48) / TS());
+  TC.world.setRaw(tx, ty, TC.TILE.POT);
+  const realGameRng = TC.GameRng;
+  delete TC.GameRng;
+  try {
+    TC.Loot.reset();
+    TC.Loot.onTileBroken(tx, ty);
+  } finally {
+    TC.GameRng = realGameRng;
+  }
+  assert.strictEqual(TC.Loot.stats.potsBroken, 1, 'break counted without a seeded authority');
+});
+
 test('loot: crystal onUseHeld increments lifeCrystals once and respects the cap', () => {
   const g = loadGame();
   const TC = g.TC;

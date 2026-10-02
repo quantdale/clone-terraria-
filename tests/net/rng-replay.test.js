@@ -68,6 +68,18 @@ function runScenario() {
     if (e) spawned.push(e);
   }
 
+  // Deterministic pot line: three pots at fixed cells, mined at fixed trace
+  // points. Their loot rolls must ride the seeded 'loot' stream.
+  const pots = [];
+  for (let i = 0; i < 3; i++) {
+    const tx = fx - 8 + i, ty = fy - 1;
+    TC.world.setRaw(tx, ty, TC.TILE.POT);
+    pots.push({ tx, ty });
+  }
+  // break them through the same TileBroken entry point the mine path fans
+  // out to, at fixed trace ticks (reach-independent)
+  const breakPotAt = (k) => { TC.Loot.onTileBroken(pots[k].tx, pots[k].ty); };
+
   // bow + arrows so the trace produces kills -> loot rolls -> drops physics
   pa.inventory.add("wooden_bow", 1);
   pa.inventory.add("arrow", 99);
@@ -80,6 +92,9 @@ function runScenario() {
     const use = i % 3 === 0;
     sendInput(A, seq++, [moving ? 1 : 0, i % 17 === 0 ? 1 : 0, 0],
       { x: pa.x + 120, y: pa.y - 8 }, use);
+    if (i === 60 || i === 120 || i === 180) {
+      breakPotAt((i / 60) - 1);
+    }
     // periodic re-arm from authoritative inventory via whitelisted command
     if (i % 30 === 0) sendCmd(A, seq++, "MoveItem", { fromSlot: 0, toSlot: 0 });
     server.tick();
