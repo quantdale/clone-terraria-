@@ -73,10 +73,10 @@
 ## 7. Verification
 
 - [x] 7.1 Run `node --check js/main.js js/runtime.js js/players.js`.
-- [ ] 7.2 Run `npm test` and confirm the full suite passes with the new
+- [x] 7.2 Run `npm test` and confirm the full suite passes with the new
       lifecycle cases.
-- [ ] 7.3 Run `npm run test:browser` and confirm journeys pass.
-- [ ] 7.4 Run `npm run validate` end to end and record the result.
+- [x] 7.3 Run `npm run test:browser` and confirm journeys pass.
+- [x] 7.4 Run `npm run validate` end to end and record the result.
 - [ ] 7.5 Manually verify the reported repro no longer reproduces: host, quit
       to title, new world, and confirm the player falls/moves and enemies chase
       the visible player. The host save must still load.

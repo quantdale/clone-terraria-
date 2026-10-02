@@ -71,8 +71,8 @@
 - [x] 6.1 Run `node --check js/save.js js/savecore.js js/ui.js js/debug.js`.
 - [x] 6.2 Run `npm run test:save` and confirm the save suites pass.
 - [x] 6.3 Run `npm run check:i18n` and confirm the catalog is valid.
-- [ ] 6.4 Run `npm test` and `npm run test:browser` and confirm all pass.
-- [ ] 6.5 Run `npm run validate` end to end and record the result.
+- [x] 6.4 Run `npm test` and `npm run test:browser` and confirm all pass.
+- [x] 6.5 Run `npm run validate` end to end and record the result.
 - [ ] 6.6 Manually verify: fill localStorage for the origin, play, and confirm
       the player is warned (once, then rate-limited) and the F3 overlay shows
       the failure counters.

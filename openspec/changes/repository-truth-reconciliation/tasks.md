@@ -66,8 +66,8 @@
 ## 6. Verification
 
 - [x] 6.1 Run `npm run build` and `npm run verify:build`.
-- [ ] 6.2 Run `npm test` and `npm run test:browser` and confirm all pass,
+- [x] 6.2 Run `npm test` and `npm run test:browser` and confirm all pass,
       including the pack suites and journey P.
-- [ ] 6.3 Run `npm run validate` end to end and record the result.
-- [ ] 6.4 Confirm `git status` shows no unintended changes and that the
+- [x] 6.3 Run `npm run validate` end to end and record the result.
+- [x] 6.4 Confirm `git status` shows no unintended changes and that the
       production artifact contains no test fixture.

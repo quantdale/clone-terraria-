@@ -76,7 +76,7 @@
       fails; remove it and confirm it passes (negative control).
 - [x] 7.3 Temporarily reintroduce a duplicate class member and confirm the gate
       fails; remove it and confirm it passes (negative control).
-- [ ] 7.4 Run `npm run validate` end to end and record total runtime versus the
+- [x] 7.4 Run `npm run validate` end to end and record total runtime versus the
       pre-change baseline.
-- [ ] 7.5 Confirm the production build output (`dist/`) is unchanged in file
+- [x] 7.5 Confirm the production build output (`dist/`) is unchanged in file
       set and still byte-identical across rebuilds.

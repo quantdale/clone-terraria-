@@ -57,11 +57,11 @@
 
 ## 4. Verification
 
-- [ ] 4.1 Run `node --check js/ui.js`.
-- [ ] 4.2 Run `npm test` and confirm the full node:test suite passes with the
+- [x] 4.1 Run `node --check js/ui.js`.
+- [x] 4.2 Run `npm test` and confirm the full node:test suite passes with the
       new cases included.
-- [ ] 4.3 Run `npm run test:browser` and confirm all journeys pass.
-- [ ] 4.4 Run `npm run validate` end to end (syntax + i18n + tests + build +
+- [x] 4.3 Run `npm run test:browser` and confirm all journeys pass.
+- [x] 4.4 Run `npm run validate` end to end (syntax + i18n + tests + build +
       verify-dist + browser) and record the result.
 - [ ] 4.5 Manually verify in a browser: solo, open chest, Shift-click moves the
       stack both directions with no visible error; repeat with a joined client.

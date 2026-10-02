@@ -33,7 +33,7 @@
 
 - [x] 3.1 Run `node --check js/loot.js`.
 - [x] 3.2 Run the focused determinism tests and `npm run test:net`.
-- [ ] 3.3 Run `npm test` and confirm the full node:test suite passes.
-- [ ] 3.4 Run `npm run validate` end to end and record the result.
+- [x] 3.3 Run `npm test` and confirm the full node:test suite passes.
+- [x] 3.4 Run `npm run validate` end to end and record the result.
 - [x] 3.5 Confirm no other replicated-truth call site in `js/loot.js` still uses
       ambient randomness (only presentation/dust effects may).
