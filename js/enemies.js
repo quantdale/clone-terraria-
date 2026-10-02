@@ -380,9 +380,11 @@
       );
     }
     if (e.def.boss && TC.UI && typeof TC.UI.toast === "function") {
+      // No-catalog degraded path: toast the stable type, never an English
+      // sentence assembled from display metadata.
       TC.UI.toast(TC.Localization
         ? TC.Localization.t("progress.boss_defeated", { boss: TC.Localization.contentName("enemy", e.type) })
-        : e.def.name + " has been defeated!");
+        : "[" + srcKeyOf(e) + " defeated]");
     }
   }
 
@@ -394,19 +396,26 @@
   // homing/bite-back can never target the boss herself.
   const hostileShots = [];
 
+  // Stable damage-source key: the enemy's machine `type`, never its display
+  // name. Display text is not identity (W20) — two same-named entities must
+  // not share attribution or clearing.
+  function srcKeyOf(e) {
+    return (e && typeof e.type === 'string' && e.type) || 'unknown';
+  }
+
   function trackHostileShot(pr, shooter, dmg) {
     if (!pr) return;
     if (Array.isArray(pr.hits)) pr.hits.push(shooter);
     // remember the type: pooled slots recycle, so the tracker must confirm
     // the slot still holds this kind of shot before reading it as hostile
-    hostileShots.push({ p: pr, type: pr.type, dmg: dmg, src: shooter.def.name });
+    hostileShots.push({ p: pr, type: pr.type, dmg: dmg, shooter: shooter, src: srcKeyOf(shooter), srcKey: srcKeyOf(shooter) });
   }
 
   function clearHostileShotsOf(boss) {
+    const key = srcKeyOf(boss);
     for (let i = hostileShots.length - 1; i >= 0; i--) {
       const h = hostileShots[i];
-      if (h.src === (boss.def && boss.def.name) || h.p === boss || (h.src && boss.def && h.src === boss.def.name)) {
-        // also match by shooter reference if available via closure
+      if (h.shooter === boss || (h.shooter == null && h.srcKey === key) || h.p === boss) {
         hostileShots.splice(i, 1);
         if (h.p && h.p.active) h.p.age = (h.p.maxAge || 1) + 1;
       } else if (h.p && !h.p.active) {
@@ -416,10 +425,10 @@
     // fallback: any shot whose shooter was the boss and now orphaned
     for (let i = hostileShots.length - 1; i >= 0; i--) {
       const h = hostileShots[i];
-      if (h.p && h.p.active && h.p.owner == null && boss && boss.def) {
+      if (h.p && h.p.active && h.p.owner == null && boss) {
         // wof shots are owner:null; we cannot reliably filter, but if boss is despawning we clear all wof-typed shots
         // This is safe because wof is the only wall boss using magic_bolt with owner null in underworld
-        if (h.type === 'magic_bolt' && h.src === boss.def.name) {
+        if (h.type === 'magic_bolt' && (h.shooter === boss || (h.shooter == null && h.srcKey === key))) {
           hostileShots.splice(i, 1);
           h.p.age = (h.p.maxAge || 1) + 1;
         }
@@ -613,7 +622,7 @@
     if (TC.UI && typeof TC.UI.toast === "function") {
       TC.UI.toast(TC.Localization
         ? TC.Localization.t("progress.boss_awakened", { boss: TC.Localization.contentName("enemy", type) })
-        : def.name + " has awoken!");
+        : "[" + type + " awakened]");
     }
     return e;
   }
@@ -701,7 +710,7 @@
         e.def.dmg,
         dir * TOUCH_KB_X,
         TOUCH_KB_Y,
-        e.def.name,
+        srcKeyOf(e),
         { target: p },
       );
       e.touchTimer = TC.CONST.ENEMY_TOUCH_COOLDOWN;
@@ -2082,6 +2091,7 @@
     trackHostileShot,    // boss shots register player-contact tracking
     spawnServantOf,      // minion spawning linked to a boss's servant budget
     clearHostileShotsOf,
+    enemySourceKey: srcKeyOf,
     getWofEncounter,
     clearEncounter,
   };

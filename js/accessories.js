@@ -488,13 +488,13 @@
   }
 
   // Localized buff/status display name (W20): the id stays a machine value;
-  // presentation resolves through the catalog with def.name as fallback.
+  // presentation resolves through the catalog; the no-catalog fallback is
+  // the stable id, never frozen display metadata.
   function buffName(id) {
     if (TC.Localization && typeof TC.Localization.contentName === 'function') {
       try { return TC.Localization.contentName('buff', id); } catch (e) {}
     }
-    const d = BUFF_DEFS[id];
-    return (d && d.name) || String(id);
+    return String(id);
   }
 
   function removeBuff(id) {

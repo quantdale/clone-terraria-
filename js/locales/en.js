@@ -216,6 +216,11 @@
       blood_moon_set: 'The Blood Moon has set.',
     },
 
+    // ---- developer overlay labels --------------------------------------
+    debug: {
+      cursor_tile: 'cursor tile {x},{y} = {name}',
+    },
+
     // ---- player-facing action feedback ---------------------------------
     feedback: {
       summon: {
@@ -244,6 +249,7 @@
         quest_complete: 'Fishing quest complete! +{n} {reward}',
         quest_float: 'Quest!',
         caught_crate: 'Caught a {crate}!',
+        caught_fish: '+{n} {name}',
       },
     },
 

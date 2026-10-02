@@ -476,7 +476,17 @@
       const m = TC.Input.mouse;
       const tx = (m.worldX / 16) | 0, ty = (m.worldY / 16) | 0;
       const id = TC.world.get(tx, ty);
-      lines.push('cursor tile ' + tx + ',' + ty + ' = ' + TC.TILE_DEFS[id].name);
+      const tileName = (TC.Localization && typeof TC.Localization.contentName === 'function')
+        ? TC.Localization.contentName('tile', id) : String(id);
+      const plain = 'cursor tile ' + tx + ',' + ty + ' = ' + tileName;
+      let label = plain;
+      if (TC.Localization && typeof TC.Localization.t === 'function') {
+        try {
+          const l = TC.Localization.t('debug.cursor_tile', { x: tx, y: ty, name: tileName });
+          if (String(l).charAt(0) !== '[') label = l;
+        } catch (e) {}
+      }
+      lines.push(label);
       if (TC.Lighting) lines.push('light ' + TC.Lighting.lightAt(tx, ty).toFixed(2));
     }
     if (TC.Enemies) lines.push('enemies ' + TC.Enemies.list.length);

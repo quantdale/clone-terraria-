@@ -11,6 +11,10 @@
      6. REGISTRY IDENTITY GUARD: the stable-ID inventory + fingerprint must
         equal the W20 baseline snapshot - localization metadata must never
         mutate machine identity.
+     7. PRESENTATION-NAME SOURCE SCAN: no production module reads a content
+        definition's frozen `name` field as display text or runtime identity
+        outside the sanctioned seams (frozen tables, the catalog resolver,
+        documented identity uses).
 
    Exit code 1 on any error. Run via `npm run check:i18n`. */
 'use strict';
@@ -148,6 +152,64 @@ function main() {
   }
   ok(stableTotal + " stable ids match the W24 baseline exactly");
   ok(prevChecked + " pre-W24 stable ids verified unchanged (additive-only content growth)");
+
+  // ---- 7. presentation-name source scan --------------------------------
+  // Frozen `def.name` fields are identity metadata: presentation must go
+  // through TC.Localization.contentName and identity must use stable keys.
+  // Each allowlist entry names the file, a line substring, and the reason —
+  // a new raw name read fails the gate instead of drifting back in.
+  const NAME_ALLOW = [
+    { file: 'js/localization.js', sub: 'return def.name', reason: 'catalog resolver stable-id fallback (sanctioned seam)' },
+    { file: 'js/registry.js', sub: 'snakeCase(def.name)', reason: 'stable-id derivation from frozen identity' },
+    { file: 'js/lighting.js', sub: 'defs[id].name', reason: 'emissive lookup keyed by frozen identity string' },
+    { file: 'js/npcs.js', sub: 'name: def.name', reason: 'identity-bearing NPC entity field (save-compat; deferred)' },
+    { file: 'js/npcs.js', sub: '(def && def.name)', reason: 'identity-bearing NPC display fallback (save-compat; deferred)' },
+    { file: 'js/npcs.js', sub: 'name: def.name || type', reason: 'NpcMovedIn event identity payload (deferred)' },
+    { file: 'js/ui.js', sub: "b.def && b.def.name", reason: 'legacy-name reference passed into the catalog resolver' },
+  ];
+  const NAME_PATTERNS = [/\.def\.name\b/, /\bdef\.name\b/, /DEFS\[[^\]]+\]\.name\b/i];
+  const NAME_WRITE = /def\.name\s*=(?!=|>)/;
+  const jsRoot = path.join(__dirname, '..', 'js');
+  const jsFiles = [];
+  (function walk(dir) {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (e.name !== 'locales') walk(p); }
+      else if (e.name.endsWith('.js')) jsFiles.push(p);
+    }
+  })(jsRoot);
+  let inBlock = false;
+  for (const f of jsFiles.sort()) {
+    const rel = path.relative(path.join(__dirname, '..'), f).split(path.sep).join('/');
+    const src = fs.readFileSync(f, 'utf8').split('\n');
+    inBlock = false;
+    src.forEach((raw, i) => {
+      let line = raw;
+      if (inBlock) {
+        const end = line.indexOf('*/');
+        if (end < 0) return;
+        line = line.slice(end + 2);
+        inBlock = false;
+      }
+      for (;;) {
+        const s = line.indexOf('/*');
+        const l = line.indexOf('//');
+        if (s >= 0 && (l < 0 || s < l)) {
+          const end = line.indexOf('*/', s + 2);
+          if (end < 0) { line = line.slice(0, s); inBlock = true; break; }
+          line = line.slice(0, s) + line.slice(end + 2);
+        } else if (l >= 0) {
+          line = line.slice(0, l);
+          break;
+        } else break;
+      }
+      if (!NAME_PATTERNS.some((re) => re.test(line))) return;
+      if (NAME_WRITE.test(line)) return; // `def.name =` writes are table fills, not reads
+      const allowed = NAME_ALLOW.some((a) => a.file === rel && line.indexOf(a.sub) >= 0);
+      if (!allowed) fail('raw content-name read at ' + rel + ':' + (i + 1) + ': ' + line.trim().slice(0, 120));
+    });
+  }
+  ok('presentation-name source scan clean (frozen tables + resolver + documented identity uses only)');
 
   if (failed > 0) {
     console.error("check-i18n FAILED: " + failed + " error(s)");

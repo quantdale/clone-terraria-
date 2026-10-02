@@ -166,8 +166,7 @@
     if (TC.Localization && typeof TC.Localization.contentName === 'function') {
       try { return TC.Localization.contentName('item', id); } catch (e) {}
     }
-    const d = iDef(id);
-    return (d && d.name) || String(id);
+    return String(id);
   }
   function pBurst(x, y, n, colors, spd) {
     if (TC.Particles && typeof TC.Particles.burst === 'function') {
@@ -458,8 +457,9 @@
     const e = pickWeighted(table);
     const n = randInt(e.min, e.max);
     give(player, e.id, n);
-    const d = iDef(e.id);
-    fText(S.bobber.x, S.bobber.y - 8, '+' + n + ' ' + ((d && d.name) || e.id), '#ffffff');
+    fText(S.bobber.x, S.bobber.y - 8,
+      fmsg('feedback.fishing.caught_fish', { n: n, name: iName(e.id) }, '+{n} {name}'),
+      '#ffffff');
     if (d && d.kind === 'material') {          // track fish catches + quest flag
       S.catches[e.id] = (S.catches[e.id] || 0) + n;
       const q = S.quest;

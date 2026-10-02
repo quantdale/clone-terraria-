@@ -1814,7 +1814,7 @@
     if (!list) return null;
     for (let i = 0; i < list.length; i++) {
       const e = list[i];
-      if (e && e.def && e.def.boss && e.def.name &&
+      if (e && e.def && e.def.boss &&
           typeof e.hp === 'number' && typeof e.maxHp === 'number') return e;
     }
     return null;
