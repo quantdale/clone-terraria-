@@ -44,8 +44,22 @@
   }
 
   // In-memory mirror of the persisted envelope; kept in sync by every mutator.
-  let installed = []; // [{ id, digest, json }]
+  let installed = []; // [{ id, digest, json, bytes }]
   let lastLoadErrors = [];
+
+  // Single shared UTF-8 measure (the pack authority owns the canonical
+  // helper; packstore delegates so both modules measure identically).
+  function utf8Bytes(s) {
+    if (TC.Packs && typeof TC.Packs.utf8Bytes === 'function') {
+      try { return TC.Packs.utf8Bytes(s) | 0; } catch (e) {}
+    }
+    if (typeof TextEncoder === 'function') return new TextEncoder().encode(s).length;
+    return unescape(encodeURIComponent(s)).length;
+  }
+  function bytesOf(m) {
+    if (m && typeof m.bytes === 'number' && isFinite(m.bytes)) return m.bytes | 0;
+    return (m && typeof m.json === 'string') ? utf8Bytes(m.json) : 0;
+  }
 
   function readEnvelope() {
     const s = storage();
@@ -91,7 +105,7 @@
   function totalBytes(list) {
     const value = Array.isArray(list) ? list : installed;
     let n = 0;
-    for (const m of value) n += (m.json ? m.json.length : 0);
+    for (const m of value) n += bytesOf(m);
     return n;
   }
 
@@ -109,8 +123,12 @@
     }
     for (const m of env.manifests.slice(0, MAX_INSTALLED)) {
       if (!m || typeof m.json !== 'string') continue;
-      if (m.json.length > MAX_MANIFEST_BYTES || totalBytes() + m.json.length > MAX_TOTAL_BYTES) {
-        lastLoadErrors.push((m.id || '?') + ': installed store quota exceeded');
+      // Consistently re-evaluated with the UTF-8 measure, even when the
+      // store was persisted under the previous string-length accounting.
+      const mBytes = utf8Bytes(m.json);
+      if (mBytes > MAX_MANIFEST_BYTES || totalBytes() + mBytes > MAX_TOTAL_BYTES) {
+        lastLoadErrors.push((m.id || '?') + ': installed store quota exceeded (' +
+          mBytes + ' of ' + MAX_TOTAL_BYTES + ' bytes)');
         continue;
       }
       try {
@@ -121,7 +139,7 @@
           ? TC.Packs.provideJSON(m.json)
           : null;
         if (!rec) throw new Error('pack authority unavailable');
-        installed.push({ id: rec.id, digest: rec.rawDigest, json: m.json });
+        installed.push({ id: rec.id, digest: rec.rawDigest, json: m.json, bytes: mBytes });
       } catch (e) {
         lastLoadErrors.push((m && m.id ? m.id : '?') + ': ' + (e && e.message || e));
       }
@@ -141,7 +159,10 @@
   function install(text, opts) {
     opts = opts || {};
     if (typeof text !== 'string' || !text.length) return { ok: false, error: 'empty' };
-    if (text.length > MAX_MANIFEST_BYTES) return { ok: false, error: 'too-large' };
+    const bytes = utf8Bytes(text);
+    if (bytes > MAX_MANIFEST_BYTES) {
+      return { ok: false, error: 'too-large', measured: bytes, limit: MAX_MANIFEST_BYTES };
+    }
     if (!TC.Packs || typeof TC.Packs.validateInstallJSON !== 'function' ||
         typeof TC.Packs.provideJSON !== 'function') {
       return { ok: false, error: 'no-authority' };
@@ -172,9 +193,12 @@
       if (provided.rawDigest !== digest) {
         return { ok: false, error: 'invalid', detail: 'pack id already provided with different content' };
       }
-      const candidate = installed.concat({ id, digest, json: text });
+      const candidate = installed.concat({ id, digest, json: text, bytes });
       if (installed.length >= MAX_INSTALLED) return { ok: false, error: 'max-installed' };
-      if (totalBytes(candidate) > MAX_TOTAL_BYTES) return { ok: false, error: 'quota' };
+      const total = totalBytes(candidate);
+      if (total > MAX_TOTAL_BYTES) {
+        return { ok: false, error: 'quota', measured: total, limit: MAX_TOTAL_BYTES };
+      }
       if (!persist(candidate)) return { ok: false, error: 'storage' };
       installed = candidate;
       return { ok: true, id, digest, status: 'installed' };
@@ -185,12 +209,15 @@
     if (existing && !opts.replace) return { ok: false, error: 'conflict' };
 
     const candidate = existing
-      ? installed.map((m) => m.id === id ? { id, digest, json: text } : m)
-      : installed.concat({ id, digest, json: text });
+      ? installed.map((m) => m.id === id ? { id, digest, json: text, bytes } : m)
+      : installed.concat({ id, digest, json: text, bytes });
     if (!existing && installed.length >= MAX_INSTALLED) {
       return { ok: false, error: 'max-installed' };
     }
-    if (totalBytes(candidate) > MAX_TOTAL_BYTES) return { ok: false, error: 'quota' };
+    const total = totalBytes(candidate);
+    if (total > MAX_TOTAL_BYTES) {
+      return { ok: false, error: 'quota', measured: total, limit: MAX_TOTAL_BYTES };
+    }
 
     // Existing provided content is intentionally left untouched: replacing a
     // pack is a next-boot operation because TC.Packs is session-permanent.

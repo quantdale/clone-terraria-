@@ -54,14 +54,14 @@ localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
 | Presentation performance (W27) | WS0..WS7 (WS5 + WS1.4 deferred w/ analysis) | DONE (render-path measured hardware-independently via `tools/bench-render.js` + real-browser `tests/browser/perf.spec.js` gate with verified negative control; HUD sprites + composed heart-row/hotbar strips; sky Path2D/sprite bakes; unchanged-lighting skip; windowed chunk rebuilds + viewport cache cap + eviction off draw(); settle-mark coalescing. Idle frame 1,229 → 204 ops, flat in max HP; night 842 → 17; startup 494 rebuilds + 336 evictions → 5 + 9; liquid marks 24,968 → 352 fresh-120 with identical digests. Zero gameplay/determinism/save/protocol change; final repository gate 667/667 node + 33/33 browser — see ARCHITECTURE.md §30, docs/PERFORMANCE.md, docs/W27-PERFORMANCE-PLAN.md) |
 | Multiplayer | NET-001..004 | DONE through W22 foundation + W23 productionization (see rows below; NET-004 productionization closed by W23) |
 | Extensibility/mods | MOD-001..004 | MOD-001/002/003 DONE (W25: canonical TC.Packs authority — fail-closed manifest/data-pack pipeline, declarative tile/item/enemy/recipe families, atomic activation with session-permanence, pack-aware save classification + continue gating, title-screen packs panel, protocol-v4 handshake identity, fixture pack + journey P; see ARCHITECTURE.md §29). MOD-004 remains RESEARCH ONLY (docs/ADR-MOD-004-sandboxed-mods.md — recommendation DEFER); no executable-mod runtime exists by design |
-| Pack ecosystem prod. (W26) | walls + lootTables + spawnRules + PackStore + dedicated host | IMPLEMENTED / NOT SPEC-COMPLETE (runtime families, store/UI, spawn grammar, host CLI, resource-file honesty and 2026-09-24 hardening landed; exact UTF-8 quotas, dedicated-host-plus-packs E2E, W26 fuzz and audit ledger remain) |
+| Pack ecosystem prod. (W26) | walls + lootTables + spawnRules + PackStore + dedicated host | IMPLEMENTED / NOT SPEC-COMPLETE (runtime families, store/UI, spawn grammar, host CLI, resource-file honesty and 2026-09-24 hardening landed; dedicated-host-plus-packs E2E, W26 fuzz and audit ledger remain) |
 
 ### Newly discovered follow-ups (updated W26)
 
 - **W26 status:** implemented and hardened, but **not spec-complete** — declarative
   walls/standalone loot tables, deterministic spawn-rule grammar, durable
   TC.PackStore, title UX, dedicated host selection, and 2026-09-24 security/runtime
-  hardening landed. Exact UTF-8 quotas, dedicated-host-plus-packs E2E,
+  hardening landed. dedicated-host-plus-packs E2E,
   W26-family fuzz, and the exhaustive audit ledger remain mandatory.
 
 - **W25 status:** safe extensibility foundation LANDED — declarative data

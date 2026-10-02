@@ -81,7 +81,8 @@ See `tools/bench-packs.js` above; `tools/bench-runtime.js` unchanged (W21/W25 op
 ## Known limitations
 
 - Pack families still exclude NPCs/shops, projectiles, buffs, biomes (intentionally deferred; same atomic model would apply).
-- PackStore total bytes counted as string length (UTF-16) not exact UTF-8 bytes; cap is conservative for ASCII JSON.
+- PackStore total bytes are measured in exact UTF-8 bytes (corrected post-W26;
+  previously string length, which undercounted non-ASCII manifests).
 - Spawn rules do not yet support Blood Moon-specific tables (night Blood Moon still returns `BLOOD_MOON_TABLE` only).
 - Browser import uses hidden file input + FileReader; very large files are size-checked before read where possible, but quota is also enforced after read.
 - Pseudo-locale and narrow-viewport for new pack panel not yet exercised in automated browser run (requires display).
@@ -148,8 +149,8 @@ rejection of an unmaterialized `resources.files` manifest through the same file
 picker. Stored unsupported manifests are skipped with bounded localized
 diagnostics; dedicated-host and direct activation paths fail before startup.
 Independent standards and OpenSpec reviews report no Critical/High/Medium
-issues. Known remaining limitations are intentionally not overstated: exact
-UTF-8 store accounting, large pack-panel UX, dedicated-host-plus-packs
+issues. Known remaining limitations are intentionally not overstated: large
+pack-panel UX, dedicated-host-plus-packs
 end-to-end automation, W26-family fuzz coverage, and a durable exhaustive
 file-coverage ledger remain follow-ups.
 

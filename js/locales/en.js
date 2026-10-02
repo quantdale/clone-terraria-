@@ -69,6 +69,7 @@
         remove_active: 'Cannot remove active pack',
         export_failed: 'Export failed',
         quota_error: 'Storage limit reached',
+        quota_bytes: 'Storage limit reached ({measured} of {limit} bytes)',
         conflict_error: 'Already installed with different content',
         resource_files_unsupported: 'External resource files are not supported by this runtime yet',
         invalid_error: 'Invalid pack manifest',

@@ -155,6 +155,28 @@ function main() {
     void fpBefore; // fingerprint equality checked via validate + counts above
   }
 
+  // Non-ASCII size case (F-06): a CJK-heavy payload that is under the cap
+  // in UTF-16 code units but over it in UTF-8 bytes must be rejected by the
+  // size gate — acceptance or a non-PackError throw is an escape.
+  try {
+    const heavy = '{"pad":"' + '文'.repeat(90000) + '"}';
+    const utf16 = heavy.length, utf8 = TC.Packs.utf8Bytes(heavy);
+    if (!(utf16 < 256 * 1024 && utf8 > 256 * 1024)) {
+      escapes.push({ i: -1, phase: 'size-case-shape', err: 'case no longer straddles the cap' });
+    } else {
+      try {
+        TC.Packs.provideJSON(heavy);
+        escapes.push({ i: -1, phase: 'size-case', err: 'oversized non-ASCII payload was provided' });
+      } catch (e) {
+        if (!e || e.name !== 'PackError') {
+          escapes.push({ i: -1, phase: 'size-case', err: String(e && e.stack || e) });
+        }
+      }
+    }
+  } catch (e) {
+    escapes.push({ i: -1, phase: 'size-case-harness', err: String(e && e.stack || e) });
+  }
+
   console.log('fuzz-packs: rounds=' + rounds + ' seed=' + seed +
     ' accepted=' + accepted + ' rejected=' + rejected +
     ' escapes=' + escapes.length);

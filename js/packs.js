@@ -147,6 +147,20 @@
     throw PackError(code, msg, details);
   }
 
+  // Single UTF-8 byte measure shared by the pack authority and the durable
+  // store (packstore.js delegates here). The named caps are bytes, so the
+  // enforced measure must be bytes — never UTF-16 code units.
+  let textEncoder = null;
+  function utf8Bytes(s) {
+    if (typeof TextEncoder === 'function') {
+      if (!textEncoder) textEncoder = new TextEncoder();
+      return textEncoder.encode(s).length;
+    }
+    // runtimes without TextEncoder prepared by the UTF-16 assumption; keep it
+    // honest-free by falling back to exact byte-math via UTF-8 encoding.
+    return unescape(encodeURIComponent(s)).length;
+  }
+
   function isObj(v) {
     return !!v && typeof v === "object" && !Array.isArray(v);
   }
@@ -780,8 +794,10 @@
       if (typeof text !== "string" || !text.length) {
         fail("manifest", "pack JSON must be a non-empty string");
       }
-      if (text.length > MAX_MANIFEST_BYTES) {
-        fail("manifest", "pack JSON exceeds " + MAX_MANIFEST_BYTES + " bytes");
+      const bytes = utf8Bytes(text);
+      if (bytes > MAX_MANIFEST_BYTES) {
+        fail("manifest", "pack JSON is " + bytes + " UTF-8 bytes, over the " +
+          MAX_MANIFEST_BYTES + "-byte limit");
       }
       let data;
       try {
@@ -816,8 +832,10 @@
       if (typeof text !== "string" || !text.length) {
         fail("manifest", "pack JSON must be a non-empty string");
       }
-      if (text.length > MAX_MANIFEST_BYTES) {
-        fail("manifest", "pack JSON exceeds " + MAX_MANIFEST_BYTES + " bytes");
+      const bytes = utf8Bytes(text);
+      if (bytes > MAX_MANIFEST_BYTES) {
+        fail("manifest", "pack JSON is " + bytes + " UTF-8 bytes, over the " +
+          MAX_MANIFEST_BYTES + "-byte limit");
       }
       let data;
       try {
@@ -2754,6 +2772,7 @@
     active: active,
     isActive: isActive,
     digest: digest,
+    utf8Bytes: utf8Bytes,
     gameplayFingerprintMatches: gameplayFingerprintMatches,
     contentDigest: contentDigest,
     saveMetadata: saveMetadata,

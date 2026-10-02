@@ -212,6 +212,8 @@ function loadGame(opts) {
     Symbol,
     Promise,
     Error,
+    TextEncoder,
+    TextDecoder,
     isFinite,
     parseInt,
     parseFloat,

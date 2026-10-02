@@ -543,6 +543,10 @@
     if (result.error === 'no-authority') return t('ui.packs.unavailable');
     if (result.error === 'storage') return t('ui.packs.storage_error');
     if (result.error === 'conflict') return t('ui.packs.conflict_error');
+    if ((result.error === 'quota' || result.error === 'too-large') &&
+        typeof result.measured === 'number' && typeof result.limit === 'number') {
+      return t('ui.packs.quota_bytes', { measured: result.measured, limit: result.limit });
+    }
     if (result.error === 'quota' || result.error === 'max-installed' || result.error === 'too-large') {
       return t('ui.packs.quota_error');
     }

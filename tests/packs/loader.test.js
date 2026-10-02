@@ -48,7 +48,7 @@ test('loader: malformed JSON and oversize input reject without state change', ()
   const before = TC.Packs.stats();
   assert.throws(() => TC.Packs.provideJSON('{not json'), /malformed pack JSON/i);
   assert.throws(() => TC.Packs.provideJSON(''), /non-empty/);
-  assert.throws(() => TC.Packs.provideJSON('x'.repeat(300 * 1024)), /exceeds/);
+  assert.throws(() => TC.Packs.provideJSON('x'.repeat(300 * 1024)), /UTF-8 bytes, over the 262144-byte limit/);
   assert.throws(() => TC.Packs.provideJSON('null'), /manifest/);
   const after = TC.Packs.stats();
   assert.strictEqual(after.providedCount, before.providedCount);

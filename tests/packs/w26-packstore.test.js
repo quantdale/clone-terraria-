@@ -294,3 +294,176 @@ test('packstore: stats reflect count and bytes', () => {
   assert.ok(after.totalBytes > 0);
   assert.strictEqual(after.maxInstalled, 64);
 });
+
+// ---- F-06: exact UTF-8 byte accounting ----
+
+const MANIFEST_CAP = 256 * 1024;
+const STORE_CAP = 4 * 1024 * 1024;
+
+// Byte-exact filler text: the size gate precedes JSON parsing, so the
+// boundary behavior is identical for any payload. ASCII 'a' is 1 byte;
+// CJK '文' is 3 bytes.
+function sizedText(TC, targetBytes, padChar) {
+  const unit = padChar === 'a' ? 1 : 3;
+  const n = Math.floor(targetBytes / unit);
+  const text = padChar.repeat(n);
+  assert.strictEqual(TC.Packs.utf8Bytes(text), n * unit);
+  assert.ok(n * unit <= targetBytes && targetBytes - n * unit < unit);
+  return text;
+}
+
+test('packs: ASCII manifest at the byte cap passes the size gate, one byte over is rejected', () => {
+  const g = fresh();
+  const TC = g.TC;
+  const atCap = '{"pad":"' + sizedText(TC, MANIFEST_CAP - 10, 'a') + '"}';
+  assert.strictEqual(TC.Packs.utf8Bytes(atCap), MANIFEST_CAP);
+  // size gate passes; schema validation rejects the junk content instead
+  const r = TC.PackStore.install(atCap);
+  assert.strictEqual(r.ok, false);
+  assert.notStrictEqual(r.error, 'too-large', 'size gate must not reject an at-cap payload');
+  const over = '{"pad":"' + sizedText(TC, MANIFEST_CAP - 9, 'a') + '"}';
+  assert.strictEqual(TC.Packs.utf8Bytes(over), MANIFEST_CAP + 1);
+  const r2 = TC.PackStore.install(over);
+  assert.strictEqual(r2.ok, false);
+  assert.strictEqual(r2.error, 'too-large');
+  assert.strictEqual(r2.measured, MANIFEST_CAP + 1);
+  assert.strictEqual(r2.limit, MANIFEST_CAP);
+  assert.strictEqual(TC.PackStore.stats().count, 0, 'rejected install stores nothing');
+});
+
+test('packs: non-ASCII manifest within UTF-16 length but over UTF-8 bytes is rejected', () => {
+  const g = fresh();
+  const TC = g.TC;
+  const unit = 3; // CJK
+  const count = Math.ceil((MANIFEST_CAP + 3) / unit);
+  const text = '文'.repeat(count);
+  const measuredBytes = TC.Packs.utf8Bytes(text);
+  assert.ok(text.length < MANIFEST_CAP, 'UTF-16 length is under the old measure');
+  assert.ok(measuredBytes > MANIFEST_CAP, 'UTF-8 length is over');
+  const r = TC.PackStore.install(text);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.error, 'too-large');
+  assert.strictEqual(r.measured, measuredBytes);
+  assert.strictEqual(r.limit, MANIFEST_CAP);
+  assert.strictEqual(TC.PackStore.has('cjkpack'), false);
+  assert.strictEqual(TC.PackStore.stats().count, 0);
+});
+
+test('packs: size error from the authority states measured and limit', () => {
+  const g = fresh();
+  const TC = g.TC;
+  const over = '文'.repeat(Math.ceil((MANIFEST_CAP + 6) / 3));
+  const measuredOver = TC.Packs.utf8Bytes(over);
+  try {
+    TC.Packs.provideJSON(over);
+    assert.fail('provideJSON must reject an oversized payload');
+  } catch (e) {
+    assert.strictEqual(e.code, 'manifest');
+    assert.ok(e.message.indexOf(String(measuredOver)) >= 0, 'message states the measured size');
+    assert.ok(e.message.indexOf(String(MANIFEST_CAP)) >= 0, 'message states the limit');
+  }
+});
+
+test('packs: equal-length manifests measure differently by their UTF-8 cost', () => {
+  const g = fresh();
+  const TC = g.TC;
+  const ascii = 'x'.repeat(100);
+  const cjk = '文'.repeat(100);
+  assert.strictEqual(ascii.length, cjk.length);
+  const a = TC.Packs.utf8Bytes(ascii);
+  const c = TC.Packs.utf8Bytes(cjk);
+  assert.strictEqual(a, 100);
+  assert.strictEqual(c, 300);
+  assert.strictEqual(c - a, 200, 'exactly the true UTF-8 difference');
+});
+
+test('packstore: whole-store quota rejects without changing the store', () => {
+  const g = fresh();
+  const TC = g.TC;
+  // Items+tiles+walls+enemies filler (~72 KiB each) validates cheaply, so
+  // filling the real 4 MiB cap stays within a minute. Fixed-width ids keep
+  // every manifest byte-identical in size.
+  function filler(id) {
+    const m = JSON.parse(manifest(id, { name: 'Filler Pack' }));
+    m.content.items = [];
+    for (let i = 0; i < 256; i++) {
+      m.content.items.push({ key: 'itm' + i, name: 'N'.repeat(64), kind: 'material' });
+    }
+    m.content.tiles = [];
+    for (let i = 0; i < 128; i++) {
+      m.content.tiles.push({ key: 'blk' + i, name: 'T'.repeat(64), solid: true,
+        hardness: 1, tool: 'pick', pattern: 'speckle', colors: ['#b3623a'] });
+    }
+    m.content.walls = [];
+    for (let i = 0; i < 64; i++) {
+      m.content.walls.push({ key: 'wal' + i, name: 'W'.repeat(64), color: '#5f2f18', hardness: 1 });
+    }
+    m.content.enemies = [];
+    for (let i = 0; i < 128; i++) {
+      m.content.enemies.push({ key: 'foe' + i, name: 'E'.repeat(64), ai: 'walker', hp: 10 });
+    }
+    return JSON.stringify(m);
+  }
+  const oneBytes = TC.Packs.utf8Bytes(filler('pk000'));
+  assert.ok(oneBytes < MANIFEST_CAP, 'filler fits the per-manifest cap');
+  let i = 0, last = null;
+  for (; i < 64; i++) {
+    const id = 'pk' + String(i).padStart(3, '0');
+    last = TC.PackStore.install(filler(id));
+    if (!last.ok) break;
+  }
+  assert.ok(!last.ok, 'the store must eventually refuse a manifest on quota');
+  assert.strictEqual(last.error, 'quota');
+  assert.strictEqual(typeof last.measured, 'number');
+  assert.strictEqual(last.limit, STORE_CAP);
+  assert.ok(last.measured > STORE_CAP, 'reported total exceeds the cap');
+  const count = TC.PackStore.stats().count;
+  assert.ok(count >= 2, 'several manifests installed first, got ' + count);
+  const expectBytes = count * oneBytes;
+  assert.strictEqual(TC.PackStore.stats().totalBytes, expectBytes,
+    'cached totals track exact UTF-8 bytes');
+  const before = TC.PackStore.exportJSON();
+  // A further full-size filler still exceeds the cap (a small manifest
+  // would legitimately fit the remaining headroom, so it proves nothing).
+  const extra = TC.PackStore.install(filler('pk900'));
+  assert.strictEqual(extra.ok, false);
+  assert.strictEqual(extra.error, 'quota');
+  assert.ok(extra.measured > STORE_CAP);
+  assert.strictEqual(TC.PackStore.exportJSON(), before, 'store unchanged');
+  assert.strictEqual(TC.PackStore.stats().count, count);
+});
+
+test('packstore: whole-store quota accounts exact UTF-8 bytes, not code units', () => {
+  const g = fresh();
+  const TC = g.TC;
+  const r1 = TC.PackStore.install(manifest('u1', { name: 'Café Münchén — 日本語テスト' }));
+  assert.strictEqual(r1.ok, true);
+  const texts = [manifest('u1', { name: 'Café Münchén — 日本語テスト' })];
+  const expected = texts.reduce((n, t) => n + TC.Packs.utf8Bytes(t), 0);
+  assert.strictEqual(TC.PackStore.stats().totalBytes, expected,
+    'cached totals track exact UTF-8, not UTF-16 length');
+});
+
+test('packstore: persisted store re-evaluates with the UTF-8 measure on load', () => {
+  const storage = makeStorage();
+  const first = fresh(storage).TC;
+  // Old-shape record (no cached bytes) that fits the old string-length
+  // measure but exceeds the cap in UTF-8: CJK filler text.
+  const overText = '文'.repeat(Math.ceil((MANIFEST_CAP + 9) / 3));
+  assert.ok(overText.length < MANIFEST_CAP, 'under the old measure');
+  const goodText = manifest('goodpack');
+  storage.setItem('tc_packs_installed_v1', JSON.stringify({
+    v: 1,
+    manifests: [
+      { id: 'goodpack', digest: 'stale', json: goodText },
+      { id: 'oldcjk', digest: 'stale', json: overText },
+    ],
+  }));
+  const second = fresh(storage).TC;
+  const loaded = second.PackStore.load();
+  assert.strictEqual(loaded.provided, 1, 'valid entry provided, oversized entry degraded');
+  assert.ok(loaded.errors.length > 0, 'bounded diagnostic recorded');
+  assert.ok(loaded.errors.some((e) => /quota/i.test(e)), 'quota diagnostic names the limit');
+  assert.ok(second.PackStore.has('goodpack'));
+  assert.ok(!second.PackStore.has('oldcjk'));
+});
