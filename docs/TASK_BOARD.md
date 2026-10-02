@@ -29,9 +29,6 @@ campaign. Consult docs/ARCHITECTURE.md §19 (capability matrix), §29 (W26
 pack families + PackStore + spawn grammar), §24 (W20 localization contracts),
 §23 (W19 contracts), §22 (W18 runtime contracts) and §21 (W17 contracts) for
 per-module ownership detail.
-checkpoint. Consult docs/ARCHITECTURE.md §19 (capability matrix), §24 (W20
-localization contracts), §23 (W19 contracts), §22 (W18 runtime contracts) and
-§21 (W17 contracts) for per-module ownership detail.
 
 | Area | Tasks | Status |
 |---|---|---|

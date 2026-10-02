@@ -22,7 +22,6 @@ npm test            # node:test suites (unit/core/save/combat/player/npc/world/n
 npm run test:browser  # Playwright journeys (headless Chromium)
 npm run build       # reproducible dist/ assembly
 npm run validate    # syntax + tests + build + build-verify + browser suite
-```
 npm run test:net      # multiplayer protocol/session/replication suites
 npm run test:packs    # pack loader/activation/save/multiplayer suites
 ```

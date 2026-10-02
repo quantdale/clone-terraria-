@@ -1,15 +1,23 @@
 /* tools/release-build.js - reproducible production build.
    The game ships as plain static files (no bundler by design), so a release
-   is a verified assembly of exactly what index.html references:
+   is a verified assembly of what index.html references MINUS the test-only
+   exclusion set below:
 
      dist/
-       index.html        copied verbatim (relative paths resolve as-is)
+       index.html        copied from the repo root, then rewritten to drop
+                         excluded test-only script tags (no dangling refs)
        css/… js/…        copied verbatim
        build.json        {version, commit} provenance stamp
+
+   The repository index.html keeps loading packs/testpack.js (the W26 fixture
+   pack): the headless test loader derives its script order from that file, so
+   the tag must stay. The production artifact excludes the fixture instead and
+   rewrites the shipped HTML to match, asserted below.
 
    Gates enforced here (build fails loudly):
      - every <script src> / <link href> / <img src> in index.html resolves
      - every shipped .js passes `node --check`
+     - test-only exclusions are absent from dist/ AND unreferenced by dist HTML
      - output is byte-identical across rebuilds of the same commit
        (no wall-clock stamps: provenance is version + HEAD sha only). */
 
@@ -53,6 +61,10 @@ function copyFile(rel) {
   fs.copyFileSync(src, dst);
 }
 
+// Test-only assets: present in the repo (and in index.html, which the
+// headless loader reads) but never shipped to production.
+const BUILD_EXCLUDE = ['packs/testpack.js'];
+
 function main() {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const htmlPath = path.join(ROOT, 'index.html');
@@ -71,7 +83,17 @@ function main() {
   fs.rmSync(DIST, { recursive: true, force: true });
   fs.mkdirSync(DIST, { recursive: true });
   copyFile('index.html');
-  for (const r of refs) copyFile(r);
+  for (const r of refs) {
+    if (BUILD_EXCLUDE.indexOf(r) >= 0) continue; // test-only asset: never shipped
+    copyFile(r);
+  }
+  // the shipped HTML must not reference what was excluded (no dangling refs)
+  let distHtml = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8');
+  for (const x of BUILD_EXCLUDE) {
+    const tag = new RegExp('<script[^>]*src="' + x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '"[^>]*>\\s*</script>\\s*', 'g');
+    distHtml = distHtml.replace(tag, '');
+  }
+  fs.writeFileSync(path.join(DIST, 'index.html'), distHtml);
 
   // favicon may be referenced implicitly by browsers even without a tag hit
   if (fs.existsSync(path.join(ROOT, 'favicon.ico'))) copyFile('favicon.ico');
@@ -87,9 +109,38 @@ function main() {
     }
   };
   if (fs.existsSync(jsDir)) walk(jsDir);
+  // packs/ ships too (same walk for any shipped .js outside js/)
+  for (const r of refs) {
+    if (!r.endsWith('.js') || BUILD_EXCLUDE.indexOf(r) >= 0) continue;
+    const p = path.join(DIST, r);
+    if (shipped.indexOf(p) < 0 && fs.existsSync(p)) shipped.push(p);
+  }
   for (const f of shipped) {
     // node --check against the ORIGINAL file path semantics: run on the copy
     execSync(`node --check "${f}"`, { stdio: 'pipe' });
+  }
+
+  // 3b) test-fixture exclusion assertion: absent from dist/, unreferenced by
+  // the shipped HTML, still present (and still referenced) in the repo.
+  const distHtmlFinal = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8');
+  const repoHtml = fs.readFileSync(htmlPath, 'utf8');
+  for (const x of BUILD_EXCLUDE) {
+    if (fs.existsSync(path.join(DIST, x))) {
+      console.error('BUILD FAILED - excluded test asset shipped: ' + x);
+      process.exit(1);
+    }
+    if (distHtmlFinal.indexOf(x) >= 0) {
+      console.error('BUILD FAILED - shipped HTML still references excluded: ' + x);
+      process.exit(1);
+    }
+    if (!fs.existsSync(path.join(ROOT, x))) {
+      console.error('BUILD FAILED - excluded test asset missing from repo: ' + x);
+      process.exit(1);
+    }
+    if (repoHtml.indexOf(x) < 0) {
+      console.error('BUILD FAILED - repo index.html must keep loading the test fixture: ' + x);
+      process.exit(1);
+    }
   }
 
   // 4) provenance stamp (no wall clock: same commit -> identical bytes)

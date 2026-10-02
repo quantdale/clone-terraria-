@@ -1,3 +1,9 @@
+> **HISTORICAL SNAPSHOT — SUPERSEDED (2026-08-29).** This document set is a
+> point-in-time planning snapshot. Its ratings, TODOs, and roadmap items do
+> NOT describe the current repository: the implementation waves it planned
+> have since landed. Current truth lives in `AGENTS.md`,
+> `docs/ARCHITECTURE.md`, and `docs/TASK_BOARD.md`. Read these files as audit
+> history only.
 # Root README Update Proposal
 
 This file proposes a future restructuring of the repository root `README.md`. It intentionally does **not** overwrite the current README on this documentation branch.

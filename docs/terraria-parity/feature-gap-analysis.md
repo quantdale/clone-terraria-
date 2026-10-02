@@ -1,3 +1,23 @@
+> **HISTORICAL SNAPSHOT — SUPERSEDED (2026-08-29).** This document set is a
+> point-in-time planning snapshot. Its ratings, TODOs, and roadmap items do
+> NOT describe the current repository: the implementation waves it planned
+> have since landed. Current truth lives in `AGENTS.md`,
+> `docs/ARCHITECTURE.md`, and `docs/TASK_BOARD.md`. Read these files as audit
+> history only.
+
+## What changed since this snapshot
+
+The four headline ratings below are no longer true:
+
+- **Stable content IDs** (was Partial): `TC.Registry` now provides namespaced
+  stable ids with a fingerprint frozen by the `check:i18n` CI gate.
+- **Save/versioning** (was Functional): `TC.SaveCore` v2 envelope with
+  migrations, atomic writes, backups, export/import, and per-system providers.
+- **Automated testing** (was Partial): 700+ node:test cases plus 30+
+  Playwright journeys behind `npm run validate`.
+- **Module integration** (was Partial): `TC.Systems` scheduler,
+  `TC.RenderLayers`, and `TC.Commands` own update order, drawing, and
+  mutation respectively.
 # Feature Gap Analysis
 
 This document compares the current repository with the **kind of systemic experience** associated with modern Terraria. It is not an instruction to copy Terraria content or assets one-for-one.

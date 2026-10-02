@@ -4,8 +4,20 @@
 
 IMPLEMENTED + HARDENED — **NOT SPEC-COMPLETE.** The 2026-09-24 pass closed
 optional-dependency, boot-order, wall, loot, spawn, identity, host-argument,
-resource-file honesty, and browser install-flow gaps. Mandatory audit-ledger
-and dedicated-host-plus-packs E2E follow-ups remain in the handoff.
+resource-file honesty, and browser install-flow gaps. Follow-up disposition
+(2026-10-03, `repository-truth-reconciliation`):
+
+- exact UTF-8 store accounting → **done** (`harden-pack-utf8-byte-accounting`);
+- mandatory audit-ledger → **superseded** by the MASTER_PLAN audit campaign;
+- large pack-panel UX → **partially addressed** (packs scroll window added with
+  menu keyboard navigation); full UX polish still open;
+- dedicated-host-plus-packs E2E → **still open**;
+- W26-family fuzz coverage → **partially addressed** (pack security fuzz +
+  non-ASCII size case in the gate); broader family coverage still open.
+
+This change stays active (not archived) until the remaining open items are
+dispositioned. The unchecked task boxes below are the historical execution
+order, not a live ledger — see the handoff and this status.
 
 ## Planned From
 
