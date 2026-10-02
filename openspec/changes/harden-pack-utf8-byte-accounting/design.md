@@ -85,10 +85,12 @@ function utf8Bytes(s) {
 }
 ```
 
-Rationale: `TextEncoder` is standard in every browser this game targets and
-exactly implements the UTF-8 encoding localStorage quota is denominated in. It
-removes the hand-counted character-class table that such helpers usually grow
-into, and keeps the two modules provably consistent.
+Rationale: `TextEncoder` is the standard UTF-8 measure for the documented
+caps. It is not evidence of how a browser denominates origin quota. Use it so
+the named byte caps and the enforced caps are the same unit. The headless
+sandbox in `tests/helpers/load-game.js` does not currently expose
+`TextEncoder`; adding it there is mandatory before the helper is called from
+tests.
 
 **Alternative considered — manual UTF-8 byte counting loop** (iterate code
 points; ASCII 1, <U+800 2, <U+10000 3, else 4). Rejected: it duplicates a
@@ -116,13 +118,13 @@ a store persisted under the previous accounting, so the load path stays
 consistent with the new measure — captured by the spec scenario "A persisted
 store is re-evaluated consistently".
 
-### D3: Make the rejection message state the measured size
+### D3: Report measured size and limit without changing error codes
 
-Change the `provideJSON`/`validateJSON` failure text from
-`"pack JSON exceeds " + MAX_MANIFEST_BYTES + " bytes"` to include the actual
-measured byte count. Keep the `error` codes (`'too-large'`, `'quota'`) exactly
-as they are — `js/ui.js` maps them to the existing localized keys
-(`ui.packs.quota_error`), so codes are a compatibility surface.
+`provideJSON` / `validateJSON` failures include the measured UTF-8 size and
+the limit. `PackStore.install` keeps the codes `too-large` and `quota`, and
+also returns `measured` and `limit` so the UI can interpolate them. Add or
+extend the localized templates with `{measured}` and `{limit}`. Do not invent
+new error codes; `js/ui.js` already maps the existing codes.
 
 **Alternative considered — richer codes (e.g. `too-large-bytes`).** Rejected:
 would break the UI mapping and the existing tests for no benefit.
@@ -136,9 +138,9 @@ Leave `256 KiB`, `4 MiB`, `64` unchanged. Update:
 
 ## Risks / Trade-offs
 
-- **[`TextEncoder` unavailable in the headless loader]** → The test loader
-  (`tests/helpers/load-game.js`) sandboxes a limited set of globals; if
-  `TextEncoder` is absent, add it to the sandbox. Verify before relying on it.
+- **[`TextEncoder` unavailable in the headless loader]** → Confirmed absent
+  from the sandbox global list. Add it before relying on the helper. Do not
+  hand-roll a surrogate-pair counter instead.
 - **[Previously-accepted oversized non-ASCII manifests now rejected]** → This
   is the fix. The rejection is graceful and already localized; the user can
   shorten the manifest. No stored data is silently dropped — `load` keeps its
@@ -152,7 +154,7 @@ Leave `256 KiB`, `4 MiB`, `64` unchanged. Update:
 
 ## Migration Plan
 
-1. Add the byte helper + sandbox `TextEncoder` in the test loader if needed.
+1. Add `TextEncoder` to the headless sandbox, then add the byte helper.
 2. Replace the five accounting sites and the message text (D1–D3).
 3. Add non-ASCII cap tests + a fuzz size case.
 4. Run `npm run check:i18n` (codes unchanged, but confirm), `npm test`,

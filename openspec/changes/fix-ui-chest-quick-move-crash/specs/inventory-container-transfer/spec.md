@@ -70,9 +70,10 @@ partial.
 ### Requirement: A missing session predicate SHALL never break the click path
 
 The container quick-move decision SHALL be computed by a single shared
-predicate, and a session where the network-client authority is absent or
-unavailable SHALL be treated as a local (non-mirror) session rather than
-raising an error.
+predicate. A session with no network-client authority SHALL be treated as
+local. A session whose client authority exists but cannot be evaluated SHALL
+NOT mutate the local inventory or chest. The predicate SHALL NOT use tick
+ownership alone, because tick ownership is true before intent routing is.
 
 #### Scenario: Local session without a network client performs quick-move
 
@@ -82,9 +83,17 @@ raising an error.
 - **THEN** the local quick-move SHALL execute
 - **AND** no error SHALL be raised.
 
+#### Scenario: An unevaluable client authority does not edit locally
+
+- **GIVEN** a network-client authority that exists but whose active-session
+  query throws
+- **WHEN** the player Shift-clicks a filled slot with a chest open
+- **THEN** the local inventory and chest SHALL NOT be mutated
+- **AND** the click handler SHALL NOT throw.
+
 #### Scenario: The decision is shared by both container directions
 
-- **GIVEN** a joined network client session with a chest panel open
+- **GIVEN** a joined network client whose session is syncing or playing
 - **WHEN** the player Shift-clicks either an inventory slot or a chest-grid slot
 - **THEN** both directions SHALL consult the same predicate
 - **AND** both directions SHALL submit the authoritative container transfer
@@ -92,10 +101,11 @@ raising an error.
 
 ### Requirement: Joined clients transfer through the authoritative container transaction
 
-When the local session is a joined network client whose world is a
-presentation mirror, a container quick-move SHALL submit the authoritative
-container transfer command for the acting player and SHALL NOT mutate the
-local inventory or chest mirror in place.
+When the local session has an active joined client (`syncing` or `playing`),
+a container quick-move SHALL submit the authoritative container transfer
+intent and SHALL NOT mutate the local inventory or chest mirror. Tick
+ownership during `connecting` SHALL NOT by itself select the local path.
+A null intent result SHALL NOT fall through to a local command.
 
 #### Scenario: Joined client shift-click submits an authoritative transfer
 

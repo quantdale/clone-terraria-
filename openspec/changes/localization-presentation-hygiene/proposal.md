@@ -47,9 +47,11 @@ as identity — exactly the pattern the rule exists to prevent.
   with a catalog-backed path (the module already has a correct
   `progress.boss_defeated` template; the fallback should be an honest
   no-localization path, not a half-translated one).
-- Replace `shooter.def.name`-keyed hostile-shot bookkeeping with a stable
-  identity (the shooter entity reference plus the projectile's stable type),
-  so clearing a boss's shots can never depend on a display string.
+- Replace `shooter.def.name`-keyed hostile-shot bookkeeping with the shooter
+  reference plus a stable type or registry id. Remove both display-name
+  comparisons in `clearHostileShotsOf`, including the `magic_bolt` cleanup
+  loop. Do not keep a name fallback. `SOURCE_STATUS` is keyed only by `lava`
+  and is not part of this migration.
 - Add a static check (as part of `add-repository-quality-gates`, or a small
   standalone script if that lands separately) that fails on `def.name` reads
   outside the sanctioned catalog-resolution helpers.

@@ -79,10 +79,18 @@ enforced rather than convention.
 
 #### Scenario: Presentation-only randomness does not fail the gate
 
-- **GIVEN** a module that uses ambient randomness solely for presentation
-  concerns such as particles, visual blink timers, or visual trails
+- **GIVEN** a call site that uses ambient randomness solely for presentation,
+  such as particles, visual blink timers, or visual trails
 - **WHEN** the static-analysis gate runs
-- **THEN** those usages SHALL NOT fail the gate.
+- **THEN** that call site SHALL NOT fail the gate.
+
+#### Scenario: A gameplay draw in a mixed file fails the gate
+
+- **GIVEN** a file that contains both an allowed presentation or seed-selection
+  call and another ambient draw that affects world state
+- **WHEN** the static-analysis gate runs
+- **THEN** the world-state draw SHALL fail the gate
+- **AND** the allowed call site SHALL NOT exempt the rest of the file.
 
 #### Scenario: Ambient randomness in a seed-selection entry point is allowed
 
@@ -124,10 +132,11 @@ replication, and teardown regressions are detected automatically.
 
 #### Scenario: A teardown leak is caught
 
-- **GIVEN** a change that leaks a player identity, region consumer, or
-  replication baseline across a session teardown
-- **WHEN** the soak harness runs
-- **THEN** the harness SHALL report the leak and the pipeline SHALL fail.
+- **GIVEN** a run that finishes with a registered player identity, a detached
+  reconnect record, or an open connection after session teardown
+- **WHEN** the soak gate runs
+- **THEN** the gate SHALL exit non-zero
+- **AND** a summary printed with a successful exit SHALL NOT count as a pass.
 
 ### Requirement: The gate SHALL be trustworthy and documented
 

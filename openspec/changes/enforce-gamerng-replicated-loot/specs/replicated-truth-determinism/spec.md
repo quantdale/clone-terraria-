@@ -61,7 +61,10 @@ independent realms replaying the same seed and trace.
 - **GIVEN** a covered draw that is not sourced from the seeded authority
 - **WHEN** the replay proof runs
 - **THEN** the proof SHALL fail
-- **AND** the failure SHALL identify the diverging state.
+- **AND** the failure SHALL name which compared digest diverged: enemy state,
+  item-drop state, or the seeded RNG digest
+- **AND** the proof is not required to attribute that divergence to a source
+  line.
 
 ### Requirement: Randomness classification SHALL be accurate in source
 

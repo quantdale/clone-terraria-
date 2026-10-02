@@ -60,127 +60,111 @@ saves *before* clearing state, and the host world is the save.
 
 ## Decisions
 
-### D1: Reset the registry at world construction, in `main.js` and `runtime.js`
+### D1: Reset the registry when world construction proceeds, not on every function entry
 
-Call `TC.Players.resetForNewWorld()` (guarded for optional dependency, matching
-the surrounding style) as the first step of `TC.newGame`, `TC.continueGame`, and
-`TC.Runtime.createWorld` — *before* the new `Player` is constructed.
+Call `TC.Players.resetForNewWorld()` (guarded for optional dependency) only
+once world construction is actually going to proceed:
 
-Rationale: world construction is the only moment at which "entities die with
-the old world object graph" is true by definition. Resetting there makes the
-invariant structurally guaranteed rather than dependent on every future
-transition author remembering.
+- `TC.newGame`: before the new `Player` is constructed.
+- `TC.continueGame`: after pack classification succeeds and before the
+  deserialized player is installed. A refused continue returns before the reset.
+- `TC.Runtime.createWorld`: before the new `Player` is used by later systems.
 
-**Alternative considered — reset in `quitToTitle` only.** Rejected: it leaves
-the invariant unenforced for any world-creation path that does not pass
-through the title screen (for example a future direct `createWorld` call, or a
-failed `newGame` that aborts midway), and it couples correctness of world
-creation to the UI flow.
+Rationale: world construction is the moment the old player object graph dies.
+Resetting earlier, on a refused continue, is unnecessary and would couple a
+failed load to registry mutation.
 
-**Alternative considered — reconcile lazily in the movement system** (e.g. if
-the primary's player is not `TC.player`, rebuild). Rejected: it hides the
-inconsistency at the symptom layer, leaves `TC.Targets` and item pickup still
-reading the stale set, and would make the bug's blast radius depend on which
-consumer runs first.
+**Alternative considered — reset as the first line of `continueGame`.** Rejected:
+the function returns without building a world when the save is missing or pack
+classification refuses the load.
 
-### D2: Re-seat the local primary in solo worlds so the registry is not left empty mid-world
+**Alternative considered — reset only in `quitToTitle`.** Rejected: headless
+`createWorld` and any future direct world start would still inherit a stale
+registry.
 
-After the reset, register the new local player as the primary
-(`TC.Players.create(player, { primary: true })`) so that from the moment the
-world is live, the registry, the `TC.player` alias, and every consumer agree on
-exactly one player.
+### D2: Re-seat only the browser local player, and make same-player registration idempotent first
 
-Rationale: with a non-empty registry the `[TC.player]` fallback in the movement
-system is not used, so a *stale* entry is fatal — but a *correct* single entry
-makes the solo path structurally identical to the multiplayer path and removes
-the dual-code-path hazard entirely. `Players.create` already auto-elects the
-first non-remote entry as primary (`wantPrimary = opts.primary === true ||
-(primaryId === null && !rec.remote)`), and `setPrimary` maintains the
-`TC.player` alias, so this uses existing, tested behavior.
+`Players.create` does **not** return an existing id today. At `js/players.js`
+the requested id is discarded when `entries.has(id)` and a new id is allocated.
+That fact blocks a naive re-seat.
 
-**Alternative considered — leave solo sessions with an empty registry.** Also
-valid and lower-churn, and the lifecycle test would then assert "empty registry
-+ singleton fallback." Rejected because it preserves two subtly different solo
-code paths (registry-empty vs registry-single) and because the defect we are
-fixing is precisely that the two paths disagree. If the implementer prefers
-this variant, the spec's scenarios still hold as long as the *observable*
-requirements are met — but D2's single-entry invariant is the recommended
-reading and makes the "only registered players are simulated" requirement
-trivially checkable.
+Before browser re-seat:
 
-**Note on the hosting path**: `NetServer.start()` with `adoptWorld: true`
-adopts an already-playing world, and `attachLocal()` then registers `p1` from
-`TC.player`. That order already yields a correct single primary. The reset in
-D1 happens during `newGame` (which `actHostMultiplayer` calls *before* creating
-the server), so `attachLocal` still sees an empty registry and seats `p1`
-normally. This must be preserved and covered by the lifecycle test.
+1. Change `Players.create` so that registering the same player object again
+   returns the existing record and id. A requested id that belongs to a
+   *different* player remains a conflict and must not silently allocate a
+   second entry for the same object.
+2. After `TC.newGame` and a successful `TC.continueGame` construct the local
+   player, register that object once with `{ primary: true }`.
+3. Do **not** re-seat inside `TC.Runtime.createWorld`. Dedicated and soak hosts
+   call `start()` without `adoptWorld`, which calls `createWorld` and then
+   attaches remotes with `Players.create` and no explicit id. Pre-registering
+   the constructed `TC.player` would consume `p1` and shift the first remote.
+   Tests that call `createWorld` then `attachLocal` must still get `p1`.
 
-### D3: Make `NetServer.stop()` release the local primary instead of retaining it
+`actHostMultiplayer` calls `newGame` and then `attachLocal(TC.player, { id:
+'p1' })`. After D2, `attachLocal` must observe the existing entry and return
+it. It must not allocate `p2` or cause the movement system to step the same
+object twice.
 
-Change the teardown so the host's local primary is not retained for reuse in a
-subsequent world.
+**Alternative considered — leave every solo session with an empty registry.**
+Rejected for the browser path: after `stop()` the registry is non-empty, so the
+`[TC.player]` fallback is not the path that runs. A correct single entry is the
+invariant the browser scenarios require. It remains rejected for headless
+`createWorld` because that entry point is also the dedicated-server world
+factory.
 
-Rationale: `stop()` currently calls `TC.Players.retainOnly([localPid])`, which
-exists to keep the host player alive *for the rest of the session* — but `stop`
-*ends* the session, so retaining past the session boundary has no legitimate
-consumer. With D1 in place this is defence in depth rather than the primary fix.
+**Alternative considered — re-seat in `createWorld` too.** Rejected: it changes
+dedicated-server identity assignment.
 
-**Alternative considered — leave `stop()` alone and rely on D1.** This is
-sufficient to fix the defect. It is retained as a separate decision only because
-retaining a dead-world player across a session boundary is independently
-incorrect and will otherwise look like a deliberate design choice to the next
-reader. If the implementer judges the change too risky for this cycle, D1 plus
-the lifecycle test is an acceptable complete fix; record that judgement in the
-change's completion notes.
+### D3: Do not release the local primary inside `NetServer.stop()`
+
+Leave `retainOnly([localPid])` in place. `quitToTitle` calls `stop()` and then
+`TC.Save.save()` (`js/main.js`). `Players.remove` of the primary sets
+`TC.player = null` (`js/players.js`). Releasing the primary during `stop()`
+would save a null player.
+
+The cross-world release is the D1 reset, which runs on the next world
+construction, after the quit save. `stop()` must still drop remotes, parked
+reconnect identities, and their private region consumers.
+
+**Rejected alternative — remove the local primary in `stop()` and rely on the
+next reset.** That nulls the player before the host save. Also rejected:
+reordering save ahead of `stop()` only to make an unnecessary release safe.
 
 ### D4: Emit an observable repair diagnostic
 
-Have the world-transition reset report whether it found a non-empty registry
-holding foreign players (e.g. a counter on the runtime/debug observability
-surface, or an event), so a recurrence is visible in the F3 overlay / test
-output rather than being silently corrected.
-
-Rationale: the whole class of failure was invisible because a throw was
-swallowed by a counter and a stale registry was never checked. A repair counter
-costs one integer and makes the invariant self-monitoring. Prefer reusing the
-existing observability conventions (`TC.Debug` counters, `TC.Events`) over
-inventing a new surface.
+Have the world-construction reset report whether it found a non-empty registry.
+Prefer the existing `TC.Debug` / `TC.Events` conventions. The diagnostic is
+especially expected on the host-quit-then-new-world path, because D3
+intentionally leaves the saved world's primary registered until that reset.
 
 ## Risks / Trade-offs
 
-- **[Reset happens before save-on-quit and loses the host save]** → Mitigation:
-  `quitToTitle` saves before it clears anything, and the reset is in the
-  *world-construction* path, not the teardown path. The lifecycle test asserts
-  a save exists and reloads after a host-quit cycle.
-- **[Resetting after `attachLocal` would strip the host primary]** → Mitigation:
-  D1 orders the reset inside `newGame`/`continueGame`/`createWorld`, which the
-  host flow calls before `NetServer.create(...).start()`. Covered explicitly by
-  a scenario in the lifecycle test.
-- **[A joined network client re-entering a world]** → Mitigation: a joined
-  client does not own world truth; its mirror teardown path already removes
-  remote entries and its `WorldLoaded` handling is unchanged. Add a scenario
-  asserting a joined client that reconnects after a world transition gets a
-  coherent set.
-- **[Double registration if a caller already registered]** → Mitigation:
-  `Players.create` returns the existing id if the same id is passed and refuses
-  duplicates; prefer a single, explicit re-seat call site per transition rather
-  than defensive scanning.
-- **[Behaviour change is "the game now works"]** → Intentional. Any consumer
-  that depended on the stale registry was depending on a bug; the lifecycle
-  test enumerates the affected consumers so the blast radius is explicit.
+- **[Resetting or removing the primary before the host save]** → Forbidden by
+  D3. The lifecycle test must save after `stop()` and assert the character is
+  the host player, not null.
+- **[Re-seat before idempotent create double-registers the host]** → D2 step 1
+  lands before any browser re-seat. The host lifecycle asserts one entry and
+  one simulation step per tick.
+- **[Headless re-seat shifts dedicated-server ids]** → `createWorld` resets and
+  does not register. A dedicated-start test asserts the first remote id is
+  unchanged.
+- **[A refused continue resets the registry anyway]** → Reset is after
+  classification success only.
+- **[Behaviour change is "the game now works"]** → Intentional for the stale
+  solo-after-host path. Live hosting, remote simulation, and dedicated-server
+  id assignment stay as they are.
 
 ## Migration Plan
 
-1. Land D1 (reset at world construction) + the lifecycle test. This alone
-   fixes the confirmed defect.
-2. Land D2 (re-seat primary) and re-run the lifecycle test; update the test's
-   solo assertions to the single-entry invariant.
-3. Land D3 (release primary at `stop`) and D4 (diagnostic) if judged in scope.
-4. No save-format change, no protocol change, no migration of stored data.
-   Fully reversible per step.
+1. Land idempotent same-player `Players.create` (D2 step 1) with a unit test.
+2. Land the construction reset (D1) and the browser re-seat (D2 steps 2–3).
+   Do not edit `NetServer.stop()` to drop the local primary.
+3. Land the repair diagnostic (D4).
+4. No save-format change and no protocol change. Fully reversible per step.
 
 ## Open Questions
 
-None blocking. One judgement call is left to the implementer and is recorded in
-D2/D3: whether to land the re-seat and `stop()`-release steps in this cycle or
-defer them to a follow-up once D1 is proven.
+None. The earlier option to release the primary inside `stop()`, and the claim
+that `Players.create` already returns an existing id, are withdrawn.

@@ -27,17 +27,17 @@ first three occurrences per drawer.
 
 ## What Changes
 
-- Define the missing `joinedActive()` predicate in `js/ui.js` with the
-  intended semantics: true only when the local session is a *joined network
-  client* whose presentation is a mirror (i.e. `TC.NetClient.drivesTick()`
-  reports the client owns the tick), so container transfers must be routed
-  through the authoritative `ContainerMove` command instead of mutating a
-  local mirror in place.
-- Route both call sites through the shared predicate so the two container
-  branches (inventory→chest and chest→inventory) cannot drift apart again.
-- Add a defensive fallback so a missing/unavailable `TC.NetClient` can never
-  re-introduce a throw on this path (fail *closed to local* editing, never to
-  a crash).
+- Define the missing `joinedActive()` predicate in `js/ui.js`. It is true
+  only when `TC.NetClient.active()` is a client whose `isActive()` is true
+  (`syncing` or `playing`). Do not use `drivesTick()`: that is also true
+  during `connecting`, while `NetClient.intent()` returns null and
+  `txSubmit` would fall through to a local `Commands.submit`.
+- Route both call sites through that shared predicate so the two container
+  branches cannot drift apart again.
+- A missing `TC.NetClient` uses the local quick-move path and must not throw.
+  If a client authority exists but the predicate cannot be evaluated, do not
+  mutate the local mirror. The joined branch must call the network intent
+  path directly and must not use `txSubmit`'s local fallback.
 - Add regression coverage that exercises both Shift-click branches with a
   real chest open, in single-player (local path) and joined-client
   (authoritative path) modes.
@@ -73,7 +73,6 @@ both behave as designed.
   authoritative chest-transfer path.
 - **Dependencies**: none. This is a prerequisite-free fix and should land
   first.
-- **Risk**: low. The predicate is a one-line read of an existing public API
-  (`TC.NetClient.drivesTick`), which is already used as the authoritative
-  "am I a joined mirror" gate in `js/main.js` (frame loop) and `js/save.js`
-  (autosave skip). No new state, no save-format change, no protocol change.
+- **Risk**: low for the single-player crash. The joined path must use
+  `isActive()`, not `drivesTick()`, and must not fail open into local
+  mutation. No new state, save-format change, or protocol change.

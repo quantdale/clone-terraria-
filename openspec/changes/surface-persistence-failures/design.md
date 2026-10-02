@@ -58,14 +58,16 @@ theoretical.
 
 ## Decisions
 
-### D1: Add a bounded stats object to SaveCore and a classified failure reason
+### D1: Add a bounded stats object to SaveCore and classify every failure site
 
 Give `js/savecore.js` a `stats()` accessor and a small counters object
-(`attempts`, `successes`, `failures`, `lastFailure`), mirroring the
-`counters()` / `stats()` convention already used by `TC.WorldRegions`,
-`TC.Lighting`, `TC.MiniMap`, and `TC.PackStore`. Classify at the point where
-the information still exists — inside the `storageSet` wrapper — so the reason
-distinguishes a capacity rejection from a generic write error.
+(`attempts`, `successes`, `failures`, `lastFailure`), mirroring the existing
+`counters()` / `stats()` convention. Classification cannot live only inside
+`storageSet`. `buildEnvelope` throws on a provider serialize failure before
+any storage call, and `saveNow` currently catches that and returns false with
+no reason. Classify that path as a data/provider failure in the `saveNow`
+catch. Classify storage failures separately, from the error object caught in
+`storageSet`.
 
 Rationale: the codebase already has a strong, consistent observability
 convention; the save layer is the outlier. Following the convention makes the
@@ -77,15 +79,16 @@ contract in `AGENTS.md` and is consumed by `TC.Save.save()` and the tests.
 Change the shape to an object only if the maintainer prefers a cleaner API;
 the counters path works without breaking it.
 
-### D2: Classify capacity failure by error identity, not by message
+### D2: Classify capacity failure by error name, not by message
 
-Detect the capacity case via the thrown error's `name` (`QuotaExceededError`,
-`NS_ERROR_DOM_QUOTA_REACHED`, `QUOTA_EXCEEDED_ERR`) and set a
-`capacity` classification.
+Detect capacity via `error.name`: `QuotaExceededError`,
+`NS_ERROR_DOM_QUOTA_REACHED`, or `QUOTA_EXCEEDED_ERR`. A generic
+`Error` whose message is `QuotaExceededError` is not capacity.
+`tests/save/atomicity.test.js` throws exactly that generic error, so those
+tests must remain non-capacity failures and must not trigger reclaim.
 
-Rationale: message sniffing is locale- and browser-dependent; the `name`
-property is standardized across the browsers this game targets and is what the
-storage abstraction already receives.
+Rationale: message sniffing is locale- and browser-dependent, and it would
+also change the existing atomicity tests.
 
 ### D3: Reclaim before failing, inside `saveNow`
 
@@ -132,10 +135,10 @@ Rationale: makes the state inspectable without spamming, satisfying the
   is left with the last good main save, which is the best available state; the
   counters and notice make the situation legible. Explicitly covered by a
   spec scenario.
-- **[Reclaim breaks `tests/save/atomicity.test.js` expectations]** → The
-  reclaim only fires on capacity-classified failures; success paths and generic
-  failures are byte-for-byte unchanged. Run the atomicity suite explicitly
-  during implementation.
+- **[Reclaim breaks `tests/save/atomicity.test.js`]** → Those tests throw
+  `new Error('QuotaExceededError')`, whose name is `Error`. D2 must not
+  classify them as capacity. New capacity tests must throw an error whose
+  `name` is one of the D2 names. Run the atomicity suite explicitly.
 - **[`stats()` on SaveCore adds a public API surface]** → Additive only; no
   existing signature changes.
 - **[New localized strings trip the i18n gate]** → All new UI strings must be

@@ -32,27 +32,16 @@ if (text.length > MAX_MANIFEST_BYTES) return { ok: false, error: 'too-large' };
 if (totalBytes(candidate) > MAX_TOTAL_BYTES) return { ok: false, error: 'quota' };
 ```
 
-For ASCII JSON, one code unit is one byte and the caps hold. For any manifest
-containing non-ASCII content, `text.length` **undercounts** the real storage
-cost. A CJK-heavy pack description is 1 code unit but 3 UTF-8 bytes; an emoji
-is 2 code units but 4 bytes; astral-plane characters are 2 code units and 4
-bytes. A manifest that passes the "256 KiB" check can therefore occupy up to
-~3× that in real bytes.
+For ASCII JSON, one code unit is one UTF-8 byte and the documented caps hold.
+For non-ASCII content, `text.length` undercounts UTF-8 size. A CJK character
+is 1 code unit and 3 UTF-8 bytes; an emoji is 2 code units and 4 UTF-8 bytes.
+A manifest can therefore pass the named 256 KiB check while exceeding 256 KiB
+of UTF-8.
 
-The consequences compound:
-
-1. **The stated per-manifest cap is not the real cap.** The security boundary's
-   documented bound is not the enforced bound.
-2. **The store total cap is not the real cap.** `MAX_TOTAL_BYTES = 4 MiB` can
-   hold up to ~12 MiB of actual bytes, and the store is written to
-   `localStorage` under the `tc_packs_installed_v1` key alongside the save
-   envelope (`tc_save_v2`, plus `.bak`/`.tmp`). A store that "passes" its quota
-   check can therefore push the origin over the browser's storage quota — at
-   which point **saves start failing**, which is the same silent failure mode
-   `surface-persistence-failures` addresses from the other direction.
-3. **The failure is silent by construction at the boundary.** `persist()`
-   returning false is already handled (`{ ok: false, error: 'storage' }`), but
-   the quota *check* that was supposed to prevent this passes instead.
+This change makes the documented caps exact UTF-8. It does not claim that
+UTF-8 is the unit a browser uses for origin quota. That unit is
+implementation-defined and was not measured here. Origin-quota exhaustion
+remains the concern of `surface-persistence-failures`.
 
 The project already knows about this. `docs/HANDOFF-W26-pack-ecosystem-productionization.md`
 line 84 records: *"PackStore total bytes counted as string length (UTF-16) not
@@ -66,9 +55,9 @@ handoff lists "UTF-8 store accounting" as a remaining follow-up.
 - Measure manifest and store size in **exact UTF-8 bytes** at every accounting
   site in `js/packs.js` and `js/packstore.js`, replacing the string-length
   comparisons.
-- Make the error messages and the documented limits state the unit truthfully
-  (the current "exceeds N bytes" message is correct only under the new
-  accounting).
+- Make rejections report both the measured UTF-8 size and the limit, in the
+  pack-authority message and in the user-facing localized template. Keep the
+  existing machine-readable error codes.
 - Ensure the store's total-bytes accounting, the per-manifest cap, and the
   load-time degrade path all use the same byte measure, so a store that was
   persisted under old accounting is still evaluated consistently.

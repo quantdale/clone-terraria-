@@ -97,29 +97,31 @@ focused item / no leak across transitions" requirement by construction. The
 alternative — storing focus on the layout object — would be rebuilt every frame
 and lose the index immediately.
 
-### D2: Drive navigation from `pressed()` in `processInput`, before the pointer branch
+### D2: Use different keys for playing and non-playing surfaces
 
-Navigation keys are consumed in a dedicated branch placed at the top of the
-"which surface is open" decision in `processInput`, after the existing
-`Escape`/`KeyE` toggles. Order matters: toggles first (open/close), then
-navigation within the now-current surface.
+Title, pause, and packs: ArrowUp/ArrowDown move focus, Enter and Space
+activate, Escape closes. Simulation is not running, so those keys do not also
+move a player.
 
-Rationale: `processInput` already owns all key interpretation for the UI and
-runs once per frame from `UI.draw` with the fresh `L`, so navigation has access
-to the same rect lists the pointer path uses, and the same frame.
+Shop buy rows and the crafting column: Tab and Shift+Tab move focus, Enter
+activates, Escape closes. Do not read Arrow or Space there. `Input.axis()`
+uses those keys for movement, `pressed()` does not consume them, and
+`simGate` does not treat an open inventory as paused.
+
+Shop sell remains the existing right-click `sellFromSlot` path. This change
+does not add a keyboard sell binding.
 
 **Alternative considered — handle keys in `js/input.js`.** Rejected: `input.js`
 is a raw state module with no knowledge of UI surfaces; putting navigation there
 would invert the dependency and require input to know about `UI`.
 
-### D3: Navigate by item index, not by geometry
+### D3: Navigate by item index, including inert rows
 
-For each surface, navigation moves the focus index within the surface's ordered
-item list (the same array that produces the rects), wrapping at the ends, and
-skipping non-activatable entries (e.g. a shop row with no stock, a recipe row
-that is not craftable but is still focusable-but-inert is a judgement call —
-prefer *focusable* with an inert activation over *skippable*, so the player can
-read why it is unavailable).
+Navigation moves a single index through the surface's ordered visible items,
+wrapping at the ends. Unavailable shop or craft rows remain focusable.
+Activating one calls the same action as a primary click and that action is a
+no-op when the row cannot be used. Do not require the default focus to be
+activatable.
 
 **Alternative considered — spatial navigation (nearest item by direction).**
 Rejected: more code, more edge cases, and unpredictable for a vertical list.
@@ -153,32 +155,22 @@ a row window. Add a per-surface scroll offset that is adjusted when the focused
 index moves outside `[offset, offset + visibleCount)`. No new scrolling UI; the
 existing cap is the window.
 
-### D7: Keep navigation inert when no surface is open
+### D7: Do not read movement keys while simulation can run
 
-The navigation branch only runs when a surface is open. Gameplay keys
-(`WASD`/arrows/Space) continue to flow to `TC.Input.axis()` and `Player.update`
-untouched, because navigation only *reads* `pressed()` for the navigation keys
-and never clears or consumes them from the input module.
-
-**Careful subtlety to record:** `js/input.js` `justPressed` is a shared set that
-`TC.Input.pressed()` reads and `endFrame()` clears once per frame. Reading
-`pressed('ArrowDown')` in the UI does **not** prevent `Player` from seeing it in
-the same tick, so there is no consumption conflict — but the implementer must
-confirm the ordering in the frame (UI runs in the `input` phase; player intent
-runs in the same phase per `js/main.js` `registerSystems`) does not produce a
-visible double-handling. Since navigation is gated on a surface being open, and
-movement keys are only read by the player, no conflict should arise; add a
-regression test asserting movement still works with the inventory closed *and*
-that opening it does not steal movement.
+Reading `pressed('ArrowDown')` does not consume it, so an open crafting column
+that navigates with arrows would move focus and the player. That is why shop
+and craft do not use those keys. Add a regression test that arrows still move
+the player while crafting is open and that Tab does not move the player.
 
 ## Risks / Trade-offs
 
 - **[Touching the largest file in the project on the critical input path]**
   → Mitigated by D4 (no new action logic), by landing after the P0 fixes, and
   by the existing 33 browser journeys as a regression net.
-- **[Arrow keys conflict with player movement while a panel is open]** → The
-  player does not move while a panel is open in the current design; verify and
-  add a test.
+- **[Arrow keys conflict with player movement while a panel is open]** →
+  Inventory does not pause simulation, and `pressed()` does not consume keys.
+  Shop and craft therefore do not bind Arrow or Space. The regression test
+  asserts arrows still move the player while crafting is open.
 - **[Focus indicator regressing visual quality]** → Use existing UI palette;
   review a rendered frame in a browser journey screenshot.
 - **[Immediate-mode layout means "current item list" can change between

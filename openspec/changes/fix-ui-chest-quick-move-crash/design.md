@@ -25,18 +25,18 @@ three failures. The result is a *silent* functional loss: the user sees no
 feedback, the transfer never happens, and CI stays green because no test
 presses Shift.
 
-The intended semantics are already encoded elsewhere in the codebase: a joined
-network client presents a mirror and must not write local world/inventory
-truth, so its container transfers must go through the authoritative
-`ContainerMove` command. The canonical "is this session a joined mirror?"
-predicate is `TC.NetClient.drivesTick()` — the same function already gates the
-fixed-step tick in `js/main.js` (`if (TC.NetClient.drivesTick()) TC.NetClient.frame(STEP);`)
-and the autosave skip in `js/save.js`
-(`if (TC.NetClient.drivesTick && TC.NetClient.drivesTick()) { acc = 0; return; }`).
+A joined client must not write local inventory truth. Command routing already
+uses a narrower gate than tick ownership:
 
-Both call sites already funnel through `txSubmit('ContainerMove', {...})`
-(`js/ui.js` `txSubmit` at line ~1885), which is the existing command-submission
-seam. So the fix is to supply the missing predicate, not to invent a mechanism.
+- `drivesTick()` is true from `connecting` through `playing`.
+- `isActive()` is true only for `syncing` and `playing`.
+- `NetClient.intent()` returns null unless `isActive()`, and `txSubmit` then
+  falls through to `Commands.submit`, which mutates local state.
+
+`drivesTick()` is the right gate for the frame loop and autosave skip. It is
+the wrong gate for this click. The joined branch must not call `txSubmit`
+unless it has first proven `intent()` will route; otherwise it submits the
+intent directly and returns without a local write.
 
 ## Goals / Non-Goals
 
@@ -60,47 +60,42 @@ seam. So the fix is to supply the missing predicate, not to invent a mechanism.
 
 ## Decisions
 
-### D1: Define `joinedActive()` as a local helper over `TC.NetClient.drivesTick()`
-
-Add a file-local function in `js/ui.js` alongside the existing input helpers
-(`shiftHeld()`, `ctrlHeld()`, `pressed()`), all of which already use the same
-`try/catch`-guarded, capability-checked access style:
+### D1: Define `joinedActive()` over `active().isActive()`
 
 ```js
-// True when this session is a joined network client presenting a mirror:
-// container moves must then go through the authoritative ContainerMove
-// command instead of editing the local mirror in place.
+// True only when this session is a joined client that can route intents.
+// drivesTick() is broader (it includes connecting) and must not be used here.
 function joinedActive() {
   try {
-    return !!(TC.NetClient && typeof TC.NetClient.drivesTick === 'function' &&
-      TC.NetClient.drivesTick());
-  } catch (e) { return false; }
+    const client = TC.NetClient && typeof TC.NetClient.active === 'function'
+      ? TC.NetClient.active() : null;
+    return !!(client && typeof client.isActive === 'function' && client.isActive());
+  } catch (e) {
+    return !!(TC.NetClient && typeof TC.NetClient.active === 'function');
+  }
 }
 ```
 
-Rationale: matches the established local-helper convention in the file
-(`shiftHeld`/`ctrlHeld` both return `false` on any error, so the click path can
-never be aborted by the predicate), and reuses the one authority the rest of
-the codebase treats as canonical for this question.
+Absent `TC.NetClient` returns false and the local quick-move runs. A throw
+while a client authority exists returns true so the click cannot fail open
+into a local mirror write. The joined branch then submits `ContainerMove`
+through `TC.NetClient.intent` and returns even if that result is null. It must
+not call `txSubmit`, because `txSubmit` local-submits when `intent()` returns
+null.
 
-**Alternative considered — inline `TC.NetClient.drivesTick()` at both call
-sites.** Rejected: it duplicates the capability check and the try/catch twice
-and makes the two container directions free to drift, which is the exact class
-of defect being fixed here.
+**Rejected — `drivesTick()`.** True during `connecting`, where `intent()` does
+not route.
 
-**Alternative considered — read `TC.__netClient` / `TC.NetClient.active()`.**
-Rejected: `TC.__netClient` is set by the title-screen join action but is not
-cleared on every teardown path, so it can be stale; `drivesTick()` is the gate
-the simulation itself already trusts.
+**Rejected — `TC.__netClient`.** It is not cleared on every teardown path.
 
-### D2: Keep the try/catch-return-false failure mode
+**Rejected — inline the check at both call sites.** The two directions would
+drift again.
 
-A predicate that can throw is the same defect class as the one being fixed, so
-the helper is total: any throw, missing authority, or malformed authority
-resolves to `false` (local editing). The failure direction is deliberate —
-failing *open to local* is safe here because the alternative (crashing the
-click handler) is strictly worse, and a session that cannot report its own
-mirror status is a session with no server to disagree with.
+### D2: Fail closed when a client authority exists
+
+A missing network client is local editing. A present but unevaluable client
+authority is not permission to edit the mirror. The predicate itself must not
+throw out of the click handler.
 
 ### D3: Assert zero UI-layer errors in the regression tests, not just state
 
@@ -113,11 +108,10 @@ counter that hid this defect becomes an assertion instead of a log line.
 
 ## Risks / Trade-offs
 
-- **[The predicate is wrong for some session type]** → The two session classes
-  are exhaustive: `drivesTick()` is true exactly when a joined client owns
-  presentation and there is no local authority to write to. Validate against
-  the existing multiplayer journeys (`journey-n`, `journey-o`) which already
-  exercise joined-client container transfers through the same code path.
+- **[The predicate is wrong for some session type]** → `isActive()` is the
+  command-routing gate. `connecting` must stay on the local/no-route side
+  rather than be treated as joined. Validate against the existing multiplayer
+  journeys, and add the connecting negative case from the tasks.
 - **[The fix makes a previously-dead path live and it has latent bugs]** →
   Expected and desired: `quickMoveRange` is a small, already-reviewed merge/empty
   routine; the new tests specify its exact expected outcome, so any latent bug

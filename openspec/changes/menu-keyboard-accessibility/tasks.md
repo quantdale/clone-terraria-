@@ -17,9 +17,8 @@
 
 ## 2. Title menu keyboard operation
 
-- [ ] 2.1 Add a navigation branch in `processInput` (after the existing
-      Escape/KeyE toggles) that moves focus with arrow keys and activates with
-      Enter/Space (design D2).
+- [ ] 2.1 Add title, pause, and packs navigation with arrow keys, Enter, and
+      Space. Do not use those movement keys for shop or craft (design D2).
 - [ ] 2.2 Make focus wrap at the first and last title menu item.
 - [ ] 2.3 Ensure the title screen reaches a playing state via keyboard alone.
 - [ ] 2.4 Establish a valid default focus when the title surface opens; handle
@@ -43,10 +42,12 @@
 
 ## 5. Shop and crafting
 
-- [ ] 5.1 Enable keyboard navigation over shop rows; activation performs the
-      same purchase action as a row click.
-- [ ] 5.2 Enable keyboard navigation over the crafting column; activation
-      submits the same craft transaction as a row click.
+- [ ] 5.1 Enable Tab / Shift+Tab / Enter navigation over shop buy rows.
+      Activation calls the same purchase action as a primary row click. Do not
+      add a keyboard sell binding.
+- [ ] 5.2 Enable the same keys over the crafting column. Activation submits
+      the same craft transaction as a primary row click. An unavailable row
+      may be focused; activation is inert and does not throw.
 - [ ] 5.3 Implement scroll-to-visible for the capped craft list and the packs
       list (design D6) so a focused item outside the visible window scrolls
       into view and stays visible.
@@ -60,10 +61,10 @@
 
 ## 7. Non-interference with gameplay input
 
-- [ ] 7.1 Confirm navigation is inert when no navigable surface is open, so
-      movement, jump, and hotbar keys behave exactly as before.
-- [ ] 7.2 Confirm opening the inventory or pause menu does not steal or
-      suppress movement input.
+- [ ] 7.1 Confirm shop and craft navigation does not read Arrow or Space, so
+      movement and jump behave as before while those surfaces are open.
+- [ ] 7.2 Confirm opening the inventory or pause menu does not consume
+      movement keys. Pause may use arrows because simulation is gated off.
 - [ ] 7.3 Confirm hovering with the pointer does not change the keyboard-focused
       item, and pointer use does not move keyboard focus.
 
@@ -76,8 +77,8 @@
 - [ ] 8.3 Headless test: keyboard activation on a pause-menu item performs the
       same observable action as the equivalent pointer click.
 - [ ] 8.4 Headless test: focus does not leak across a state transition.
-- [ ] 8.5 Headless test: movement keys still move the player when no surface is
-      open, and opening a panel does not suppress movement.
+- [ ] 8.5 Headless test: arrow keys still move the player while the crafting
+      column is open, and Tab moves craft focus without moving the player.
 - [ ] 8.6 Headless test: focusing an off-screen item in a capped list scrolls it
       into view and keeps it visible.
 - [ ] 8.7 Browser journey: start a new world using only the keyboard, and

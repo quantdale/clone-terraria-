@@ -24,20 +24,23 @@
 
 ## 3. Exclude the test fixture from the production artifact
 
-- [ ] 3.1 Add an explicit test-only asset exclusion set to
-      `tools/release-build.js` containing `packs/testpack.js` (design D3).
-- [ ] 3.2 Update the build's header comment, which currently claims the artifact
-      is "exactly what index.html references", to document the exclusion.
-- [ ] 3.3 Add an assertion after assembly that no test-only asset is present in
-      the output, and that each excluded asset still exists in the repository
-      (so the exclusion cannot silently become "the file is gone").
+- [ ] 3.1 Teach `tools/release-build.js` not to copy `packs/testpack.js`, and
+      to remove that script reference from the copied `dist/index.html`
+      (design D3). Do not remove the tag from the repository `index.html`.
+- [ ] 3.2 Update the build header, which currently claims the artifact is
+      exactly what `index.html` references, to document the exclusion and the
+      HTML rewrite.
+- [ ] 3.3 Assert that `dist/packs/testpack.js` is absent, that
+      `dist/index.html` does not reference it, and that the source fixture
+      still exists.
 - [ ] 3.4 Confirm the fixture remains loaded for the headless loader: the
       script order is derived from `index.html`, so the `<script>` tag MUST stay.
       Verify `tests/packs/*` and browser journey P still pass.
 - [ ] 3.5 Confirm `tools/verify-dist.js` (which boots the production tree) does
       not require the fixture.
-- [ ] 3.6 Run `npm run build` and confirm `dist/packs/` no longer exists while
-      every other shipped file is unchanged.
+- [ ] 3.6 Run `npm run build` and `npm run verify:build`. Confirm the
+      production page does not request the missing fixture and that every other
+      shipped file is unchanged.
 
 ## 4. Reconcile the OpenSpec change ledger
 

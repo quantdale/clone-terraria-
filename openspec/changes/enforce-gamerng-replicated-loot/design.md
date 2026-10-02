@@ -102,7 +102,9 @@ and the RNG-stream digest are already compared, a single `Math.random` left in
 the pot path would make the proof fail — exactly the desired regression guard.
 
 Rationale: reuses the strongest existing determinism harness and its
-already-correct digests; a bespoke test would be weaker and duplicative.
+already-correct digests. A digest mismatch names which compared state diverged.
+It does not identify the offending source line, and the spec does not require
+that attribution.
 
 **Alternative considered — only add a focused pot unit test.** Insufficient on
 its own: it would prove the roll is seeded in isolation but not that the

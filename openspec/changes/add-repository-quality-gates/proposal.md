@@ -62,8 +62,13 @@ above is caught by the gate rather than by a lucky manual review.
 - Wire `tools/fuzz-packs.js` (pack security boundary) and the multiplayer soak
   into `npm run validate` and the CI workflow, with bounded runtime so the gate
   stays practical.
-- Ensure the static gate has no false positives that would make it noisy or
-  ignorable (a gate that cries wolf is a gate that gets disabled).
+- Keep randomness exemptions at the call site. A file that selects a seed or
+  draws a particle must not become a blanket exemption.
+- Turn the multiplayer soak into a failing gate before wiring it into
+  `validate`. Today it prints a summary and exits successfully even when
+  identities remain after `stop()`.
+- Do not enable enforcement until the undefined-call fix and the pot-randomness
+  fix have landed. Report-only rollout can precede them.
 - Document how to run each gate and how to interpret failures.
 
 **Not breaking**: the new checks are additive and initially run in a

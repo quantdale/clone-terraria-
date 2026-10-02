@@ -8,11 +8,12 @@ indicator that reuse the same actions the pointer path already performs.
 
 ## ADDED Requirements
 
-### Requirement: Menu surfaces SHALL be operable by keyboard alone
+### Requirement: The in-scope menu surfaces SHALL be operable by keyboard alone
 
-Every action reachable by pointing at a menu or panel surface SHALL be
-reachable using only the keyboard, and the keyboard path SHALL perform the same
-action as the equivalent pointer gesture.
+The title menu, pause menu, packs panel, shop buy rows, and crafting column
+SHALL be operable by keyboard. Keyboard activation SHALL call the same action
+as the primary pointer gesture on that item. Inventory slot grids, chest
+grids, equipment slots, and shop sell are outside this requirement.
 
 #### Scenario: The title menu can be started without a mouse
 
@@ -45,10 +46,11 @@ transitions.
 
 #### Scenario: Opening a surface establishes a valid focus
 
-- **GIVEN** a menu-like surface that has just opened
+- **GIVEN** an in-scope surface that has just opened and has at least one item
 - **WHEN** it is displayed
-- **THEN** exactly one of its items SHALL be focused
-- **AND** that item SHALL be a valid, activatable item.
+- **THEN** exactly one of its visible items SHALL be focused
+- **AND** activating an inert focused item SHALL perform no action and SHALL
+  NOT raise an error.
 
 #### Scenario: An empty surface has no focus and no activation target
 
@@ -93,18 +95,20 @@ regions SHALL scroll so the focused item remains visible.
 - **THEN** the region SHALL scroll or paginate so that item becomes visible
 - **AND** the item SHALL remain visible on the following frames.
 
-### Requirement: Keyboard navigation SHALL NOT interfere with gameplay input
+### Requirement: Keyboard navigation SHALL NOT steal gameplay bindings
 
-Keyboard bindings used for menu navigation SHALL be inert outside a navigable
-surface, so movement, jump, hotbar selection, and other gameplay bindings keep
-their existing behavior.
+Arrow keys and Space SHALL remain gameplay bindings while simulation can run.
+Shop and craft navigation SHALL use Tab, Shift+Tab, and Enter, and SHALL NOT
+move focus in response to Arrow or Space. Title, pause, and packs MAY use
+arrow keys and Space because simulation is not running on those surfaces.
 
 #### Scenario: Arrow keys still move and jump during play
 
-- **GIVEN** the game is in a playing state with no menu surface open
+- **GIVEN** the game is playing, including while the inventory, shop, or
+  crafting column is open
 - **WHEN** the user presses movement or jump keys
 - **THEN** the existing gameplay behavior SHALL occur
-- **AND** no menu navigation action SHALL be triggered.
+- **AND** shop or craft focus SHALL NOT move.
 
 #### Scenario: Panel-open modifiers keep their meaning
 

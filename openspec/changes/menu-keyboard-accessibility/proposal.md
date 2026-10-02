@@ -31,21 +31,27 @@ This is a direct WCAG 2.1.1 (Keyboard) failure and it blocks the "operable
 without a pointing device" criterion. It is also an obvious playability gap on
 platforms where mouse precision is poor.
 
-Scope note: the canvas itself cannot expose a semantic accessibility tree to a
-screen reader without a parallel DOM mirror, which is a much larger effort and
-is explicitly **out of scope** here. This change addresses keyboard operability
-of the menu/panel surfaces only — the achievable, high-value part.
+Scope is the title menu, pause menu, packs panel, shop buy rows, and crafting
+column. Inventory slot grids, chest grids, equipment slots, and shop sell
+(right-click `sellFromSlot`) are out of scope. Screen-reader DOM mirroring is
+also out of scope.
+
+Arrow keys and Space already drive movement through `Input.axis()`, and an
+open inventory does not pause simulation. Those keys must not become craft or
+shop navigation. Title, pause, and packs may use arrows because simulation is
+not running there. Shop and craft use Tab, Shift+Tab, and Enter.
 
 ## What Changes
 
-- Introduce a shared, canvas-agnostic **focus model** for menu-like surfaces
-  (title menu, pause menu, packs panel, shop dialog), with a single focused
-  index per surface, reset on open and on world/state transition.
-- Add arrow-key (and Tab where appropriate) navigation to move focus, Enter /
-  Space to activate, Escape to cancel/close — routed through the **same
-  action functions** the mouse path already calls, so there is exactly one
-  implementation of each action and no behavioral divergence between input
-  modalities.
+- Introduce a focus model for the in-scope surfaces: title, pause, packs,
+  shop buy rows, and crafting. One index per surface, reset on open and on
+  world/state transition.
+- On title, pause, and packs, move focus with arrow keys and activate with
+  Enter or Space. On shop and craft, move focus with Tab and Shift+Tab and
+  activate with Enter. Do not bind Arrow or Space as navigation while
+  simulation can still be running. Every keyboard activation calls the same
+  action the primary pointer gesture calls. Shop sell stays pointer-only in
+  this change.
 - Render a visible focus indicator on the focused item.
 - Ensure the focused item is always visible in its scrollable region (craft
   list, pack rows) by scrolling the view to keep it on screen.

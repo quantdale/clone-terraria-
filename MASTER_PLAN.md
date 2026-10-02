@@ -273,16 +273,16 @@ Little or no additional work needed:
 
 ### Uncertain — requires runtime/environment validation
 
-- **localStorage quota exhaustion in real browsers.** The audit proved the
-  *behavior* (silent failure) with a stub, and the mechanism is standard, but
-  the threshold at which a real player's save exceeds the browser quota was not
-  measured across browsers. `surface-persistence-failures` addresses it without
-  depending on the answer.
+- **localStorage quota exhaustion in real browsers.** The audit proved silent
+  failure with a stub. The browser quota unit was not measured and must not be
+  assumed to be UTF-8. `surface-persistence-failures` addresses visible
+  failure without depending on that unit. `harden-pack-utf8-byte-accounting`
+  corrects the documented pack caps only.
 - **Player-perceived cost of world transitions** (`continue` ≈ 1.65 s in the
   benchmark). Likely acceptable for the genre, but not user-tested.
-- **Whether `TC.Buffs.SOURCE_STATUS` is keyed by enemy display names today** —
-  determines the scope of D9's identity fix. Explicitly flagged as an
-  implementation-time inspection in that change's design.
+
+`TC.Buffs.SOURCE_STATUS` is resolved: its only current key is `lava`. D9 does
+not migrate that table.
 
 ---
 
@@ -304,6 +304,10 @@ the ordered work. Confidence is stated explicitly.
   mode, and the W23 authoritative container transaction is unreachable from the
   UI. The error is swallowed by the render-layer counter, so it is invisible.
 - **Root cause:** an incomplete refactor; the predicate was never written.
+- **Correction:** implement it over `NetClient.active().isActive()`, not
+  `drivesTick()`. `drivesTick()` is true during `connecting`, where
+  `intent()` returns null and `txSubmit` would write locally. A thrown
+  predicate must not fail open into mirror mutation.
 - **Change:** `fix-ui-chest-quick-move-crash`.
 
 ### F-02 — `TC.Players` outlives its world (P0, **confirmed by execution**)
@@ -318,6 +322,13 @@ the ordered work. Confidence is stated explicitly.
   through the product's own title-menu flow. Enemies chase an invisible ghost.
 - **Root cause:** world creation bypasses the identity registry; teardown
   retains an identity across a world boundary.
+- **Correction:** reset when world construction proceeds, and make
+  `Players.create` idempotent for the same player object before the browser
+  re-seat. Do not re-seat inside `Runtime.createWorld` (that shifts the first
+  dedicated-server remote off `p1`). Do not drop the local primary inside
+  `NetServer.stop()`: `quitToTitle` saves after `stop()`, and `Players.remove`
+  would null `TC.player` first. `Players.create` does not currently return an
+  existing id.
 - **Change:** `fix-player-registry-world-transition`.
 
 ### F-03 — Replicated-truth randomness bypasses `TC.GameRng` (P1, **confirmed**)
@@ -362,9 +373,9 @@ the ordered work. Confidence is stated explicitly.
   error message both say "bytes". Multi-byte content undercounts by up to 3×,
   so the documented 256 KiB / 4 MiB caps are not the enforced caps. The project
   already recorded this at `docs/HANDOFF-W26-…` line 84 and line 152.
-- **Why it matters:** a security-boundary limit that is not the real limit; a
-  store that passes its quota check can exceed the origin's storage budget and
-  break saves.
+- **Why it matters:** the documented byte cap is not the enforced cap for
+  non-ASCII manifests. This does not by itself prove an origin-quota overrun;
+  browser quota units were not measured.
 - **Change:** `harden-pack-utf8-byte-accounting`.
 
 ### F-07 — Autosave failure is silent; no persistence observability (P2, **confirmed**)
@@ -396,8 +407,9 @@ the ordered work. Confidence is stated explicitly.
 - **Evidence:** source read; `check:i18n` covers catalog and identity, not
   presentation paths.
 - **Why it matters:** violates the project's own mandatory W20 contract; the
-  hostile-shot case is a *correctness* bug, since two same-named entities
-  cross-clear each other's projectiles.
+  hostile-shot case is a correctness bug. Both `clearHostileShotsOf` loops,
+  including the `magic_bolt` cleanup, compare display names. Do not keep a
+  name fallback. `SOURCE_STATUS` is `lava` only and is not migrated.
 - **Change:** `localization-presentation-hygiene`.
 
 ### F-10 — Document and artifact truth drift (P3, **confirmed**)
@@ -450,7 +462,8 @@ maps to specific OpenSpec changes.
 **Change: `add-repository-quality-gates` (in report-only mode, tasks 1–3)**
 
 - Add the static analysis in **report-only** mode; record the full finding list.
-- Add `tools/check-rng.js` report-only with the audited allowlist.
+- Add `tools/check-rng.js` report-only with a call-site allowlist. Do not
+  exempt whole files that also contain seed selection.
 - Fix the one confirmed true positive the audit already found:
   the dead duplicate `canShape()` in `js/world.js`.
 - Do **not** enable enforcement yet, and do not wire fuzz/soak yet.
@@ -478,8 +491,11 @@ with its own regression test that fails without the fix.
 
 - Fix the pot-loot randomness, extend the replay proof to actually break pots
   (and verify the proof fails if the fix is reverted).
-- Flip the static and randomness gates to enforcing; wire fuzz + soak into
-  `validate`; update CI.
+- Flip the static and randomness gates to enforcing only after the P0
+  undefined-call fix and the pot-randomness fix have landed.
+- Make the soak exit non-zero on leftover players, detached identities, or
+  connections before wiring it into `validate`. A printed summary is not a
+  gate.
 - Now that the two P0s are fixed, the gate has a clean true-positive history to
   point at.
 
@@ -557,7 +573,7 @@ to concurrent agents.
 
 | Lane | Changes | Files | Safe to parallelize? |
 |---|---|---|---|
-| **Critical fixes** | F-01, F-02 | `js/ui.js`; `js/main.js`, `js/runtime.js`, `js/netserver.js` | Yes, with each other (disjoint files) |
+| **Critical fixes** | F-01, F-02 | `js/ui.js`; `js/main.js`, `js/runtime.js`, `js/players.js` | Yes, with each other (disjoint files). Do not treat `netserver.js` `stop()` as the F-02 release point. |
 | **Enforcement** | F-03, F-04 | `js/loot.js`, `tests/net/rng-replay.test.js`; `package.json`, CI, `tools/` | Yes with Phase 1; the gate wiring must follow the P0 fixes |
 | **Storage** | F-06, F-07 | `js/packs.js`, `js/packstore.js`; `js/save.js`, `js/savecore.js`, `js/debug.js` | Yes with each other (disjoint) |
 | **Presentation/UX** | F-08, F-09 | `js/ui.js`, `js/enemies.js`, `js/enemyai.js`, `js/fishing.js`, `js/main.js` | **No** — both touch `js/ui.js`; sequence them |
@@ -605,7 +621,8 @@ verifiably so.
 - [ ] `npm run check` includes the static gate and passes.
 - [ ] `npm run build` produces byte-identical output across two runs.
 - [ ] `npm run verify:build` passes with zero browser errors.
-- [ ] `dist/` contains no test fixture.
+- [ ] `dist/` contains no test fixture, and `dist/index.html` does not
+      reference `packs/testpack.js`. The repository `index.html` tag stays.
 
 **Security**
 - [ ] Pack byte caps are enforced in exact UTF-8 bytes.
@@ -620,8 +637,10 @@ verifiably so.
 - [ ] `SaveCore` exposes counters; the F3 overlay renders them.
 
 **Accessibility**
-- [ ] Every menu and panel is fully operable by keyboard alone, with a visible
-      focus indicator.
+- [ ] Title, pause, packs, shop buy rows, and the crafting column are
+      keyboard-operable, with a visible focus indicator. Shop and craft do not
+      use Arrow or Space. Inventory grids, chest grids, equipment, and shop
+      sell remain follow-up.
 - [ ] No gameplay keybinding regressed (movement, jump, hotbar, Escape, E).
 
 **Documentation**
@@ -652,7 +671,13 @@ verifiably so.
 1. **Read this entire master plan and the relevant OpenSpec change in full
    before changing code.** The `specs/*/spec.md` files are the requirements;
    `design.md` holds the decisions and the rejected alternatives; `tasks.md` is
-   the ordered work.
+   the ordered work. Where an older sentence in this plan disagrees with a
+   revised spec, the spec wins. In particular: do not use `drivesTick()` for
+   chest quick-move, do not release the host primary inside `NetServer.stop()`,
+   do not pre-register a player in `Runtime.createWorld`, do not exempt whole
+   files from the randomness gate, do not treat the current soak script as a
+   failing gate, and do not remove `packs/testpack.js` from the shipped HTML
+   by skipping the file copy alone.
 2. **Verify repository state before starting.** Confirm HEAD, run
    `npm run validate` on a clean tree, and record the baseline. The audited
    baseline was `0c5ed45` with 667/667 node tests and 33/33 browser journeys.

@@ -75,8 +75,9 @@ either limit on that measurement.
 
 ### Requirement: Limits SHALL be reported truthfully
 
-A size-limit rejection SHALL state the limit and the measured size in the same
-unit, and any user-facing message about a limit SHALL state bytes.
+A size-limit rejection SHALL state the limit and the measured size in UTF-8
+bytes. This accounting corrects the documented cap. It SHALL NOT be described
+as the browser origin-quota unit.
 
 #### Scenario: The rejection message uses bytes
 
@@ -87,12 +88,14 @@ unit, and any user-facing message about a limit SHALL state bytes.
 - **AND** the message SHALL NOT describe the measurement as characters or as an
   approximate figure.
 
-#### Scenario: A user-facing capacity message states the unit
+#### Scenario: A user-facing capacity message states both figures
 
 - **GIVEN** a user-facing message reporting that a pack could not be installed
   because a storage limit was reached
 - **WHEN** the message is rendered
-- **THEN** it SHALL state the limit in bytes.
+- **THEN** it SHALL state the measured size in bytes
+- **AND** it SHALL state the limit in bytes
+- **AND** it SHALL NOT claim that this measure is the browser origin quota.
 
 ### Requirement: The limit values SHALL NOT change as a side effect of this correction
 

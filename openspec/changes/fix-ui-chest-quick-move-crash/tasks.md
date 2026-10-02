@@ -2,10 +2,11 @@
 
 ## 1. Restore the container quick-move path
 
-- [ ] 1.1 Add a file-local `joinedActive()` helper to `js/ui.js` next to the
-      existing `shiftHeld()` / `ctrlHeld()` input helpers; implement it as a
-      `try/catch`-guarded capability check of `TC.NetClient.drivesTick()`
-      that returns a boolean and never throws (see design D1/D2).
+- [ ] 1.1 Add a file-local `joinedActive()` helper next to `shiftHeld()` /
+      `ctrlHeld()`. It returns true only when `TC.NetClient.active().isActive()`
+      is true. Do not call `drivesTick()`. If a client authority exists and the
+      query throws, return true. If no client authority exists, return false.
+      The helper itself must not throw (design D1/D2).
 - [ ] 1.2 Confirm both existing call sites now resolve: the inventory→chest
       direction in `slotClick(inv, i, rightClick)` and the chest-grid
       chest→inventory direction in the click handler. Do not add a third
@@ -14,9 +15,9 @@
       the merge-then-first-empty transfer through the existing
       `quickMoveRange` helper, with the source slot cleared only on a full
       move.
-- [ ] 1.4 Confirm the joined-client branches still submit `ContainerMove` via
-      the existing `txSubmit` seam with the correct `from`/`to` endpoints and
-      the open chest's `tx`/`ty`, and still perform no local mirror mutation.
+- [ ] 1.4 Submit joined `ContainerMove` intents through `TC.NetClient.intent`,
+      not `txSubmit`. A null intent result must return without local mutation.
+      Keep the existing `from`/`to` endpoints and the open chest's `tx`/`ty`.
 
 ## 2. Regression coverage — headless
 
@@ -34,9 +35,11 @@
       chest-grid slot.
 - [ ] 2.5 Assert the no-modifier and empty-source cases do not transfer and do
       not raise.
-- [ ] 2.6 Assert the joined-client path: with a `TC.NetClient` whose
-      `drivesTick()` returns true, a Shift-click submits a `ContainerMove`
-      command and does not mutate the local inventory or chest.
+- [ ] 2.6 Assert the joined path with `active().isActive()` true submits a
+      `ContainerMove` intent and does not mutate the local inventory or chest.
+      Assert a `connecting` client, where `drivesTick()` would be true but
+      `isActive()` is false, does not take the joined branch solely because
+      tick ownership is true.
 - [ ] 2.7 Assert the absent-authority case: with `TC.NetClient` removed, a
       Shift-click performs the local quick-move and raises nothing.
 - [ ] 2.8 Assert zero UI-layer errors after each interaction by reading the

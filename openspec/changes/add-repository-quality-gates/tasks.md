@@ -23,11 +23,12 @@
 
 - [ ] 2.1 Add `tools/check-rng.js` that scans `js/` for `Math.random` and fails
       on any usage not covered by an audited allowlist (design D2).
-- [ ] 2.2 Build the allowlist from the audit's enumeration of
-      presentation-only call sites: `particles.js`, `accessories.js` (burst
-      effects), `magic.js` (visual sparkles), `music.js`, `audio.js` (noise
-      buffer), `biomes.js` (particle spawns), `tiles.js`, `sky.js` (visual
-      hashes), `main.js` and `ui.js` (new-seed selection).
+- [ ] 2.2 Build a call-site allowlist, not a file allowlist. Start from the
+      audited presentation and seed-selection sites in `particles.js`,
+      `accessories.js`, `magic.js`, `music.js`, `audio.js`, `biomes.js`,
+      `tiles.js`, `sky.js`, `main.js`, and `ui.js`. Each entry names the site
+      and its justification. A new `Math.random` in one of those files fails
+      unless it is added as its own entry.
 - [ ] 2.3 Require a justification comment on every allowlist entry so the
       allowlist cannot silently become a blanket exemption.
 - [ ] 2.4 Add `check:rng` npm script.
@@ -50,15 +51,19 @@
 
 - [ ] 4.1 Confirm `tools/fuzz-packs.js` runs deterministically and passes with
       its recorded default (400 rounds, seed 20260924, 0 escapes).
-- [ ] 4.2 Confirm `tools/soak-multiplayer.js` accepts a bounded duration
-      argument and passes; add one if missing.
+- [ ] 4.2 Make `tools/soak-multiplayer.js` or its gate wrapper exit non-zero
+      when post-stop player count, detached reconnect records, or connections
+      are non-zero, and when the run throws. Bound it with the existing
+      `--ticks` argument. A printed summary with exit 0 is not a pass.
 - [ ] 4.3 Add both to the `validate` npm script.
 - [ ] 4.4 Record the added wall-clock cost of each harness.
 
 ## 5. Enforce and integrate
 
-- [ ] 5.1 Flip the static gate and the randomness guard from report-only to
-      enforcing once the codebase is clean.
+- [ ] 5.1 Flip the static gate and the randomness guard to enforcing only
+      after `fix-ui-chest-quick-move-crash` and
+      `enforce-gamerng-replicated-loot` have landed and the duplicate
+      `canShape` is removed. Report-only may land before those changes.
 - [ ] 5.2 Wire the static gate and randomness guard into the `check` script so
       `validate` runs them before the test suites.
 - [ ] 5.3 Update `.github/workflows/ci.yml` if any step ordering or caching

@@ -69,9 +69,10 @@ it is the one change that legitimately opts out of behavioral specs via
   correct or annotate the individual ratings that are now false.
 - Repair the `README.md` code fence and the `docs/TASK_BOARD.md` duplicated
   paragraph.
-- Keep the fixture pack out of the production artifact while keeping it
-  exercised by the browser journey, and make the release build assert the
-  production output contains no test fixture.
+- Keep the fixture pack out of the production artifact and out of the shipped
+  `index.html`, while leaving the repository script tag in place for the
+  headless loader and browser journey. A copy skip that leaves the script tag
+  in `dist/index.html` is not sufficient.
 - Reconcile the W26 OpenSpec change's recorded completion with reality, and
   archive it once its own remaining follow-ups are dispositioned, so the
   change board reflects true state.

@@ -36,8 +36,9 @@ never read directly from the content definition's frozen name field.
 - **WHEN** its name is resolved for display
 - **THEN** the resolution SHALL fall back to the content's stable identity
 - **AND** the missing entry SHALL be reported through the localization
-      diagnostics
-- **AND** the display SHALL NOT read the definition's frozen name field.
+  diagnostics
+- **AND** neither the caller nor a name helper SHALL read the definition's
+  frozen name field.
 
 ### Requirement: Player-facing messages SHALL NOT be assembled by concatenation
 
@@ -71,9 +72,12 @@ use a display name to establish or match that identity.
 #### Scenario: Two same-named entities do not share identity
 
 - **GIVEN** two distinct entities that share the same display name
-- **WHEN** one entity's tracked projectiles are cleared
+- **WHEN** one entity's tracked projectiles are cleared, including the
+  magic-bolt cleanup path
 - **THEN** the other entity's tracked projectiles SHALL NOT be cleared
-- **AND** the clearing SHALL be determined solely by stable identity.
+- **AND** the clearing SHALL be determined solely by the shooter reference or
+  a stable type or registry id
+- **AND** a display-name comparison SHALL NOT be retained as a fallback.
 
 #### Scenario: A same-named collision with built-in content does not leak
 
@@ -106,11 +110,14 @@ concatenation, outside the sanctioned content-name resolution helpers.
 - **THEN** the check SHALL fail
 - **AND** the report SHALL name the file and location.
 
-#### Scenario: The sanctioned helpers are not flagged
+#### Scenario: Stable-id resolution is not flagged
 
-- **GIVEN** the content-name resolution helpers themselves
+- **GIVEN** the catalog resolver's stable-id fallback and the frozen content
+  definition tables
 - **WHEN** the localization check runs
-- **THEN** their last-resort fallback SHALL NOT be flagged
+- **THEN** those sites SHALL NOT be flagged
+- **AND** a helper that still reads a definition's frozen name field SHALL be
+  flagged
 - **AND** the rest of the codebase SHALL produce no finding.
 
 #### Scenario: Registry identity remains unchanged

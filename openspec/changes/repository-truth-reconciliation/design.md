@@ -95,29 +95,29 @@ with no correctness benefit.
 
 Rationale: two-line fixes with zero risk and real reader impact.
 
-### D3: Exclude the fixture from the production artifact in the build, not in `index.html`
+### D3: Exclude the fixture from the production artifact and from the shipped HTML
 
-Add an explicit test-fixture exclusion to `tools/release-build.js` and assert the
-result:
+Keep `<script src="packs/testpack.js">` in the repository `index.html`. The
+headless loader derives its script order from that file, and pack tests and
+journey P need the fixture there.
 
-```js
-const TEST_ONLY_ASSETS = ['packs/testpack.js'];   // not shipped in dist/
-```
+`tools/release-build.js` must do both of the following:
 
-and after assembly, assert that no shipped file is in the set (and that
-`packs/testpack.js` is present in the repo, so the exclusion can't silently
-become "the file is gone"). Update the build's own header comment, which
-currently claims the artifact is "exactly what index.html references", to
-describe the exclusion.
+1. Do not copy `packs/testpack.js` into `dist/`.
+2. Rewrite the copied `dist/index.html` so it no longer references that
+   script. Skipping the copy while leaving the tag in place makes the
+   production page request a missing file, and `verify-dist.js` fails on
+   console errors.
 
-**Alternative considered — remove the script tag from `index.html`.** Rejected:
-it would also remove the fixture from the headless loader (which reads
-`index.html`), breaking `tests/packs/*` and journey P. The build is the correct
-layer because the build is what defines the *release* artifact.
+Assert after assembly that `dist/packs/testpack.js` is absent, that
+`dist/index.html` does not reference it, and that the source file still exists
+in the repository. Update the build header, which currently says the artifact
+is exactly what `index.html` references.
 
-**Alternative considered — move the fixture out of the repo entirely and have
-tests provide it programmatically.** Rejected as a larger change to the test
-harness for no release benefit; the exclusion list is a two-line build change.
+**Rejected — delete the source script tag.** That also drops the fixture from
+the headless loader.
+
+**Rejected — copy skip only.** The shipped HTML would 404 the script.
 
 ### D4: Reconcile the W26 OpenSpec change at implementation time
 
@@ -139,14 +139,11 @@ the duplicated TASK_BOARD preamble class of defect) and correct them.
 
 ## Risks / Trade-offs
 
-- **[Excluding the fixture breaks a test]** → The exclusion is in the *build*,
-  not in `index.html`; the headless loader and the dev server are untouched, so
-  `tests/packs/*` and journey P (which run against the repo/dev tree) are
-  unaffected. The only consumer of `dist/` is `verify-dist.js`, which boots the
-  production tree and does not require the fixture — verify that.
-- **[A future edit re-adds the fixture to `index.html` expecting it to ship]**
-  → The build assertion and the exclusion set are documented in the build
-  header; the exclusion is explicit and greppable.
+- **[Excluding the fixture breaks a test]** → The repository `index.html`
+  tag stays, so the headless loader and journey P are untouched. The shipped
+  HTML is rewritten so `verify-dist` does not request a missing script.
+- **[A copy skip leaves a broken script tag]** → Forbidden. The build must
+  rewrite `dist/index.html` and assert the reference is gone.
 - **[Annotating eight stale docs is busywork]** → It is a one-paragraph banner
   per file, and the alternative (leaving false statements in the tree) is worse
   for the next agent. The banner states the supersession; it does not attempt

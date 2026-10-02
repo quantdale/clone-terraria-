@@ -55,24 +55,27 @@ the product's own documented UI.
 
 ## What Changes
 
-- Make every world transition reset the player identity registry before the new
-  world is built, so no `Player` object can survive its world.
-- Re-seat the local primary in the single-player and host-adopted cases so
-  `TC.player` and the registry agree by construction, not by convention.
-- Make `TC.Targets`, the movement system, and item pickup provably agree on
-  the set of live authoritative players in a solo session (exactly one entry,
-  and it is `TC.player`).
-- Add a transition-order contract test that walks the real lifecycle
-  (host → client join → client leave → quit → new world → continue) and asserts
-  the registry, the singleton alias, and the targeting anchor stay coherent at
-  every step.
-- Surface a diagnostic instead of failing silently if a transition is ever
-  entered with a registry that still references a foreign world.
+- Reset the player identity registry when world construction proceeds, so no
+  `Player` object is simulated in a later world. A refused continue does not
+  reset and does not mutate the stored save.
+- Make `Players.create` idempotent for the same player object before any
+  browser re-seat. Today a requested id that already exists is discarded and a
+  new id is allocated (`js/players.js`).
+- Re-seat the local primary only on the browser `newGame` / successful
+  `continueGame` paths. Do not re-seat inside `Runtime.createWorld`: that
+  entry point is also the dedicated-server world factory, and pre-registering
+  its constructed player would shift the first remote off `p1`.
+- Do not remove the local primary inside `NetServer.stop()`. `quitToTitle`
+  saves after `stop()`, and removing the primary nulls `TC.player` before that
+  save. The next world-construction reset is the cross-world release.
+- Add a lifecycle test for host → join → leave → quit → save → new world →
+  continue, plus dedicated-server first-remote identity and idempotent
+  `attachLocal`.
+- Surface a diagnostic when world construction repairs a non-empty registry.
 
-**Not breaking**: the multiplayer session lifecycle is unchanged — remotes
-still die with the session, and the local host primary is still retained for
-the *same* world while the session runs. Only the *across-world* case changes,
-where retention is currently a defect.
+**Not breaking**: remotes and parked reconnect identities still die with the
+session. The host player object remains saveable across quit. Dedicated-server
+identity assignment does not change.
 
 ## Capabilities
 
@@ -87,16 +90,13 @@ where retention is currently a defect.
 
 ## Impact
 
-- **Code**: `js/main.js` (`newGame`, `continueGame`, `quitToTitle`),
-  `js/runtime.js` (`createWorld`, `reset`), `js/netserver.js` (`stop`),
-  possibly `js/players.js` (idempotence/assertion helper).
-- **Tests**: new lifecycle suite in `tests/net/` (or `tests/core/`) driving
-  the real host/client helpers in `tests/net/helpers.js`.
-- **Behavior**: solo play after any session teardown becomes correct; enemy
-  targeting, item pickup, and the movement system agree on one player.
-- **Dependencies**: none. Independent of
-  `fix-ui-chest-quick-move-crash`; both are P0 and can land in either order.
-- **Risk**: medium-low. The fix is a reset at a well-defined seam, but the
-  ordering relative to `attachLocal` and to save-then-teardown in
-  `quitToTitle` must be exact, or a hosting session could lose its primary
-  mid-teardown. The lifecycle test in this change is the guard for that.
+- **Code**: `js/players.js` (same-player idempotence), `js/main.js`
+  (`newGame`, `continueGame`), `js/runtime.js` (`createWorld` reset only).
+  `js/netserver.js` `stop()` is not the release point.
+- **Tests**: lifecycle suite in `tests/net/` using `tests/net/helpers.js`.
+- **Behavior**: solo play after a host quit simulates the new player. Live
+  hosting and dedicated-server ids stay as they are.
+- **Dependencies**: none. Independent of `fix-ui-chest-quick-move-crash`.
+- **Risk**: medium. Idempotence must land before browser re-seat, and
+  `createWorld` must not register a local primary. The lifecycle tests are the
+  guard, not an optional follow-up.

@@ -85,21 +85,21 @@ codes and fails on `TS2304` (excluding the `TC` global) and `TS2393`. This is
 recorded as the sanctioned fallback (D1-alt) and is proven to work by the audit
 run that surfaced both defects.
 
-### D2: Add a targeted randomness guard as a small custom check
+### D2: Add a call-site randomness guard
 
-The W23 randomness rule is not expressible as an ESLint core rule. Implement
-`tools/check-rng.js`:
+The W23 rule is not an ESLint core rule. Implement `tools/check-rng.js` with a
+call-site allowlist, not a file allowlist. A file that contains a legitimate
+seed selection or particle roll still fails if another `Math.random` in that
+file affects replicated world state.
 
-- a maintained allowlist of modules and line-contexts where ambient randomness
-  is presentation-only (the audit enumerated them: `particles.js`,
-  `accessories.js` burst effects, `magic.js` visual sparkles, `music.js` audio
-  noise, `audio.js` noise buffer, `biomes.js` particle spawns, `tiles.js`/
-  `sky.js` visual hashes, `main.js`/`ui.js` seed selection);
-- the rule: any `Math.random` in a module not on the allowlist fails, unless
-  the line is annotated with a recognized presentation marker comment.
+Each allowlist entry names the file, the enclosing function or a line pattern,
+and a justification. The audited presentation sites are the starting list:
+particle and burst effects, visual sparkles, audio noise, visual hashes, and
+the title/new-world seed selection in `main.js` / `ui.js`. Do not exempt those
+whole files.
 
-Keep the allowlist small and comment-justified so it cannot silently grow into
-a blanket exemption.
+An unrecognized presentation-marker comment is not an allowlist entry. A
+marker may document a listed call site; it cannot silently exempt a new one.
 
 **Alternative considered — rely on the spec/AGENTS rule and code review.**
 Rejected: that rule is exactly what `js/loot.js` violated, invisibly, for the
@@ -116,13 +116,17 @@ false positive, with a required justification comment.
 Rationale: a gate that fails on 183 pre-existing diagnostics will be disabled
 within a day. A gate that starts clean and stays clean survives.
 
-### D4: Wire `fuzz-packs.js` and `soak-multiplayer.js` into `validate` and CI
+### D4: Make the soak a gate before wiring it into `validate`
 
-Add both to the `validate` script. Bound them: the fuzz harness already accepts
-`[rounds] [seed]` arguments, so the gate runs a fixed default (the recorded
-400-round seed); the soak harness must accept a bounded duration argument.
-Neither may read wall-clock time in a way that makes CI flaky — both are
-deterministic/virtual-time by design, which is why they are safe to gate.
+`tools/fuzz-packs.js` already exits non-zero when `escapes.length` is non-zero.
+`tools/soak-multiplayer.js` does not. It prints a summary and exits 0 even if
+players, detached reconnect records, or connections remain after `stop()`.
+Wiring that script into `validate` would not satisfy the leak requirement.
+
+Before adding it to the gate, make the soak or a thin wrapper exit non-zero
+when post-stop `TC.Players.count()`, `server.detached.size`, or
+`server.conns.size` is non-zero, and when the run throws. Bound it with the
+existing `--ticks` argument. Do not treat a successful JSON print as a pass.
 
 **Alternative considered — run these on a separate nightly workflow.**
 Rejected for now: the pack fuzz is fast (deterministic, in-process) and the
@@ -157,13 +161,16 @@ build, and must cover the same file set — including `packs/*.js`, which ship i
 
 1. Add ESLint (or the D1-alt filtered `tsc` harness) in report-only mode; run
    over `js/` and `packs/`.
-2. Add `tools/check-rng.js` in report-only mode with the audited allowlist.
+2. Add `tools/check-rng.js` in report-only mode with the call-site allowlist.
 3. Fix true positives: the `js/world.js` duplicate `canShape` (dead first
    definition removed; the second is the live one per runtime probe).
-4. Flip `no-undef`, `no-dupe-class-members`, `no-repe-keys`, `no-redeclare`,
-   `no-eval`-family to enforcing; wire `check:static` into `check` and
-   `validate`.
-5. Wire `fuzz-packs` and `soak` into `validate` and CI; confirm pass locally.
+4. Flip `no-undef`, `no-dupe-class-members`, `no-dupe-keys`, `no-redeclare`,
+   and the `no-eval` family to enforcing only after
+   `fix-ui-chest-quick-move-crash` and `enforce-gamerng-replicated-loot` have
+   landed and this change's true positives are fixed. Report-only may land
+   earlier.
+5. Make the soak exit non-zero on leftover identities, then wire fuzz and
+   soak into `validate` and CI.
 6. Update `CONTRIBUTING.md` / `AGENTS.md` with the gate commands.
 7. Reversible per step; no product behavior change.
 

@@ -6,13 +6,13 @@
       attempts, successes, failures, and the most recent classified failure
       reason; expose it through a `stats()` accessor matching the convention
       used by `TC.WorldRegions`, `TC.Lighting`, `TC.MiniMap`, `TC.PackStore`.
-- [ ] 1.2 Classify storage failures at the point where the error is still
-      available: detect capacity exhaustion by the thrown error's `name`
+- [ ] 1.2 Classify storage failures from the caught error's `name`
       (`QuotaExceededError`, `NS_ERROR_DOM_QUOTA_REACHED`,
-      `QUOTA_EXCEEDED_ERR`) rather than by message text (design D1/D2).
-- [ ] 1.3 Distinguish a capacity failure from a provider/data failure in the
-      recorded reason; a provider whose serializer throws SHALL NOT be
-      classified as capacity.
+      `QUOTA_EXCEEDED_ERR`). Do not classify by message text. A generic
+      `Error` whose message mentions quota is not capacity (design D2).
+- [ ] 1.3 Classify a provider serialize or envelope-stringify failure in the
+      `saveNow` catch around `buildEnvelope`, before `storageSet`. That reason
+      SHALL be data/provider, never capacity.
 - [ ] 1.4 Increment attempts on every write and successes/failures on the
       matching terminal outcome; keep the counters bounded (no history array).
 - [ ] 1.5 Expose the counters from `TC.Save` as well as `TC.SaveCore` so the
@@ -55,10 +55,11 @@
 
 - [ ] 5.1 Add a storage-that-throws test: a write fails, counters increment,
       the last failure reason is set, and nothing is left half-written.
-- [ ] 5.2 Add a capacity-exhaustion test with a byte-ceiling localStorage
-      stub: assert the capacity classification, the reclaim of the temp
-      artifact, the backup release + single retry, and the preserved previous
-      good main copy.
+- [ ] 5.2 Add a capacity-exhaustion test whose thrown error name is
+      `QuotaExceededError`: assert the capacity classification, temp reclaim,
+      one backup release and retry, and the preserved previous good main copy.
+      Keep the existing atomicity tests, which throw `new Error('QuotaExceededError')`,
+      on the generic-failure path with no reclaim.
 - [ ] 5.3 Add a recovery test: fail, then succeed; assert the failure state
       clears and the next failure is reported normally.
 - [ ] 5.4 Add an autosave-notification test: one notice on first failure,

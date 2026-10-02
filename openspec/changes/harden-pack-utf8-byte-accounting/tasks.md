@@ -5,9 +5,9 @@
 - [ ] 1.1 Add a single UTF-8 byte-length helper (design D1) in the pack
       authority, and reuse it from `js/packstore.js` so both modules measure
       identically.
-- [ ] 1.2 Verify `TextEncoder` is available in the target environments; if it
-      is absent from the headless test sandbox (`tests/helpers/load-game.js`),
-      add it there rather than hand-rolling a byte counter.
+- [ ] 1.2 Add `TextEncoder` to the headless sandbox in
+      `tests/helpers/load-game.js`. It is not in that sandbox today. Do not
+      hand-roll a byte counter.
 - [ ] 1.3 Replace the string-length comparison in `provideJSON` (`js/packs.js`)
       with the exact UTF-8 byte measurement.
 - [ ] 1.4 Replace the string-length comparison in `validateJSON`
@@ -29,12 +29,14 @@
 
 ## 3. Truthful reporting
 
-- [ ] 3.1 Update the size-rejection message in `js/packs.js` to state the
-      measured byte size as well as the limit.
+- [ ] 3.1 Update the `js/packs.js` rejection text to state the measured UTF-8
+      size and the limit.
 - [ ] 3.2 Keep the machine-readable error codes (`too-large`, `quota`,
-      `max-installed`) unchanged so the existing `js/ui.js` → localized-key
-      mapping continues to work.
-- [ ] 3.3 Confirm the user-facing capacity message states the limit in bytes.
+      `max-installed`) unchanged. Include `measured` and `limit` on the
+      PackStore result so the UI can format them.
+- [ ] 3.3 Update the localized user-facing capacity template to interpolate
+      `{measured}` and `{limit}` in bytes. A code-only toast that does not
+      state both is not sufficient.
 
 ## 4. Tests
 

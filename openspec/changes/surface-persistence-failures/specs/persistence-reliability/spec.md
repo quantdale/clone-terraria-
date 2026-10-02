@@ -62,6 +62,14 @@ data/provider failure.
   failure
 - **AND** the player-facing message SHALL NOT claim that storage is full.
 
+#### Scenario: A quota-like message on a generic error is not capacity
+
+- **GIVEN** a storage write that throws a generic error whose message mentions
+  quota but whose error name is not a capacity name
+- **WHEN** the failure is classified
+- **THEN** it SHALL NOT be classified as storage capacity
+- **AND** reclaim of the retained backup SHALL NOT run.
+
 ### Requirement: An automated save failure SHALL be visible to the player
 
 A failure of an AUTOMATED save (autosave) SHALL be reported to the player

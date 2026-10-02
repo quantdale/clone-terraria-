@@ -54,9 +54,9 @@ projectile, but not for the shooter.
 - Registry identity byte-identical (fingerprint guard stays green).
 
 **Non-Goals:**
-- Not changing the catalog contents, keys, or the localization engine.
-- Not rewording any frozen `def.name` (explicitly forbidden).
-- Not touching the sanctioned `buffName` / `iName` fallback shape.
+- Not changing the catalog engine or rewording frozen `def.name` fields.
+  `buffName` and `iName` must stop reading `def.name`; their fallback is the
+  stable id, same as `contentName`.
 - Not doing a full i18n sweep of every module — the audit enumerated the
   surviving sites; anything else found later is a follow-up.
 
@@ -71,19 +71,17 @@ keeping the existing `h.p.type` guard for pooled-slot recycling:
 hostileShots.push({ p: pr, type: pr.type, dmg: dmg, shooter: shooter, srcKey: srcKeyOf(shooter) });
 ```
 
-where `srcKeyOf` returns a **stable** string — `e.type` when available, else a
-stable registry id — used for the damage-source string so
-`TC.Buffs.statusForSource` keeps working. Cleared by identity:
+where `srcKeyOf` returns a stable string — `e.type` when available, else a
+stable registry id — used for the damage-source string. Clear by identity only:
 
 ```js
 if (h.shooter === boss || (h.shooter == null && h.srcKey === srcKeyOf(boss)))
 ```
 
-Rationale: the entity reference is already used as a fallback in the same
-condition (`h.p === boss`), so this completes an existing intent rather than
-inventing a mechanism. The name-based branch is retained only as a
-last-resort fallback for entries created before the change (defensive; not
-expected at runtime).
+Do not retain `h.src === boss.def.name`. Hostile shots are in-memory only, so
+there is no pre-change entry to migrate. Apply the same stable match to the
+second `magic_bolt` cleanup loop in `clearHostileShotsOf`; that loop currently
+compares `h.src === boss.def.name` and would reintroduce the cross-clear.
 
 **Alternative considered — use `e.type` alone as the key.** Rejected: two
 instances of the same enemy type (e.g. two `hungry` servants, or two
@@ -103,10 +101,10 @@ means a status rule silently stops applying if a name ever changes. This is the
 "display metadata is never authoritative identity" rule applied to a gameplay
 path, not just presentation.
 
-**Compatibility note:** `SOURCE_STATUS` is keyed by source strings; if it
-currently uses enemy *names* as keys, either re-key it to stable ids or accept
-both. Check `js/accessories.js` `SOURCE_STATUS` before changing, and keep the
-existing lava/void/fall keys (which are already stable words) untouched.
+**Resolved:** `TC.Buffs.SOURCE_STATUS` is built only from `fromSource`, and the
+only current value is `lava`. Do not rekey that table and do not add enemy
+display names to it. `enemySourceKey` replaces display names at `hurtPlayer`
+call sites. The existing `lava` key stays untouched.
 
 ### D3: Route remaining presentation reads through the catalog
 
@@ -125,11 +123,11 @@ Rationale: the catalog already has the keys; these are pure wiring fixes.
 
 ### D4: Add a checker for presentation-path name reads
 
-Extend `tools/check-i18n.js` (already in `npm run validate` via
-`npm run check:i18n`) with a source scan that flags `def.name` / `DEFS[..].name`
-reads outside an allowlist of the sanctioned resolution helpers
-(`contentName`, `iName`, `buffName`, catalog definitions, and the identity paths
-now using stable keys).
+Extend `tools/check-i18n.js` with a source scan that flags `def.name` /
+`DEFS[..].name` reads used as display text. The allowlist is the frozen
+definition tables and the `contentName` stable-id fallback, not `buffName` or
+`iName` reading `def.name`. Identity paths must use stable keys and are not an
+excuse for a name read.
 
 Rationale: `check:i18n` is already the localization gate; adding the rule there
 means zero new scripts and no new dependency, and it fails the existing
@@ -145,14 +143,13 @@ member access (`TC.TILE_DEFS[id].name`) that a syntactic rule handles poorly.
 - **[Hostile-shot clearing regressions in boss fights]** → `tests/unit/wof-frontier.test.js`
   and the journey-J browser spec exercise the Wall of Flesh shot path; run both.
   Add a same-name identity-separation test.
-- **[`SOURCE_STATUS` key mismatch after switching to stable keys]** → Inspect
-  `SOURCE_STATUS` first; if it is name-keyed, either migrate it to stable keys
-  (preferred) or accept both forms. The existing status tests
-  (`tests/combat/status.test.js`) are the guard.
+- **[`SOURCE_STATUS` key mismatch]** → Resolved: the only key is `lava`.
+  Do not migrate that table. `tests/combat/status.test.js` still guards lava.
 - **[New catalog keys trip the i18n gate]** → All new keys must land in
   `js/locales/en.js`; `check:i18n` enforces coverage and this change runs it.
-- **[Allowlist in the checker grows]** → Each allowlist entry needs a stated
-  reason; keep it minimal (the resolution helpers and the frozen data files).
+- **[Allowlist in the checker grows]** → Keep it to frozen definition tables
+  and the catalog resolver's stable-id fallback. Name-reading helpers are not
+  allowlisted.
 
 ## Migration Plan
 
@@ -167,6 +164,4 @@ member access (`TC.TILE_DEFS[id].name`) that a syntactic rule handles poorly.
 
 ## Open Questions
 
-None blocking. One implementation-time check is called out in D2: whether
-`TC.Buffs.SOURCE_STATUS` is keyed by enemy display names today, which determines
-whether that table needs migrating alongside the source strings.
+None. `SOURCE_STATUS` is keyed only by `lava` and is not migrated.
