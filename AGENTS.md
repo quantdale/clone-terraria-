@@ -204,3 +204,9 @@ title screen). Single-player remains the default path with zero networking.
 Stretch backlog: more NPC types beyond the housing set, water pressure simulation,
 moon phases + rain/weather, events (goblin army), hardmode layer, deeper progression
 tiers, reforge UI for accessory prefixes.
+
+## Cross-project UX, DX, and AX principles
+
+Cut taglines, helper text and secondary labels. If a screen needs them to make sense, fix the layout.
+
+Make the best decision that will elevate all three: the user experience (UX), developer experience (DX), and agent experience (AX) always, without breaking anything.
