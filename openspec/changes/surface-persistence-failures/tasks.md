@@ -73,6 +73,6 @@
 - [x] 6.3 Run `npm run check:i18n` and confirm the catalog is valid.
 - [x] 6.4 Run `npm test` and `npm run test:browser` and confirm all pass.
 - [x] 6.5 Run `npm run validate` end to end and record the result.
-- [ ] 6.6 Manually verify: fill localStorage for the origin, play, and confirm
+- [x] 6.6 Manually verify: fill localStorage for the origin, play, and confirm
       the player is warned (once, then rate-limited) and the F3 overlay shows
       the failure counters.

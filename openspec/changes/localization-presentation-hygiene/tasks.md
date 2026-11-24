@@ -65,5 +65,5 @@
 - [x] 5.4 Run `npm test` and `npm run test:browser` (including the Wall of
       Flesh journey) and confirm all pass.
 - [x] 5.5 Run `npm run validate` end to end and record the result.
-- [ ] 5.6 Manually verify under the `en-XA` pseudo locale (under `#test`) that
+- [x] 5.6 Manually verify under the `en-XA` pseudo locale (under `#test`) that
       the debug overlay and fish floater render translated content.

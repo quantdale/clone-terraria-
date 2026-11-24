@@ -1,4 +1,8 @@
-# Pack Dependency Semantics Delta Specification
+
+
+## Purpose
+
+Defines declarative pack dependency resolution, topological ordering, and optional dependency handling.
 
 ## Context
 

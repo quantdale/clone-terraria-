@@ -1,4 +1,8 @@
-# Pack Installation Specification
+
+
+## Purpose
+
+Defines installed pack manifest storage, persistence, quota enforcement, and browser UI management.
 
 ## ADDED Requirements
 

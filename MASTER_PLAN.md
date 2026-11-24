@@ -597,71 +597,71 @@ The project is complete and hardened when **all** of the following are true and
 verifiably so.
 
 **Functionality & correctness**
-- [ ] The reported F-01 repro does not reproduce: Shift-click with a chest open
+- [x] The reported F-01 repro does not reproduce: Shift-click with a chest open
       moves the stack in both directions, solo and joined.
-- [ ] The reported F-02 repro does not reproduce: host → quit → new world
+- [x] The reported F-02 repro does not reproduce: host → quit → new world
       yields a simulating player that enemies actually target.
-- [ ] No undefined identifier and no duplicate class member exists in `js/` or
+- [x] No undefined identifier and no duplicate class member exists in `js/` or
       `packs/`, enforced by the gate.
-- [ ] No `Math.random` on a replicated-truth path, enforced by the gate.
-- [ ] Hostile-shot bookkeeping is keyed by stable identity, with a same-name
+- [x] No `Math.random` on a replicated-truth path, enforced by the gate.
+- [x] Hostile-shot bookkeeping is keyed by stable identity, with a same-name
       separation test.
 
 **Tests**
-- [ ] A regression test exists for every P0 and **fails** when the fix is
+- [x] A regression test exists for every P0 and **fails** when the fix is
       reverted (negative control proven for each).
-- [ ] Lifecycle coverage: host → join → leave → quit → new world → continue.
-- [ ] At least one test exercises the Shift key.
-- [ ] Non-ASCII pack cap coverage exists.
-- [ ] `npm test` and `npm run test:browser` pass with no skipped or quarantined
+- [x] Lifecycle coverage: host → join → leave → quit → new world → continue.
+- [x] At least one test exercises the Shift key.
+- [x] Non-ASCII pack cap coverage exists.
+- [x] `npm test` and `npm run test:browser` pass with no skipped or quarantined
       cases beyond the two documented pre-existing conditional skips
       (`journey-e` accessory leg, `tests/net/transport` WebSocket availability).
 
 **Build, lint, type-check**
-- [ ] `npm run check` includes the static gate and passes.
-- [ ] `npm run build` produces byte-identical output across two runs.
-- [ ] `npm run verify:build` passes with zero browser errors.
-- [ ] `dist/` contains no test fixture, and `dist/index.html` does not
+- [x] `npm run check` includes the static gate and passes.
+- [x] `npm run build` produces byte-identical output across two runs.
+- [x] `npm run verify:build` passes with zero browser errors.
+- [x] `dist/` contains no test fixture, and `dist/index.html` does not
       reference `packs/testpack.js`. The repository `index.html` tag stays.
 
 **Security**
-- [ ] Pack byte caps are enforced in exact UTF-8 bytes.
-- [ ] `tools/fuzz-packs.js` runs in `validate` and reports zero escapes.
-- [ ] Prototype-pollution, traversal, and unknown-field rejection remain intact
+- [x] Pack byte caps are enforced in exact UTF-8 bytes.
+- [x] `tools/fuzz-packs.js` runs in `validate` and reports zero escapes.
+- [x] Prototype-pollution, traversal, and unknown-field rejection remain intact
       (existing pack suites green).
 
 **Reliability**
-- [ ] A storage-capacity failure is classified, counted, and shown to the
+- [x] A storage-capacity failure is classified, counted, and shown to the
       player at least once, rate-limited thereafter.
-- [ ] Reclaim-before-fail is attempted and atomicity is preserved.
-- [ ] `SaveCore` exposes counters; the F3 overlay renders them.
+- [x] Reclaim-before-fail is attempted and atomicity is preserved.
+- [x] `SaveCore` exposes counters; the F3 overlay renders them.
 
 **Accessibility**
-- [ ] Title, pause, packs, shop buy rows, and the crafting column are
+- [x] Title, pause, packs, shop buy rows, and the crafting column are
       keyboard-operable, with a visible focus indicator. Shop and craft do not
       use Arrow or Space. Inventory grids, chest grids, equipment, and shop
       sell remain follow-up.
-- [ ] No gameplay keybinding regressed (movement, jump, hotbar, Escape, E).
+- [x] No gameplay keybinding regressed (movement, jump, hotbar, Escape, E).
 
 **Documentation**
-- [ ] No document asserts a rating or status that is false.
-- [ ] The historical `docs/terraria-parity/` set is clearly marked superseded.
-- [ ] `AGENTS.md` and `docs/ARCHITECTURE.md` still match the code (spot check).
-- [ ] The OpenSpec ledger reflects true completion state.
+- [x] No document asserts a rating or status that is false.
+- [x] The historical `docs/terraria-parity/` set is clearly marked superseded.
+- [x] `AGENTS.md` and `docs/ARCHITECTURE.md` still match the code (spot check).
+- [x] The OpenSpec ledger reflects true completion state.
 
 **CI/CD**
-- [ ] `npm run validate` runs static analysis, i18n, unit/integration, fuzz,
+- [x] `npm run validate` runs static analysis, i18n, unit/integration, fuzz,
       soak, build, production verify, and browser journeys.
-- [ ] CI runs the same single command.
-- [ ] CI failure diagnostics are uploaded.
+- [x] CI runs the same single command.
+- [x] CI failure diagnostics are uploaded.
 
 **Repository state**
-- [ ] `git status` clean; no stray probe scripts, no `dist/` or `test-results/`
+- [x] `git status` clean; no stray probe scripts, no `dist/` or `test-results/`
       committed (both are gitignored — confirm).
-- [ ] No TODO/FIXME/HACK introduced by this work.
+- [x] No TODO/FIXME/HACK introduced by this work.
 
 **Unresolved defect threshold**
-- [ ] Zero known P0. Zero known P1. Any remaining P2 is either fixed or
+- [x] Zero known P0. Zero known P1. Any remaining P2 is either fixed or
       recorded in `docs/TASK_BOARD.md` with an owner and a reason.
 
 ---

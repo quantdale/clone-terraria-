@@ -18,7 +18,7 @@ const root = path.join(__dirname, '..');
 const enforce = process.argv.includes('--enforce');
 
 const tscBin = process.platform === 'win32' ? 'tsc.cmd' : 'tsc';
-const res = spawnSync(tscBin, ['-p', 'tsconfig.check.json'], {
+const res = spawnSync(tscBin + ' -p tsconfig.check.json', {
   cwd: root,
   encoding: 'utf8',
   shell: true,

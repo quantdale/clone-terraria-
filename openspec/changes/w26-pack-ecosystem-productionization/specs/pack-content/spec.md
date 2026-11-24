@@ -1,4 +1,8 @@
-# Pack Content Specification
+
+
+## Purpose
+
+Defines declarative content extensions for data packs, including walls, items, and standalone loot tables, ensuring stable namespaced identities and deterministic indices without code execution.
 
 ## ADDED Requirements
 

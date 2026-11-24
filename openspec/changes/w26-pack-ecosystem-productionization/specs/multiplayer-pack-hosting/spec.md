@@ -1,4 +1,8 @@
-# Multiplayer Pack Hosting Specification
+
+
+## Purpose
+
+Defines dedicated server pack selection, active pack set negotiation, and client connection verification for multiplayer sessions.
 
 ## ADDED Requirements
 

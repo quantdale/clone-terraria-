@@ -77,6 +77,6 @@
       lifecycle cases.
 - [x] 7.3 Run `npm run test:browser` and confirm journeys pass.
 - [x] 7.4 Run `npm run validate` end to end and record the result.
-- [ ] 7.5 Manually verify the reported repro no longer reproduces: host, quit
+- [x] 7.5 Manually verify the reported repro no longer reproduces: host, quit
       to title, new world, and confirm the player falls/moves and enemies chase
       the visible player. The host save must still load.

@@ -90,5 +90,5 @@
 - [x] 9.2 Run `npm test` and confirm the full node:test suite passes.
 - [x] 9.3 Run `npm run test:browser` and confirm all journeys pass.
 - [x] 9.4 Run `npm run validate` end to end and record the result.
-- [ ] 9.5 Manually verify each surface is fully operable with the mouse
+- [x] 9.5 Manually verify each surface is fully operable with the mouse
       unplugged, and that no gameplay keybinding regressed.

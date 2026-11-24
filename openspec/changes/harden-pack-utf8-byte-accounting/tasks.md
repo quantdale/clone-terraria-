@@ -71,6 +71,6 @@
 - [x] 6.3 Run `node tools/fuzz-packs.js` and confirm zero escapes.
 - [x] 6.4 Run `npm run check:i18n` to confirm the catalog is unaffected.
 - [x] 6.5 Run `npm run validate` end to end and record the result.
-- [ ] 6.6 Manually verify: install a CJK-heavy pack near the cap and confirm it
+- [x] 6.6 Manually verify: install a CJK-heavy pack near the cap and confirm it
       is rejected as too large rather than accepted and later failing to
       persist.

@@ -1,4 +1,8 @@
-# Pack Spawning Specification
+
+
+## Purpose
+
+Defines declarative natural spawn rules for pack entities, zoning, depth gates, and deterministic GameRng integration.
 
 ## ADDED Requirements
 

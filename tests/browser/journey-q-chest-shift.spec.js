@@ -36,8 +36,9 @@ test.describe("chest quick-move", () => {
     // layout constants mirror js/ui.js: bag panel at (4,72), slot 46, gap 5.
     await page.keyboard.down("Shift");
     await page.mouse.click(35, 117);
+    await runFrames(page, 5);
     await page.keyboard.up("Shift");
-    await runFrames(page, 10);
+    await runFrames(page, 5);
     let state = await page.evaluate(() => {
       const TC = window.TC;
       const p = TC.player;
@@ -58,8 +59,9 @@ test.describe("chest quick-move", () => {
     // bag panel height 229 -> chest panel y = 315, slot center (35, 360))
     await page.keyboard.down("Shift");
     await page.mouse.click(35, 360);
+    await runFrames(page, 5);
     await page.keyboard.up("Shift");
-    await runFrames(page, 10);
+    await runFrames(page, 5);
     state = await page.evaluate(() => {
       const TC = window.TC;
       const p = TC.player;

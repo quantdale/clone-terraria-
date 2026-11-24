@@ -53,7 +53,7 @@ function main() {
   function joinDriver(server, name) {
     const drv = makeDriver(name);
     server.connect(drv.ep, { name });
-    drv.ep.feed({ v: P.VERSION, t: "hello", sid: null, pid: null, cseq: 1, sseq: 0, tick: 0, p: { name } });
+    drv.ep.feed({ v: P.VERSION, t: "hello", sid: null, pid: null, cseq: 1, sseq: 0, tick: 0, p: { name, packs: { fp: "", list: [] } } });
     server.processInbound();
     const welcome = drv.outbox.map((s2) => JSON.parse(s2)).find((m) => m.t === "welcome");
     if (!welcome) throw new Error("join failed for " + name);
@@ -168,7 +168,7 @@ function main() {
         drv.ep.feed({
           v: P.VERSION, t: "hello", sid: server.sid, pid,
           cseq: 500000 + cycles, sseq: 0, tick: 0,
-          p: { rejoin: { sid: server.sid, pid, tick: 0 } }
+          p: { rejoin: { sid: server.sid, pid, tick: 0 }, packs: { fp: "", list: [] } }
         });
         server.processInbound();
       }

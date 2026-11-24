@@ -63,5 +63,5 @@
 - [x] 4.3 Run `npm run test:browser` and confirm all journeys pass.
 - [x] 4.4 Run `npm run validate` end to end (syntax + i18n + tests + build +
       verify-dist + browser) and record the result.
-- [ ] 4.5 Manually verify in a browser: solo, open chest, Shift-click moves the
+- [x] 4.5 Manually verify in a browser: solo, open chest, Shift-click moves the
       stack both directions with no visible error; repeat with a joined client.
