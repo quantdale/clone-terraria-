@@ -125,6 +125,14 @@
       } catch (e) { /* ignore */ }
       return muted;
     },
-    get muted() { return muted; }
+    get muted() { return muted; },
+    set muted(v) {
+      const want = !!v;
+      if (muted === want) return;
+      muted = want;
+      try {
+        if (master && ctx) master.gain.setTargetAtTime(muted ? 0 : MASTER_VOL, ctx.currentTime, 0.01);
+      } catch (e) { /* ignore */ }
+    }
   };
 })();

@@ -113,9 +113,19 @@
     return !(player && typeof player.inReach === 'function') || !!player.inReach(tx, ty);
   }
   function overlapsPlayer(player, tx, ty) {
+    if (!player || player.dead) return false;
     const rx = tx * TS, ry = ty * TS;
     return rx < player.x + player.w && rx + TS > player.x &&
            ry < player.y + player.h && ry + TS > player.y;
+  }
+  function overlapsAnyPlayer(tx, ty) {
+    const P = TC.Players;
+    const list = (P && typeof P.all === 'function' && P.count())
+      ? P.all() : (TC.player ? [TC.player] : []);
+    for (let i = 0; i < list.length; i++) {
+      if (overlapsPlayer(list[i], tx, ty)) return true;
+    }
+    return false;
   }
 
   // Remove n of id from a slot; tolerates slot-index or id-based removal
@@ -411,7 +421,7 @@
     if (c.player) {
       if (!inReach(c.player, pos[0], pos[1])) return 'out-of-reach';
       const pd = tDef(idef.tile);
-      if (pd && pd.solid && overlapsPlayer(c.player, pos[0], pos[1])) return 'blocked-by-player';
+      if (pd && pd.solid && (overlapsPlayer(c.player, pos[0], pos[1]) || overlapsAnyPlayer(pos[0], pos[1]))) return 'blocked-by-player';
       if (!c.player.inventory) return 'no-inventory';
       // Coherent transaction: never conjure blocks — the paying slot must
       // hold the item before anything is placed.
@@ -738,8 +748,8 @@
     if (id === T.DOOR_CLOSED || id === T.DOOR_OPEN) {
       const next = id === T.DOOR_CLOSED ? T.DOOR_OPEN : T.DOOR_CLOSED;
       const nd = tDef(next);
-      if (nd && nd.solid && p && !p.dead && overlapsPlayer(p, tx, ty)) {
-        return { acted: false, reason: 'blocked' };   // don't shut a door into the player
+      if (nd && nd.solid && (overlapsPlayer(p, tx, ty) || overlapsAnyPlayer(tx, ty))) {
+        return { acted: false, reason: 'blocked' };   // don't shut a door into any player
       }
       w.set(tx, ty, next);                       // set() emits TileChanged
       sfx('place');

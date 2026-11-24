@@ -155,6 +155,7 @@
   // ITEM_DEFS at break time, so optional siblings (accessories potions)
   // entries [itemId, min, max, weight]; absent optional ids simply drop out
   // when absent. Coins (W2 economy) are ordinary items and ride the same path.
+  /** @type {Array<[string, number, number, number]>} */
   const POT_LOOT = [
     ['torch', 1, 3, 26],
     ['arrow', 3, 8, 22],

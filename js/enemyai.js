@@ -482,6 +482,7 @@
                 (TC.Enemies && typeof TC.Enemies.enemySourceKey === 'function')
                   ? TC.Enemies.enemySourceKey(e)
                   : (e && e.type) || 'unknown',
+                { target: p },
               );
             }
             puffAt(ecx + dir * 10, ecy, ["#4a9a3e", "#c8e8a0"]);

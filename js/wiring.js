@@ -967,7 +967,7 @@
           TC.Combat.hurtPlayer(DART_DMG_PLAYER, d.vx >= 0 ? 3 : -3, -1.5, "trap", { target: p });
         } catch (e) {}
         d.age = (d.def && d.def.maxAge ? d.def.maxAge : 1) + 1; // expire next tick
-        return; // one dart damages exactly one victim per tick
+        break; // one dart damages exactly one victim per tick
       }
     }
   }

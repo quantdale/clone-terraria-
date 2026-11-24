@@ -374,6 +374,9 @@
       this.wallDamage.delete(i); // a rewritten wall loses its crack state
       this.markDirtyAt(x, y, "wall");
       if (TC.Lighting) TC.Lighting.onTileChanged(x, y);
+      if (TC.Events && TC.Events.EVENT && TC.Events.EVENT.WallChanged) {
+        try { TC.Events.emit(TC.Events.EVENT.WallChanged, { tx: x, ty: y, wall: id }); } catch (e) {}
+      }
     }
 
     // Raw write for save-load: write + dirty chunks only.
@@ -381,6 +384,9 @@
       if (!this.inB(x, y)) return;
       this.walls[this.idx(x, y)] = id;
       this.markDirtyAt(x, y, "bulk");
+      if (TC.Events && TC.Events.EVENT && TC.Events.EVENT.WallChanged) {
+        try { TC.Events.emit(TC.Events.EVENT.WallChanged, { tx: x, ty: y, wall: id }); } catch (e) {}
+      }
     }
 
     // Adds wall mining progress; returns true once the wall accumulates >= 1

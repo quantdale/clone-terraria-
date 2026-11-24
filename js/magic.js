@@ -406,17 +406,18 @@
     stars.push({
       x: cx + Math.cos(a) * rad,
       y: cy - 16 + Math.sin(a) * rad * 0.7,
-      vx: 0, vy: 0, t: 0, payload: payload
+      vx: 0, vy: 0, t: 0, payload: payload,
+      target: p
     });
   }
 
   function updateStars(dt) {
-    const p = TC.player;
     for (let i = stars.length - 1; i >= 0; i--) {
       const s = stars[i];
       s.t += dt;
-      if (p) {
-        const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+      const target = s.target || TC.player;
+      if (target && !target.dead) {
+        const cx = target.x + target.w / 2, cy = target.y + target.h / 2;
         const dx = cx - s.x, dy = cy - s.y;
         const d = Math.sqrt(dx * dx + dy * dy) || 1;
         const want = 240 + s.t * 420;              // accelerate as it homes
@@ -426,13 +427,13 @@
         s.x += s.vx * dt;
         s.y += s.vy * dt;
         if (d < 14 || s.t > 2.5) {                 // arrived (or timed out)
-          restoreMana(p, s.payload);
+          restoreMana(target, s.payload);
           pBurst(s.x, s.y, 3, ['#7dc4ff', '#bfe4ff'], 60, 0);
-          sfx('pickup');
+          if (target === TC.player) sfx('pickup');
           stars.splice(i, 1);
         }
       } else {
-        stars.splice(i, 1);                        // world gone: drop pending mana
+        stars.splice(i, 1);                        // world/target gone: drop pending mana
       }
     }
   }

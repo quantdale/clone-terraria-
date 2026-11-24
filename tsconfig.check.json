@@ -9,5 +9,5 @@
     "strict": false,
     "noImplicitAny": false
   },
-  "include": ["js/**/*.js", "packs/**/*.js"]
+  "include": ["types/**/*.d.ts", "js/**/*.js", "packs/**/*.js"]
 }

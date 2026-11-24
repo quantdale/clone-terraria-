@@ -12,7 +12,8 @@
 (function () {
   const TC = window.TC;
 
-  const UI = TC.UI = {
+  /** @type {any} */
+  const UI = (TC.UI = {
     paused: false,   // pause overlay open (TC.state stays 'playing')
     invOpen: false,  // inventory panel visible
     chest: null,     // {tx,ty} while a chest panel is open (implies invOpen)
@@ -23,7 +24,7 @@
       return { surface: focus.surface, index: focus.index,
                craftScroll: craftScroll, packsScroll: packsScroll };
     }
-  };
+  });
 
   // ---- tunables ----
   const SLOT = 46;            // hotbar/bag cell size (px)
@@ -127,6 +128,19 @@
   function mousePos() {
     const m = (TC.Input && TC.Input.mouse) || {};
     return { x: m.x || 0, y: m.y || 0 };
+  }
+
+  function mouseWorldPos() {
+    const m = (TC.Input && TC.Input.mouse) || {};
+    if (typeof m.worldX === 'number' && typeof m.worldY === 'number') {
+      return { x: m.worldX, y: m.worldY };
+    }
+    const cam = TC.camera || { x: 0, y: 0, zoom: 1 };
+    const z = (cam && cam.zoom) || 1;
+    return {
+      x: (m.x || 0) / z + (cam.x || 0),
+      y: (m.y || 0) / z + (cam.y || 0),
+    };
   }
 
   function pressed(code) {
@@ -462,12 +476,12 @@
   // Put the cursor stack back into the inventory; overflow goes to the world.
   function stashCursor(inv) {
     if (!cursorStack) return;
-    let left = 0;
-    try { left = inv.add(cursorStack.id, cursorStack.count); } catch (e) { left = 0; }
+    let left = cursorStack.count;
+    try { left = inv.add(cursorStack.id, cursorStack.count); } catch (e) { left = cursorStack.count; }
     if (typeof left !== 'number' || !isFinite(left)) left = 0;
     if (left > 0) {
-      const m = mousePos();
-      throwStack({ id: cursorStack.id, count: left }, m.x, m.y);
+      const mw = mouseWorldPos();
+      throwStack({ id: cursorStack.id, count: left }, mw.x, mw.y);
     }
     cursorStack = null;
   }
@@ -478,8 +492,8 @@
     const inv = getInv(true);
     if (inv) stashCursor(inv);
     else {
-      const m = mousePos();
-      throwStack(cursorStack, m.x, m.y);
+      const mw = mouseWorldPos();
+      throwStack(cursorStack, mw.x, mw.y);
       cursorStack = null;
     }
   }
@@ -776,8 +790,8 @@
       }
     }
     if (rest && rest.count > 0) {
-      const m = mousePos();
-      throwStack(rest, m.x, m.y);
+      const mw = mouseWorldPos();
+      throwStack(rest, mw.x, mw.y);
     }
   }
 
@@ -2524,7 +2538,8 @@
       if (inRect(mx, my, L.uiRects[i])) { overUI = true; break; }
     }
     if (!overUI && cursorStack && !rightClick) {
-      throwStack(cursorStack, mx, my);
+      const mw = mouseWorldPos();
+      throwStack(cursorStack, mw.x, mw.y);
       cursorStack = null;
     }
   }
@@ -2665,6 +2680,7 @@
     const dead = !!(p && p.dead);
     if (dead && !wasDead) {
       if (UI.invOpen) closeInventory();
+      else stashCursorOrThrow();
       UI.paused = false;
       deadT = 0;
     }

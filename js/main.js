@@ -18,7 +18,7 @@
 (function () {
   const TC = window.TC;
 
-  const canvas = document.getElementById('game');
+  const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById('game'));
   const ctx = canvas.getContext('2d');
   TC.canvas = canvas;
 

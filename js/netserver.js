@@ -209,6 +209,7 @@
       // defaults hold while absent; the player entity and replication state
       // (private consumer, lastSent baselines) survive untouched.
       conn.input.x = 0; conn.input.jump = 0; conn.input.down = 0; conn.input.use = 0;
+      conn.detachedTick = this._tick();
       this.detached.set(conn.pid, conn);
     }
   };
@@ -396,6 +397,7 @@
       existing.lastInputSeq = Math.max(existing.lastInputSeq + 1, rj.tick | 0);
       existing.snapQueue = [];
       existing.joinedTick = this._tick();
+      existing.detachedTick = null;
       existing.inbox = conn.inbox;          // adopt already-buffered frames
       existing.clientPacks = conn.clientPacks;
       existing.ep = conn.ep;
@@ -1045,7 +1047,8 @@
     // servers cannot accumulate ghosts (players + private consumers freed).
     if (this.detached.size && tick % 150 === 0) {
       for (const [pid, conn] of Array.from(this.detached.entries())) {
-        if (tick - conn.joinedTick > this.opts.detachGraceTicks) {
+        const detachedAt = (conn.detachedTick != null) ? conn.detachedTick : conn.joinedTick;
+        if (tick - detachedAt > this.opts.detachGraceTicks) {
           TC.Players.remove(pid);
           if (conn.consumerName && TC.WorldRegions && TC.WorldRegions.forget) {
             try { TC.WorldRegions.forget(conn.consumerName); } catch (e) {}

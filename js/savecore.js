@@ -325,6 +325,7 @@
     storageRemove(key + '.tmp');
     let retried = null;
     if (isCapacityError(tmpErrorName)) {
+      if (storageGet(key + '.bak') != null) storageRemove(key + '.bak');
       retried = storageSet(key + '.tmp', json);
       tmpErrorName = lastStorageErrorName;
     }

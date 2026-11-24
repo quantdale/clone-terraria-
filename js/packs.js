@@ -126,6 +126,7 @@
   // ======================================================================
 
   function PackError(code, message, details) {
+    /** @type {any} */
     const e = new Error(
       details && details.length
         ? message + ": " + String(details[0]) +

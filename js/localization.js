@@ -303,6 +303,7 @@
     }
     if (typeof ref === 'string') {
       if (ref.indexOf(':') >= 0) return ref;
+      if (kind === 'enemy' && ref === 'eye_of_void') return 'core:eye_of_the_void';
       return 'core:' + snakeCase(ref);
     }
     return null;
@@ -400,8 +401,8 @@
   // call this after registering so boot order never matters. An explicit
   // setLocale earlier in the same session wins over the stored value.
   function restore() {
-    if (restore.done) return getLocale();
-    restore.done = true;
+    if (/** @type {any} */ (restore).done) return getLocale();
+    /** @type {any} */ (restore).done = true;
     let saved = null;
     try { saved = TC.Settings ? TC.Settings.get('locale', null) : null; } catch (e) {}
     if (!explicitChoice) {

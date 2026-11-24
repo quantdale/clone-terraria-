@@ -459,12 +459,12 @@
     const st = (TC.Buffs && typeof TC.Buffs.statusForSource === 'function')
       ? TC.Buffs.statusForSource(src) : null;
     if (st && Array.isArray(res.statuses) && res.statuses.length === 0) {
-      try { TC.Buffs.apply(st.id, st.dur); } catch (e) {}
+      try { TC.Buffs.apply(st.id, st.dur, p); } catch (e) {}
     }
     for (let i = 0; i < res.statuses.length; i++) {
       const s = res.statuses[i];
       if (s && s.id && TC.Buffs) {
-        try { TC.Buffs.apply(s.id, s.dur); } catch (e) {}
+        try { TC.Buffs.apply(s.id, s.dur, p); } catch (e) {}
       }
     }
     if (TC.Audio) TC.Audio.play('hurt');

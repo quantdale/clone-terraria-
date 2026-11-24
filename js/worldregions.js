@@ -322,7 +322,22 @@
     return rec.api;
   };
 
-  R.forget = function (name) { R.consumers.delete(name); };
+  R.forget = function (name) {
+    const rec = R.consumers.get(name);
+    if (!rec) return false;
+    if (rec.seen && R.rev) {
+      for (let i = 0; i < R.count; i++) {
+        if (rec.seen[i] !== R.rev[i]) {
+          if (R.outstanding && R.outstanding[i] > 0) {
+            R.outstanding[i]--;
+            if (R.outstanding[i] === 0 && R.kinds) R.kinds[i] = 0;
+          }
+        }
+      }
+    }
+    R.consumers.delete(name);
+    return true;
+  };
 
   R.stats = function () {
     let stale = 0;

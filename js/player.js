@@ -209,6 +209,8 @@
       this.mineTarget = null; // {tx,ty,progress}
       this.coyote = 0;
       this.dropT = 0; // >0: platform decks stay pass-through (S to drop)
+      this.lifeCrystals = 0;
+      this.inputSource = null;
       // internal / cosmetic state
       this.sx = this.x; // spawn pixel pos, used by respawn()
       this.sy = this.y;
@@ -611,7 +613,7 @@
             cy = this.y + this.h / 2;
           if (TC.Combat && typeof TC.Combat.hurtPlayer === "function") {
             try {
-              TC.Combat.hurtPlayer(CONST.LAVA_DMG, 0, -120, "lava");
+              TC.Combat.hurtPlayer(CONST.LAVA_DMG, 0, -120, "lava", { target: this });
             } catch (e) {
               this.damage(CONST.LAVA_DMG, 0, -120, "lava");
             }
@@ -635,7 +637,7 @@
             this.drownPool -= d;
             if (TC.Combat && typeof TC.Combat.hurtPlayer === "function") {
               try {
-                TC.Combat.hurtPlayer(d, 0, 0, "drown");
+                TC.Combat.hurtPlayer(d, 0, 0, "drown", { target: this });
               } catch (e) {
                 this.damage(d, 0, 0, "drown");
               }
@@ -799,7 +801,7 @@
           );
           if (TC.Combat && typeof TC.Combat.hurtPlayer === "function") {
             try {
-              TC.Combat.hurtPlayer(dmg, 0, 0, "fall");
+              TC.Combat.hurtPlayer(dmg, 0, 0, "fall", { target: this });
             } catch (e) {
               this.damage(dmg, 0, 0, "fall");
             }
@@ -944,16 +946,27 @@
           id === TILE.DOOR_CLOSED ? TILE.DOOR_OPEN : TILE.DOOR_CLOSED;
         const nd = tDef(next);
         if (nd && nd.solid) {
-          // don't shut a door into the player
+          // don't shut a door into any player
           const rx = tx * TS,
             ry = ty * TS;
-          if (
-            rx < this.x + this.w &&
-            rx + TS > this.x &&
-            ry < this.y + this.h &&
-            ry + TS > this.y
-          )
-            return;
+          const P = TC.Players;
+          const plist = (P && typeof P.all === "function" && P.count())
+            ? P.all() : (this ? [this] : []);
+          let blocked = false;
+          for (let pi = 0; pi < plist.length; pi++) {
+            const pl = plist[pi];
+            if (!pl || pl.dead) continue;
+            if (
+              rx < pl.x + pl.w &&
+              rx + TS > pl.x &&
+              ry < pl.y + pl.h &&
+              ry + TS > pl.y
+            ) {
+              blocked = true;
+              break;
+            }
+          }
+          if (blocked) return;
         }
         let ok = true;
         try {
@@ -1335,18 +1348,25 @@
       }
       if (!anchored) return;
 
-      // solid tiles may not be placed inside the player hitbox
+      // solid tiles may not be placed inside any player hitbox
       const pd = tDef(def.tile);
       if (pd && pd.solid) {
         const rx = tx * TS,
           ry = ty * TS;
-        if (
-          rx < this.x + this.w &&
-          rx + TS > this.x &&
-          ry < this.y + this.h &&
-          ry + TS > this.y
-        )
-          return;
+        const P = TC.Players;
+        const plist = (P && typeof P.all === "function" && P.count())
+          ? P.all() : (this ? [this] : []);
+        for (let pi = 0; pi < plist.length; pi++) {
+          const pl = plist[pi];
+          if (!pl || pl.dead) continue;
+          if (
+            rx < pl.x + pl.w &&
+            rx + TS > pl.x &&
+            ry < pl.y + pl.h &&
+            ry + TS > pl.y
+          )
+            return;
+        }
       }
 
       let ok = true;
@@ -1690,6 +1710,7 @@
         vx: this.vx,
         vy: this.vy,
         hp: this.hp,
+        lifeCrystals: this.lifeCrystals || 0,
         hotbarIndex: this.hotbarIndex,
         sx: this.sx,
         sy: this.sy,
@@ -1730,6 +1751,15 @@
         vy = num(data.vy);
       if (vx !== null) p.vx = vx;
       if (vy !== null) p.vy = vy;
+      if (data.lifeCrystals != null) {
+        const lc = Math.max(0, Math.floor(num(data.lifeCrystals) || 0));
+        p.lifeCrystals = lc;
+        if (TC.Loot && typeof TC.Loot.crystalBonus === "function") {
+          p.maxHp = CONST.PLAYER_HP + TC.Loot.crystalBonus(p);
+        } else {
+          p.maxHp = CONST.PLAYER_HP + lc * 20;
+        }
+      }
       const hp = num(data.hp);
       p.hp = hp === null ? p.maxHp : Math.min(Math.max(hp, 1), p.maxHp);
       const hb = num(data.hotbarIndex);
@@ -1778,7 +1808,7 @@
           TC.Accessories.restoreLegacy(data, p);
         } catch (e2) {}
       }
-      if (data.lifeCrystals != null) p.lifeCrystals = data.lifeCrystals;
+      // lifeCrystals and maxHp restored before hp clamping
       return p;
     }
 
